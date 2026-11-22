@@ -174,6 +174,19 @@ class GitGuard:
         tracked, untracked = self.get_changed_files()
         return bool(tracked or untracked)
 
+    @staticmethod
+    def _expand_manifest_lockfiles(paths: set[str]) -> set[str]:
+        """Permit companion lockfiles when a package manifest is in allowed scope."""
+        expanded = set(paths)
+        for p in paths:
+            posix = PurePosixPath(p)
+            parent = "" if str(posix.parent) == "." else f"{posix.parent}/"
+            if posix.name == "package.json":
+                expanded.update({f"{parent}package-lock.json", f"{parent}yarn.lock", f"{parent}pnpm-lock.yaml"})
+            elif posix.name == "pyproject.toml":
+                expanded.add(f"{parent}uv.lock")
+        return expanded
+
     def check_scope(
         self,
         allowed_files: list[str],
@@ -184,10 +197,10 @@ class GitGuard:
         tracked, untracked = self.get_changed_files()
         changed = tracked + untracked
         protected_set = {normalize_posix_path(p) for p in (protected_test_files or [])}
-        permitted_set = (
-            {normalize_posix_path(p) for p in allowed_files}
-            | {normalize_posix_path(p) for p in create_new_files}
-        ) - protected_set
+        base_permitted = {normalize_posix_path(p) for p in allowed_files} | {
+            normalize_posix_path(p) for p in create_new_files
+        }
+        permitted_set = self._expand_manifest_lockfiles(base_permitted) - protected_set
 
         violations = [p for p in changed if p not in permitted_set]
         return len(violations) == 0, violations
@@ -278,8 +291,12 @@ class GitGuard:
         return f"{head}\n... [truncated {len(lines) - max_lines} diff lines]"
 
     def commit_task(self, task_id: str, title: str, files_to_stage: list[str]) -> str:
-        """Stage strictly permitted files and commit cleanly (never via rtk)."""
-        norm_files = sorted({normalize_posix_path(f) for f in files_to_stage})
+        """Stage strictly permitted files (plus changed companion lockfiles) and commit cleanly."""
+        base_files = {normalize_posix_path(f) for f in files_to_stage}
+        expanded_set = self._expand_manifest_lockfiles(base_files)
+        tracked, untracked = self.get_changed_files()
+        changed_set = set(tracked + untracked)
+        norm_files = sorted(base_files | (expanded_set & changed_set))
         if not norm_files:
             raise GitGuardError(f"No files specified to commit for task {task_id}.")
 

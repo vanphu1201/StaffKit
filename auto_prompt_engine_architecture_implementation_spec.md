@@ -14,7 +14,19 @@
 ## 1. Tổng quan Kiến trúc Hệ thống (5-Layer Zero-Waste Architecture)
 
 ```text
-[PRD / Yêu cầu người dùng (Markdown)]
+[Ý tưởng đơn giản của người dùng ("Tạo website quản lý nhân viên có AI")]
+                  │
+                  ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│ TẦNG 0: NON-TECH DISCOVERY & ZERO-TOKEN BOOTSTRAP (Mới - Cho người không   │
+│         rành code)                                                         │
+│ • interviewer.py : Hỏi 3–5 câu tiếng Việt đời thường (chuẩn OpenSpec)      │
+│                    -> Sinh danh sách tính năng dễ hiểu + `openspec/prd.md` │
+│ • bootstrapper.py: Dựng khung dự án 0 token (`create-vite`, Python/uv)     │
+│                    + tự `git init`, `.git/info/exclude` & điền verify cmd  │
+└──────────────────────────────────┬─────────────────────────────────────────┘
+                                   ▼
+[PRD / Đặc tả kỹ thuật (`openspec/prd.md`)]
                   │
                   ▼
 ┌────────────────────────────────────────────────────────────────────────────┐
@@ -86,7 +98,9 @@ AI thực thi cấu hình và gọi các công cụ bên dưới thay vì tự c
 | **Symbol & LSP Edit** | `oraios/serena` (`uvx --from git+https://github.com/oraios/serena`) | Đọc/sửa thân hàm chuẩn xác cho file lớn > 300 dòng | **Lazy/Gated MCP:** chỉ bật khi `task.needs_lsp_mcp == true` |
 | **Versioned Docs** | `upstash/context7` (`npx -y @upstash/context7-mcp`) | Tra cứu docs đúng phiên bản thư viện để chống bịa API | **Lazy/Gated MCP:** chỉ bật khi `task.needs_docs_mcp == true` |
 | **Log Compressor** | `rtk-ai/rtk` (Binary `rtk`) | Proxy Rust nén 60–90% output terminal (`pytest`, `vitest`, `tsc`, `git`) | Bọc lệnh verify trong `core/verifier.py` (tự động fallback nếu chưa cài) |
-| **Spec/Task Standard** | `Fission-AI/OpenSpec` / `eyaltoledano/claude-task-master` | Chuẩn hóa đầu vào từ PRD sang task list (tùy chọn import) | Bộ adapter đọc `tasks.json` / `openspec/` trong `core/planner.py` |
+| **Spec/Task Standard** | `Fission-AI/OpenSpec` / `github/spec-kit` / `eyaltoledano/claude-task-master` | Chuẩn hóa từ ý tưởng mơ hồ -> `openspec/prd.md` & danh sách task | `interviewer.py` (Tầng 0) & `planner.py` (Tầng 2) |
+| **Zero-Token Scaffolding** | `create-vite` / `uv init` (CLI chính chủ) | Dựng khung React/TS hoặc Python sạch sẽ tốn **0 token LLM** | Chạy qua subprocess trong `bootstrapper.py` |
+| **Desktop App UI** | `Starlette` + `Uvicorn` + Chrome/Edge `--app` | Giao diện 2 chế độ: **Đơn giản (Wizard 4 bước)** & **Chuyên gia (Dev)** | Triển khai trong `src/engine/ui/` (`AutoPromptEngine.bat`) |
 | **Fallback Gateway & CLI** | `BerriAI/litellm`, `Aider-AI/aider`, `anomalyco/opencode` | **Tùy chọn (Mode C):** Chỉ cần khi chạy model ngoài (BYOK / self-host local LLM) không qua `agy` | Gọi qua `bridges/cli_executor.py` và cấu hình `litellm_config.yaml` |
 
 ---
@@ -105,8 +119,10 @@ auto-prompt-engine/
 ├── src/
 │   └── engine/
 │       ├── __init__.py
-│       ├── cli.py                 # CLI: init, plan, approve, run, resume, status, serve-mcp, report
-│       ├── models.py              # Pydantic models (Config, TaskSpec, PlanSpec, RunResult, TokenUsage)
+│       ├── cli.py                 # CLI: init, plan, approve, run, resume, status, serve-mcp, report, ui
+│       ├── models.py              # Pydantic models (Config, Interview, ProductSpec, TaskSpec, PlanOutput)
+│       ├── interviewer.py         # Tầng 0A: Non-tech Q&A tiếng Việt -> features_vi + openspec/prd.md
+│       ├── bootstrapper.py        # Tầng 0B: 0-token scaffolding (`create-vite`/Python) + tự `git init`
 │       ├── database.py            # SQLite WAL manager (state.db: tasks, runs, error_hash, crash recovery)
 │       ├── indexer.py             # Tầng 1: `repomix --compress` (cho Planner) + `list_real_files()` chuẩn POSIX
 │       ├── planner.py             # Tầng 2: Ambiguity Check + Planner (`agy -p --json-schema` / LiteLLM) + Plan Gate
@@ -114,6 +130,10 @@ auto-prompt-engine/
 │       ├── git_guard.py           # Checkpoint, nhánh riêng, Scope Guard, Anti-Test-Gaming Diff Guard, Commit, Rollback
 │       ├── verifier.py            # Tầng 5: Fail-Fast Gatekeeper (`EMPTY_DIFF` -> Scope -> Anti-Gaming -> `rtk` -> Log Trimmer & Hash)
 │       ├── orchestrator.py        # State Machine, Complexity/Effort Routing, Stagnation & Global Circuit Breaker, Sprint Gate
+│       ├── ui/                    # Desktop App 2 chế độ (Wizard 4 bước Non-Tech + Chuyên gia Dev)
+│       │   ├── server.py
+│       │   ├── launcher.py
+│       │   └── static/index.html
 │       └── bridges/
 │           ├── __init__.py
 │           ├── agy_cli_executor.py  # [Mode A1 - Primary] Chạy headless `agy -p` stateless + parse JSON output
@@ -370,6 +390,18 @@ CREATE TABLE IF NOT EXISTS runs (
 ---
 
 ## 5. Đặc tả Chi tiết Từng Module (Implementation Details)
+
+### 5.0. Tầng 0: `interviewer.py`, `bootstrapper.py` & Desktop App 2 Chế độ (`src/engine/ui/`)
+* **`interviewer.py` (Tầng 0A — Phỏng vấn người phi công nghệ):**
+  * Nhận ý tưởng ngắn/mơ hồ (1–2 câu) -> gọi `agy` (`--effort low`, `--json-schema`, cấm gọi tool) để sinh 3–5 câu hỏi trắc nghiệm **tiếng Việt đời thường** (không thuật ngữ code).
+  * Tổng hợp câu trả lời của người dùng thành `ProductSpec` gồm `features_vi` (danh sách tính năng dễ hiểu để người dùng duyệt) và `prd_markdown` lưu tại `openspec/prd.md`.
+* **`bootstrapper.py` (Tầng 0B — 0 Token Scaffolding & Tự động Git):**
+  * Nếu là dự án mới: dựng sẵn khung bằng `npx create-vite` (Web React/TS) hoặc khung Python (`pyproject.toml` + `pytest`), tốn **0 token LLM** cho phần boilerplate.
+  * Nếu là dự án có sẵn: tự đọc `package.json` / `pyproject.toml` để điền đúng `verify_commands`.
+  * Tự chạy `git init -b main`, cấu hình `.git/info/exclude` và commit gốc nếu chưa có `.git` — người dùng không cần biết bất kỳ lệnh Git nào.
+* **Desktop App 2 chế độ (`src/engine/ui/`):**
+  * **Chế độ Đơn giản (Mặc định):** Wizard 4 bước (*Nhập ý tưởng → Trả lời câu hỏi → Duyệt tính năng tiếng Việt → Theo dõi tiến độ & Mở sản phẩm*).
+  * **Chế độ Chuyên gia (Dev):** Mở đầy đủ 4 tab kiểm soát (`Dashboard`, `PRD & Tasks`, `Cấu hình`, `Lịch sử chạy`).
 
 ### 5.1. `src/engine/indexer.py` (Tầng 1 — 0 Token)
 * **Nhiệm vụ:** Chạy với `cwd=config.project.target_repo` để sinh `.auto-engine/repo_map.xml`:

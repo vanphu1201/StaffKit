@@ -172,10 +172,17 @@ class Orchestrator:
             exec_res = self.executor.execute(prompt, task, model, effort)
             task_tokens += exec_res.usage.total_tokens
 
-            # Short-circuit if stream watchdog or SDK aborted execution early.
-            if exec_res.verdict_override in ("MAX_TURNS_EXCEEDED", "BUDGET_EXCEEDED", "TIMEOUT", "SCOPE_VIOLATION"):
+            # Short-circuit if stream watchdog, CLI error, or SDK aborted execution early.
+            if not exec_res.success and exec_res.verdict_override in (
+                "MAX_TURNS_EXCEEDED",
+                "BUDGET_EXCEEDED",
+                "TIMEOUT",
+                "SCOPE_VIOLATION",
+                "VERIFY_FAIL",
+            ):
                 last_verdict = exec_res.verdict_override
-                last_error = exec_res.error_message
+                last_error = exec_res.error_message or f"Executor failed ({exec_res.verdict_override})"
+                self._emit("warn", f"[{task.task_id}] {last_verdict}: {last_error[:240]}")
                 self.db.record_run(
                     task.task_id,
                     attempt,
@@ -186,7 +193,7 @@ class Orchestrator:
                     exec_res.verdict_override,
                     trimmed_error_log=last_error,
                 )
-                if exec_res.verdict_override == "SCOPE_VIOLATION":
+                if exec_res.verdict_override in ("SCOPE_VIOLATION", "BUDGET_EXCEEDED", "MAX_TURNS_EXCEEDED", "TIMEOUT"):
                     self.guard.hard_rollback(checkpoint)
                 if exec_res.verdict_override == "BUDGET_EXCEEDED":
                     break

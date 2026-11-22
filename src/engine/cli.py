@@ -21,6 +21,7 @@ from engine.models import EngineConfig
 from engine.orchestrator import Orchestrator, PlanNotApprovedError
 from engine.planner import Planner, PlannerError
 from engine.ui.launcher import launch_desktop_app
+from engine.verifier import Verifier
 
 app = typer.Typer(
     name="engine",
@@ -175,7 +176,14 @@ def _build_orchestrator(cfg: EngineConfig) -> Orchestrator:
     guard = GitGuard(cfg.target_repo_path, ignore_artifacts=cfg.guards.ignore_artifacts)
     verifier = Verifier(cfg, guard)
     compiler = PromptCompiler(cfg)
-    return Orchestrator(cfg, db, guard, verifier, compiler)
+    return Orchestrator(
+        cfg,
+        db,
+        guard,
+        verifier,
+        compiler,
+        on_event=lambda lvl, msg: console.print(f"[{lvl.upper()}] {msg}", markup=False),
+    )
 
 
 @app.command()

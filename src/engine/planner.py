@@ -24,7 +24,7 @@ from engine.bridges.agy_cli_executor import (
 )
 from engine.database import StateDB
 from engine.indexer import RepoIndexer, compact_repo_map_for_planner, list_real_files
-from engine.models import EngineConfig, PlanOutput, TaskSpec, normalize_posix_path
+from engine.models import EngineConfig, PlanOutput, TaskSpec, inline_json_schema, normalize_posix_path
 
 JSON_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
 
@@ -223,8 +223,11 @@ class Planner:
         assert proc.stdout is not None
         assert proc.stderr is not None
 
-        proc.stdin.write(encode_stream_user_message(prompt))
-        proc.stdin.close()
+        try:
+            proc.stdin.write(encode_stream_user_message(prompt))
+            proc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
 
         line_q: queue.Queue[str | None] = queue.Queue()
 
@@ -240,6 +243,7 @@ class Planner:
 
         out_lines: list[str] = []
         tool_calls = 0
+        seen_tool_steps: set[int] = set()
         deadline = time.monotonic() + self.config.executor.timeout_seconds
 
         while True:
@@ -272,13 +276,18 @@ class Planner:
 
             tc = _extract_tool_call(ev)
             if tc is not None:
-                tool_calls += 1
-                self._emit("warn", f"Planner đang gọi tool `{tc[0]}` ({tool_calls}/3)...")
-                if tool_calls > 3:
-                    kill_process_tree(proc)
-                    raise PlannerError(
-                        "Planner cố gọi quá nhiều tool đọc repo thay vì dùng Repo Skeleton Map. Đã ngắt để tiết kiệm token."
-                    )
+                step_obj = ev.get("step_update")
+                step_idx = step_obj.get("step_index") if isinstance(step_obj, dict) else ev.get("step_index")
+                if not isinstance(step_idx, int) or step_idx not in seen_tool_steps:
+                    if isinstance(step_idx, int):
+                        seen_tool_steps.add(step_idx)
+                    tool_calls += 1
+                    self._emit("warn", f"Planner đang gọi tool `{tc[0]}` ({tool_calls}/3)...")
+                    if tool_calls > 3:
+                        kill_process_tree(proc)
+                        raise PlannerError(
+                            "Planner cố gọi quá nhiều tool đọc repo thay vì dùng Repo Skeleton Map. Đã ngắt để tiết kiệm token."
+                        )
 
             step = ev.get("step_update")
             if isinstance(step, dict) and step.get("state") == "DONE":
@@ -366,7 +375,7 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
 
         schema_path = self.config.auto_engine_dir / "plan_schema.json"
         schema_path.write_text(
-            json.dumps(PlanOutput.model_json_schema(), indent=2),
+            json.dumps(inline_json_schema(PlanOutput.model_json_schema()), indent=2),
             encoding="utf-8",
         )
 

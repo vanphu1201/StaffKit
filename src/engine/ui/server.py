@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
+import subprocess
 import threading
 from collections import deque
 from datetime import datetime
@@ -17,14 +19,17 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, StreamingResponse
 from starlette.routing import Route
 
-from engine.bridges.agy_cli_executor import smoke_test_agy
+from engine.bootstrapper import bootstrap_project, ensure_git_repo_ready
+from engine.bridges.agy_cli_executor import list_agy_models, smoke_test_agy
 from engine.compiler import PromptCompiler
 from engine.database import StateDB
 from engine.git_guard import GitGuard
 from engine.indexer import RepoIndexer
+from engine.interviewer import ProductInterviewer
 from engine.models import EngineConfig, TaskSpec
 from engine.orchestrator import Orchestrator
 from engine.planner import Planner
+from engine.verifier import Verifier
 
 STATIC_INDEX = Path(__file__).resolve().parent / "static" / "index.html"
 
@@ -91,6 +96,16 @@ class DesktopAppController:
         self.worker_status: str = "idle"
         self.worker_message: str = "Sẵn sàng"
         self.clarifying_questions: list[str] = []
+
+        # Layer 0 Non-Tech Wizard state
+        self.wizard_step: int = 1
+        self.wizard_idea: str = ""
+        self.wizard_stack_hint: str = "auto"
+        self.wizard_parent_dir: str = str(Path.home() / "AutoProjects")
+        self.wizard_interview: dict[str, Any] | None = None
+        self.wizard_spec: dict[str, Any] | None = None
+        self.wizard_preview_cmd: str = ""
+        self.wizard_done_message: str = ""
 
         self._logs: deque[dict[str, str]] = deque(maxlen=400)
         self._subscribers: list[tuple[asyncio.AbstractEventLoop, asyncio.Queue[dict[str, str]]]] = []
@@ -190,6 +205,16 @@ class DesktopAppController:
             worker = {"status": self.worker_status, "message": self.worker_message}
             questions = list(self.clarifying_questions)
             logs = list(self._logs)
+            wizard = {
+                "step": self.wizard_step,
+                "idea": self.wizard_idea,
+                "stack_hint": self.wizard_stack_hint,
+                "parent_dir": self.wizard_parent_dir,
+                "interview": self.wizard_interview,
+                "spec": self.wizard_spec,
+                "preview_cmd": self.wizard_preview_cmd,
+                "done_message": self.wizard_done_message,
+            }
 
         return {
             "config_path": self.config_path.as_posix(),
@@ -203,6 +228,7 @@ class DesktopAppController:
             "summary": summary,
             "worker": worker,
             "clarifying_questions": questions,
+            "wizard": wizard,
             "logs": logs,
         }
 
@@ -362,6 +388,179 @@ class DesktopAppController:
         self.emit_log("warn", f"Đã rollback task {task_id} và đánh dấu BLOCKED.")
         return self.get_state_payload()
 
+    def retry_task(self, task_id: str) -> dict[str, Any]:
+        cfg = self.load_config()
+        db = self._get_db(cfg, create_if_missing=False)
+        if db is None:
+            raise ValueError("Chưa có state.db cho dự án hiện tại.")
+        row = db.get_task_row(task_id)
+        if not row:
+            raise ValueError(f"Không tìm thấy task `{task_id}`.")
+        db.update_task_status(task_id, "PENDING", retry_count=0)
+        db.set_meta("consecutive_blocked", "0")
+        self.emit_log("info", f"Đã đặt lại task {task_id} về PENDING để chạy lại.")
+        return self.get_state_payload()
+
+    def reset_wizard(self) -> dict[str, Any]:
+        with self._lock:
+            self.wizard_step = 1
+            self.wizard_idea = ""
+            self.wizard_interview = None
+            self.wizard_spec = None
+            self.wizard_preview_cmd = ""
+            self.wizard_done_message = ""
+        return self.get_state_payload()
+
+    def start_wizard_interview(
+        self,
+        idea: str,
+        stack_hint: str = "auto",
+        parent_dir: str = "",
+        selected_model: str = "",
+    ) -> bool:
+        def _job() -> None:
+            cfg = self.load_config()
+            if selected_model.strip():
+                for tier_key in cfg.agy.tiers:
+                    cfg.agy.tiers[tier_key].model = selected_model.strip()
+                self.save_config(cfg.model_dump())
+
+            with self._lock:
+                self.wizard_idea = idea
+                self.wizard_stack_hint = stack_hint
+                if parent_dir.strip():
+                    self.wizard_parent_dir = parent_dir.strip()
+                self.wizard_interview = None
+                self.wizard_spec = None
+                self.wizard_done_message = ""
+
+            interviewer = ProductInterviewer(cfg, on_event=self.emit_log, stop_event=self.stop_event)
+            out = interviewer.generate_interview(idea, stack_hint=stack_hint)  # type: ignore[arg-type]
+            with self._lock:
+                self.wizard_interview = out.model_dump()
+                self.wizard_step = 2
+            self.emit_log("success", f"Đã phân tích xong ý tưởng: {out.product_summary_vi}")
+
+        return self._start_worker("interviewing", "Đang phân tích ý tưởng & tạo câu hỏi...", _job)
+
+    def start_wizard_synthesize(self, idea: str, answers: dict[str, str], stack: str) -> bool:
+        def _job() -> None:
+            cfg = self.load_config()
+            interviewer = ProductInterviewer(cfg, on_event=self.emit_log, stop_event=self.stop_event)
+            spec = interviewer.synthesize_spec(idea, answers, stack)
+            with self._lock:
+                self.wizard_spec = spec.model_dump()
+                self.wizard_step = 3
+            self.emit_log("success", f"Đã tạo bản thiết kế tính năng: {spec.product_title}")
+
+        return self._start_worker("synthesizing", "Đang tổng hợp tính năng sản phẩm...", _job)
+
+    def start_wizard_build(
+        self,
+        *,
+        parent_dir: str,
+        project_name: str,
+        stack: str,
+        prd_markdown: str,
+        install_deps: bool = False,
+    ) -> bool:
+        def _job() -> None:
+            with self._lock:
+                self.wizard_step = 4
+                self.wizard_done_message = ""
+
+            base = Path(parent_dir.strip() or self.wizard_parent_dir).expanduser()
+            clean_name = "".join(ch if (ch.isalnum() or ch in ("-", "_")) else "-" for ch in project_name.strip()).strip("-")
+            target_dir = base if (not clean_name or base.name == clean_name) else (base / clean_name)
+
+            self.emit_log("info", f"Bước 1/4: Dựng khung dự án 0-token tại {target_dir.as_posix()}...")
+            boot = bootstrap_project(target_dir, stack=stack, install_deps=install_deps)  # type: ignore[arg-type]
+
+            # Save openspec/prd.md and commit cleanly before sprint branch creation
+            openspec_dir = target_dir / "openspec"
+            openspec_dir.mkdir(parents=True, exist_ok=True)
+            prd_file = openspec_dir / "prd.md"
+            prd_file.write_text(prd_markdown, encoding="utf-8")
+            subprocess.run(["git", "add", "openspec/prd.md"], cwd=str(target_dir), capture_output=True, check=False)
+            if subprocess.run(["git", "status", "--porcelain"], cwd=str(target_dir), capture_output=True, text=True).stdout.strip():
+                subprocess.run(["git", "commit", "-m", "docs: add openspec/prd.md"], cwd=str(target_dir), capture_output=True, check=False)
+            ensure_git_repo_ready(target_dir)
+
+            # Update config.yaml cleanly to point at target_dir with auto-detected verify commands
+            cfg = self.load_config()
+            cfg.project.target_repo = target_dir.resolve().as_posix()
+            if boot.verify_commands:
+                cfg.executor.default_verify_commands = boot.verify_commands
+            if boot.final_verify_commands:
+                cfg.sprint.final_verify_commands = boot.final_verify_commands
+            self.save_config(cfg.model_dump())
+
+            with self._lock:
+                self.wizard_preview_cmd = boot.preview_command
+
+            self.emit_log("info", "Bước 2/4: Lập kế hoạch công việc DAG từ đặc tả...")
+            db = StateDB(cfg.state_db_path)
+            indexer = RepoIndexer(cfg)
+            planner = Planner(cfg, db, indexer, on_event=self.emit_log, stop_event=self.stop_event)
+            plan_res = planner.plan_from_prd(prd_file, auto_approve=True)
+            if plan_res.status == "NEEDS_CLARIFICATION":
+                self.emit_log("warn", "Planner cần bổ sung thông tin trước khi chạy.")
+                return
+
+            self.emit_log("info", f"Bước 3/4: Thực thi tự động {len(plan_res.tasks)} bước qua Antigravity...")
+            guard = GitGuard(cfg.target_repo_path, ignore_artifacts=cfg.guards.ignore_artifacts)
+            verifier = Verifier(cfg, guard)
+            compiler = PromptCompiler(cfg)
+            orch = Orchestrator(
+                cfg,
+                db,
+                guard,
+                verifier,
+                compiler,
+                on_event=self.emit_log,
+                stop_event=self.stop_event,
+            )
+            res = orch.run_sprint(auto_approve=True, sprint_name="sprint-1")
+            counts = res["summary"]["counts"]
+            gate = "PASS" if res.get("final_verify_passed", True) else "FAIL"
+            msg = f"Hoàn tất! Đã xong {counts.get('DONE', 0)}/{res['summary']['total_tasks']} phần (Kiểm thử cuối: {gate})."
+            with self._lock:
+                self.wizard_done_message = msg
+            self.emit_log("success" if gate == "PASS" and not res.get("halted_reason") else "warn", msg)
+
+        return self._start_worker("building", "Đang tự động xây dựng sản phẩm...", _job)
+
+    def open_target_folder(self) -> str:
+        cfg = self.load_config()
+        target = cfg.target_repo_path
+        if not target.is_dir():
+            raise ValueError(f"Thư mục không tồn tại: {target}")
+        if os.name == "nt":
+            os.startfile(str(target))  # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(["xdg-open", str(target)])
+        return target.as_posix()
+
+    def get_agy_models(self) -> list[dict[str, str]]:
+        cfg = self.load_config()
+        return list_agy_models(cfg.agy.binary)
+
+    def open_agy_login_window(self) -> None:
+        cfg = self.load_config()
+        agy_bin = cfg.agy.binary
+        if os.name == "nt":
+            ps_script = (
+                "Write-Host '=== DANG NHAP ANTIGRAVITY CLI (PRO) ===' -ForegroundColor Cyan; "
+                "Write-Host 'Neu dang o tai khoan cu, go: /logout roi dang nhap lai tai khoan Pro.' -ForegroundColor Yellow; "
+                f"& '{agy_bin}'"
+            )
+            subprocess.Popen(
+                ["cmd", "/c", "start", "Antigravity CLI Login", "powershell", "-NoExit", "-Command", ps_script]
+            )
+        else:
+            subprocess.Popen([agy_bin])
+        self.emit_log("info", "Đã mở cửa sổ đăng nhập Antigravity (`agy`). Sau khi đăng nhập xong hãy bấm Làm mới / Tải lại model.")
+
 
 def create_ui_app(config_path: Path) -> Starlette:
     """Create the local Starlette web/desktop ASGI application."""
@@ -438,6 +637,70 @@ def create_ui_app(config_path: Path) -> Starlette:
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 
+    async def api_retry(request: Request) -> JSONResponse:
+        task_id = request.path_params["task_id"]
+        try:
+            return JSONResponse(controller.retry_task(task_id))
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    async def api_wizard_interview(request: Request) -> JSONResponse:
+        body = await request.json()
+        idea = str(body.get("idea", "")).strip()
+        if not idea:
+            return JSONResponse({"error": "Vui lòng mô tả ngắn ý tưởng sản phẩm."}, status_code=400)
+        ok = controller.start_wizard_interview(
+            idea=idea,
+            stack_hint=str(body.get("stack_hint", "auto")),
+            parent_dir=str(body.get("parent_dir", "")),
+            selected_model=str(body.get("selected_model", "")),
+        )
+        if not ok:
+            return JSONResponse({"error": "Đang có tác vụ nền khác chạy."}, status_code=409)
+        return JSONResponse({"started": True})
+
+    async def api_wizard_synthesize(request: Request) -> JSONResponse:
+        body = await request.json()
+        ok = controller.start_wizard_synthesize(
+            idea=str(body.get("idea", "")),
+            answers=dict(body.get("answers") or {}),
+            stack=str(body.get("stack", "web_react")),
+        )
+        if not ok:
+            return JSONResponse({"error": "Đang có tác vụ nền khác chạy."}, status_code=409)
+        return JSONResponse({"started": True})
+
+    async def api_wizard_build(request: Request) -> JSONResponse:
+        body = await request.json()
+        ok = controller.start_wizard_build(
+            parent_dir=str(body.get("parent_dir", "")),
+            project_name=str(body.get("project_name", "my-ai-app")),
+            stack=str(body.get("stack", "web_react")),
+            prd_markdown=str(body.get("prd_markdown", "")),
+            install_deps=bool(body.get("install_deps", False)),
+        )
+        if not ok:
+            return JSONResponse({"error": "Đang có tác vụ nền khác chạy."}, status_code=409)
+        return JSONResponse({"started": True})
+
+    async def api_wizard_reset(_request: Request) -> JSONResponse:
+        return JSONResponse(controller.reset_wizard())
+
+    async def api_open_folder(_request: Request) -> JSONResponse:
+        try:
+            opened = controller.open_target_folder()
+            return JSONResponse({"opened": opened})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    async def api_agy_models(_request: Request) -> JSONResponse:
+        models = await asyncio.to_thread(controller.get_agy_models)
+        return JSONResponse({"models": models})
+
+    async def api_agy_login(_request: Request) -> JSONResponse:
+        controller.open_agy_login_window()
+        return JSONResponse({"launched": True})
+
     async def api_logs_stream(_request: Request) -> StreamingResponse:
         loop = asyncio.get_running_loop()
         backlog, q = controller.subscribe(loop)
@@ -470,6 +733,14 @@ def create_ui_app(config_path: Path) -> Starlette:
         Route("/api/resume", api_resume, methods=["POST"]),
         Route("/api/stop", api_stop, methods=["POST"]),
         Route("/api/tasks/{task_id}/rollback", api_rollback, methods=["POST"]),
+        Route("/api/tasks/{task_id}/retry", api_retry, methods=["POST"]),
+        Route("/api/wizard/interview", api_wizard_interview, methods=["POST"]),
+        Route("/api/wizard/synthesize", api_wizard_synthesize, methods=["POST"]),
+        Route("/api/wizard/build", api_wizard_build, methods=["POST"]),
+        Route("/api/wizard/reset", api_wizard_reset, methods=["POST"]),
+        Route("/api/open-folder", api_open_folder, methods=["POST"]),
+        Route("/api/agy/models", api_agy_models, methods=["GET"]),
+        Route("/api/agy/login", api_agy_login, methods=["POST"]),
         Route("/api/logs/stream", api_logs_stream, methods=["GET"]),
     ]
     app = Starlette(routes=routes)

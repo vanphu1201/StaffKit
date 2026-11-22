@@ -122,3 +122,17 @@ def test_commit_task_stages_only_permitted_files(temp_repo: Path) -> None:
     sha = guard.commit_task("T-01", "Cast inputs", ["src/app.py"])
     assert len(sha) >= 7
     assert not guard.has_changes()
+
+
+def test_package_json_permits_and_commits_package_lock(temp_repo: Path) -> None:
+    guard = GitGuard(temp_repo)
+    guard.ensure_work_branch("main", "auto-engine/sprint-lock")
+    (temp_repo / "package.json").write_text('{"name":"demo"}\n', encoding="utf-8")
+    (temp_repo / "package-lock.json").write_text('{"lockfileVersion":3}\n', encoding="utf-8")
+
+    ok, viols = guard.check_scope(["package.json"], [], [])
+    assert ok and viols == []
+
+    sha = guard.commit_task("T-01", "Add pkg", ["package.json"])
+    assert len(sha) >= 7
+    assert not guard.has_changes()

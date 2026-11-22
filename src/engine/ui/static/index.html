@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Auto-Prompt Engine — Desktop Control</title>
+  <title>Auto-Prompt Engine — Trợ lý tạo sản phẩm cùng Antigravity</title>
   <style>
     :root {
       --bg: #0d1117;
@@ -43,7 +43,25 @@
     }
     .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; }
     .brand-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
-    .header-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .header-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .mode-switch {
+      display: inline-flex;
+      background: #0b0f14;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 2px;
+    }
+    .mode-btn {
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      padding: 5px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .mode-btn.active { background: var(--accent); color: #fff; }
     .pill {
       padding: 4px 10px;
       border-radius: 999px;
@@ -88,6 +106,75 @@
     .view { display: none; flex-direction: column; gap: 16px; }
     .view.active { display: flex; }
 
+    .wizard-wrap {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .wizard-inner { width: 100%; max-width: 900px; display: flex; flex-direction: column; gap: 18px; }
+    .stepper {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+    }
+    .step-chip {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .step-chip.active { border-color: var(--accent); color: #93c5fd; background: rgba(59,130,246,.12); }
+    .step-chip.done { border-color: rgba(34,197,94,.45); color: var(--green); }
+
+    .example-chip {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      color: #cbd5e1;
+      padding: 6px 11px;
+      border-radius: 999px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .example-chip:hover { border-color: var(--accent); color: #fff; }
+    .q-card {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .opt-btn {
+      background: #0b0f14;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 5px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .opt-btn.selected { border-color: var(--accent); background: rgba(59,130,246,.2); color: #93c5fd; }
+    .progress-bar-bg {
+      height: 12px;
+      background: #0b0f14;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent), var(--green));
+      transition: width .3s ease;
+    }
+
     .card {
       background: var(--panel);
       border: 1px solid var(--border);
@@ -97,7 +184,7 @@
     .card h3 { margin: 0 0 12px; font-size: 15px; color: var(--text); }
     .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
     .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-    @media (max-width: 980px) { .grid-4, .grid-2 { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 980px) { .grid-4, .grid-2, .stepper { grid-template-columns: 1fr 1fr; } }
     .kpi { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
     .kpi-label { font-size: 12px; color: var(--muted); }
     .kpi-value { font-size: 22px; font-weight: 700; margin-top: 4px; }
@@ -141,7 +228,7 @@
       border: 1px solid var(--border);
       border-radius: 8px;
       padding: 12px;
-      height: 300px;
+      height: 260px;
       overflow-y: auto;
       font-family: Consolas, "Cascadia Code", monospace;
       font-size: 12px;
@@ -202,13 +289,145 @@
       <span class="pill" id="repoPill">Chưa kiểm tra repo</span>
     </div>
     <div class="header-meta">
+      <div class="mode-switch">
+        <button class="mode-btn active" id="modeBtnSimple" onclick="setAppMode('simple')">Đơn giản (Tạo sản phẩm)</button>
+        <button class="mode-btn" id="modeBtnDev" onclick="setAppMode('dev')">Chuyên gia (Dev)</button>
+      </div>
+      <span class="pill" id="modelPill" title="Model mặc định đang chọn">Model: Mặc định agy</span>
       <span class="pill" id="workerPill">idle</span>
+      <button class="btn sm" onclick="openAgyLogin()">Đăng nhập agy</button>
       <button class="btn sm" onclick="smokeAgy()">Smoke Test agy</button>
       <button class="btn sm" onclick="refreshState()">Làm mới</button>
     </div>
   </header>
 
-  <div class="layout">
+  <!-- ==================== CHẾ ĐỘ ĐƠN GIẢN (NON-TECH WIZARD) ==================== -->
+  <div id="simpleContainer" class="wizard-wrap">
+    <div class="wizard-inner">
+      <div class="stepper">
+        <div class="step-chip active" id="stepChip1">1. Nhập ý tưởng</div>
+        <div class="step-chip" id="stepChip2">2. Trả lời vài câu hỏi</div>
+        <div class="step-chip" id="stepChip3">3. Duyệt tính năng</div>
+        <div class="step-chip" id="stepChip4">4. Tự động tạo &amp; Nhận kết quả</div>
+      </div>
+
+      <!-- STEP 1 -->
+      <div id="wizStep1" class="card">
+        <h3>Bạn muốn tạo sản phẩm công nghệ gì hôm nay?</h3>
+        <p style="color:var(--muted); margin-top:0;">Chỉ cần mô tả bằng ngôn ngữ đời thường. Hệ thống sẽ tự hỏi thêm vài ý để hiểu đúng nhu cầu rồi tự cấu hình, tự lập trình và tự kiểm thử với mức token thấp nhất.</p>
+        <div class="row" style="margin-bottom:10px;">
+          <button class="example-chip" onclick="useIdeaSample('Tạo website quản lý nhân viên có AI gợi ý đánh giá hiệu suất và xuất báo cáo CSV')">Website quản lý nhân viên có AI</button>
+          <button class="example-chip" onclick="useIdeaSample('Tạo công cụ tự động viết kịch bản và tạo video ngắn từ chủ đề bằng AI')">Hệ thống tự tạo video bằng AI</button>
+          <button class="example-chip" onclick="useIdeaSample('Tạo app quản lý thu chi cá nhân thông minh tự phân loại hóa đơn')">Quản lý thu chi cá nhân AI</button>
+        </div>
+        <textarea id="wizIdeaInput" rows="4" style="font-family:inherit;" placeholder="Ví dụ: Tạo cho tôi một website quản lý nhân viên có tích hợp AI tóm tắt báo cáo..."></textarea>
+
+        <div class="grid-2" style="margin-top:14px;">
+          <label class="field">
+            <span>Thư mục lưu dự án mới (hoặc chọn dự án đang có)</span>
+            <div class="row" style="flex-wrap:nowrap;">
+              <input type="text" id="wizParentDir" />
+              <button class="btn" onclick="pickWizardFolder()">Chọn nơi lưu...</button>
+            </div>
+          </label>
+          <label class="field">
+            <span>Loại sản phẩm</span>
+            <select id="wizStackHint">
+              <option value="auto">Để hệ thống tự chọn phù hợp nhất</option>
+              <option value="web_react">Website / Ứng dụng Web (React)</option>
+              <option value="python_app">Tool tự động hóa / Script AI (Python)</option>
+            </select>
+          </label>
+        </div>
+
+        <label class="field" style="margin-top:12px;">
+          <span>Model Antigravity sử dụng (tùy chọn)</span>
+          <select id="wizModelSelect">
+            <option value="">Theo cấu hình hiện tại (Mặc định agy)</option>
+          </select>
+        </label>
+
+        <div class="row" style="justify-content:flex-end; margin-top:16px;">
+          <button class="btn primary" id="btnWizInterview" onclick="submitWizardInterview()">Tiếp tục: Phân tích ý tưởng →</button>
+        </div>
+      </div>
+
+      <!-- STEP 2 -->
+      <div id="wizStep2" class="card" style="display:none;">
+        <h3>Hệ thống cần làm rõ vài điểm để không làm sai ý bạn</h3>
+        <p id="wizSummaryVi" style="color:#93c5fd; margin-top:0;"></p>
+        <div id="wizQuestionsList" style="display:flex; flex-direction:column; gap:12px;"></div>
+        <div class="row" style="justify-content:space-between; margin-top:16px;">
+          <button class="btn" onclick="resetWizard()">← Quay lại sửa ý tưởng</button>
+          <button class="btn primary" id="btnWizSynthesize" onclick="submitWizardSynthesize()">Tiếp tục: Tạo danh sách tính năng →</button>
+        </div>
+      </div>
+
+      <!-- STEP 3 -->
+      <div id="wizStep3" class="card" style="display:none;">
+        <h3 id="wizProductTitle">Bản thiết kế tính năng sản phẩm</h3>
+        <p style="color:var(--muted); margin-top:0;">Hãy kiểm tra xem danh sách tính năng dưới đây đã đúng ý bạn chưa trước khi hệ thống bắt đầu lập trình:</p>
+        <ul id="wizFeaturesList" style="line-height:1.7; margin:0 0 14px 18px;"></ul>
+
+        <div class="grid-2" style="margin-bottom:12px;">
+          <label class="field">
+            <span>Tên thư mục dự án sẽ tạo</span>
+            <input type="text" id="wizProjectName" />
+          </label>
+          <label class="field">
+            <span>Công nghệ dựng khung (0 token)</span>
+            <select id="wizChosenStack">
+              <option value="web_react">Website React + TypeScript (Vite)</option>
+              <option value="python_app">Ứng dụng Python + Pytest</option>
+            </select>
+          </label>
+        </div>
+
+        <details style="margin-bottom:14px;">
+          <summary style="cursor:pointer; color:var(--muted); font-size:12px;">Xem bản đặc tả kỹ thuật chi tiết (dành cho người muốn kiểm tra thêm)</summary>
+          <textarea id="wizPrdPreview" rows="7" style="margin-top:8px;"></textarea>
+        </details>
+
+        <div class="row" style="justify-content:space-between;">
+          <div class="row">
+            <button class="btn" onclick="goWizardStep(2)">← Quay lại câu hỏi</button>
+            <label class="check-label"><input type="checkbox" id="wizInstallDeps" /> Tự cài thư viện `npm install` (nếu là Web)</label>
+          </div>
+          <button class="btn success" id="btnWizBuild" onclick="submitWizardBuild()">Đồng ý &amp; Bắt đầu tạo sản phẩm</button>
+        </div>
+      </div>
+
+      <!-- STEP 4 -->
+      <div id="wizStep4" class="card" style="display:none;">
+        <div class="row" style="justify-content:space-between; margin-bottom:10px;">
+          <h3 style="margin:0;">Tiến độ xây dựng sản phẩm</h3>
+          <span class="pill" id="wizProgressText">0 / 0 phần hoàn thành</span>
+        </div>
+        <div class="progress-bar-bg" style="margin-bottom:14px;">
+          <div class="progress-bar-fill" id="wizProgressFill"></div>
+        </div>
+        <div id="wizDoneBanner" style="display:none; background:rgba(34,197,94,.12); border:1px solid rgba(34,197,94,.4); color:#86efac; padding:10px 14px; border-radius:8px; margin-bottom:12px;"></div>
+        <div id="wizTaskSimpleList" style="display:flex; flex-direction:column; gap:8px; margin-bottom:14px;"></div>
+
+        <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">Nhật ký hoạt động trực tiếp:</div>
+        <div id="wizLogBox" class="log-box" style="height:200px; margin-bottom:14px;"></div>
+
+        <div class="row" style="justify-content:space-between;">
+          <div class="row">
+            <button class="btn danger" id="btnWizStop" onclick="stopSprint()">Dừng an toàn</button>
+            <button class="btn" onclick="resetWizard()">Tạo sản phẩm mới khác</button>
+          </div>
+          <div class="row">
+            <span id="wizPreviewHint" style="color:var(--muted); font-size:12px;"></span>
+            <button class="btn primary" onclick="openTargetFolder()">Mở thư mục sản phẩm</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== CHẾ ĐỘ CHUYÊN GIA (DEVELOPER MODE) ==================== -->
+  <div id="devContainer" class="layout" style="display:none;">
     <nav>
       <button class="nav-btn active" onclick="switchTab('dashboard', this)">Điều khiển (Dashboard)</button>
       <button class="nav-btn" onclick="switchTab('planner', this)">PRD &amp; Kế hoạch (Plan)</button>
@@ -336,26 +555,29 @@
         </div>
 
         <div class="card">
-          <h3>Định tuyến Model &amp; Effort (`agy.tiers`)</h3>
+          <div class="row" style="justify-content:space-between; margin-bottom:12px;">
+            <h3 style="margin:0;">Định tuyến Model &amp; Effort (`agy.tiers`)</h3>
+            <button class="btn sm" onclick="loadAgyModels(true)">Tải lại model từ `agy`</button>
+          </div>
           <div class="grid-4">
             <div class="kpi">
-              <div class="kpi-label">Planner</div>
-              <input type="text" id="tierPlannerModel" placeholder="Mặc định agy" style="margin:6px 0;" />
+              <div class="kpi-label">Planner (Lập kế hoạch)</div>
+              <select id="tierPlannerModel" class="agy-model-select" style="margin:6px 0;"><option value="">Mặc định agy</option></select>
               <select id="tierPlannerEffort"><option>high</option><option>medium</option><option>low</option></select>
             </div>
             <div class="kpi">
-              <div class="kpi-label">Coder Low</div>
-              <input type="text" id="tierLowModel" placeholder="Mặc định agy" style="margin:6px 0;" />
+              <div class="kpi-label">Coder Low (Task dễ)</div>
+              <select id="tierLowModel" class="agy-model-select" style="margin:6px 0;"><option value="">Mặc định agy</option></select>
               <select id="tierLowEffort"><option>low</option><option>medium</option><option>high</option></select>
             </div>
             <div class="kpi">
-              <div class="kpi-label">Coder Medium</div>
-              <input type="text" id="tierMedModel" placeholder="Mặc định agy" style="margin:6px 0;" />
+              <div class="kpi-label">Coder Medium (Task vừa)</div>
+              <select id="tierMedModel" class="agy-model-select" style="margin:6px 0;"><option value="">Mặc định agy</option></select>
               <select id="tierMedEffort"><option>medium</option><option>low</option><option>high</option></select>
             </div>
             <div class="kpi">
-              <div class="kpi-label">Escalation (Retry cuối)</div>
-              <input type="text" id="tierEscModel" placeholder="Mặc định agy" style="margin:6px 0;" />
+              <div class="kpi-label">Escalation (Retry cuối / Khó)</div>
+              <select id="tierEscModel" class="agy-model-select" style="margin:6px 0;"><option value="">Mặc định agy</option></select>
               <select id="tierEscEffort"><option>high</option><option>medium</option><option>low</option></select>
             </div>
           </div>
@@ -381,6 +603,7 @@
           </div>
           <div class="row" style="justify-content:space-between;">
             <div class="row" style="gap:16px;">
+              <label class="check-label"><input type="checkbox" id="chkAutoApproveTools" /> Tự duyệt quyền sửa file cho `agy` headless</label>
               <label class="check-label"><input type="checkbox" id="chkDynamicMcp" /> Dynamic MCP Gating</label>
               <label class="check-label"><input type="checkbox" id="chkUseRtk" /> Dùng `rtk` nén log</label>
               <label class="check-label"><input type="checkbox" id="chkRequireApprove" /> Bắt buộc duyệt Plan</label>
@@ -421,12 +644,23 @@
 
   <script>
     let latestState = null;
+    let currentAppMode = "simple";
+    let localWizardStep = 1;
+    let wizardAnswers = {};
 
     function showToast(msg) {
       const el = document.getElementById("toast");
       el.textContent = msg;
       el.style.display = "block";
       setTimeout(() => { el.style.display = "none"; }, 3200);
+    }
+
+    function setAppMode(mode) {
+      currentAppMode = mode;
+      document.getElementById("simpleContainer").style.display = mode === "simple" ? "flex" : "none";
+      document.getElementById("devContainer").style.display = mode === "dev" ? "flex" : "none";
+      document.getElementById("modeBtnSimple").classList.toggle("active", mode === "simple");
+      document.getElementById("modeBtnDev").classList.toggle("active", mode === "dev");
     }
 
     function switchTab(name, btn) {
@@ -441,16 +675,125 @@
     }
 
     function appendLogEntry(entry) {
-      const box = document.getElementById("logBox");
-      const div = document.createElement("div");
-      div.className = "log-line log-" + (entry.level || "info");
-      div.textContent = `[${entry.time}] [${(entry.level || "info").toUpperCase()}] ${entry.message}`;
-      box.appendChild(div);
-      box.scrollTop = box.scrollHeight;
+      for (const boxId of ["logBox", "wizLogBox"]) {
+        const box = document.getElementById(boxId);
+        if (!box) continue;
+        const div = document.createElement("div");
+        div.className = "log-line log-" + (entry.level || "info");
+        div.textContent = `[${entry.time}] [${(entry.level || "info").toUpperCase()}] ${entry.message}`;
+        box.appendChild(div);
+        box.scrollTop = box.scrollHeight;
+      }
     }
 
     function clearLogs() {
       document.getElementById("logBox").innerHTML = "";
+      document.getElementById("wizLogBox").innerHTML = "";
+    }
+
+    function goWizardStep(step) {
+      localWizardStep = step;
+      for (let i = 1; i <= 4; i++) {
+        document.getElementById("wizStep" + i).style.display = i === step ? "block" : "none";
+        const chip = document.getElementById("stepChip" + i);
+        chip.classList.toggle("active", i === step);
+        chip.classList.toggle("done", i < step);
+      }
+    }
+
+    function useIdeaSample(txt) {
+      document.getElementById("wizIdeaInput").value = txt;
+    }
+
+    function renderWizard(s) {
+      const w = s.wizard || {};
+      const busy = s.worker.status !== "idle";
+      ["btnWizInterview", "btnWizSynthesize", "btnWizBuild"].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.disabled = busy;
+      });
+      document.getElementById("btnWizStop").disabled = !busy;
+
+      if (!document.getElementById("wizParentDir").value && w.parent_dir) {
+        document.getElementById("wizParentDir").value = w.parent_dir;
+      }
+      if (w.step && w.step !== localWizardStep) {
+        goWizardStep(w.step);
+      }
+
+      if (w.interview) {
+        document.getElementById("wizSummaryVi").textContent = w.interview.product_summary_vi || "";
+        const qBox = document.getElementById("wizQuestionsList");
+        if (qBox.dataset.renderedFor !== JSON.stringify(w.interview.questions)) {
+          qBox.dataset.renderedFor = JSON.stringify(w.interview.questions);
+          wizardAnswers = {};
+          qBox.innerHTML = (w.interview.questions || []).map((q, qIdx) => {
+            wizardAnswers[q.question] = q.default_answer || (q.options && q.options[0]) || "";
+            const opts = (q.options || []).map((opt, oIdx) =>
+              `<button type="button" class="opt-btn" onclick="selectWizOpt(this, ${qIdx}, ${oIdx})">${esc(opt)}</button>`
+            ).join(" ");
+            return `<div class="q-card">
+              <div style="font-weight:600;">${esc(q.question)}</div>
+              <div class="row">${opts}</div>
+              <input type="text" value="${esc(wizardAnswers[q.question]).replace(/"/g, "&quot;")}" oninput="updateWizInput(${qIdx}, this.value)" placeholder="Hoặc nhập câu trả lời riêng của bạn..." />
+            </div>`;
+          }).join("");
+        }
+        document.getElementById("wizProjectName").value = document.getElementById("wizProjectName").value || w.interview.suggested_project_name || "my-ai-app";
+        if (w.interview.recommended_stack) {
+          document.getElementById("wizChosenStack").value = w.interview.recommended_stack;
+        }
+      }
+
+      if (w.spec) {
+        document.getElementById("wizProductTitle").textContent = w.spec.product_title || "Bản thiết kế tính năng sản phẩm";
+        document.getElementById("wizFeaturesList").innerHTML = (w.spec.features_vi || []).map(f => `<li>${esc(f)}</li>`).join("");
+        const prdBox = document.getElementById("wizPrdPreview");
+        if (prdBox.dataset.loadedTitle !== w.spec.product_title) {
+          prdBox.dataset.loadedTitle = w.spec.product_title || "";
+          prdBox.value = w.spec.prd_markdown || "";
+        }
+      }
+
+      // Step 4 progress
+      const tasks = s.tasks || [];
+      const doneCnt = (s.summary.counts && s.summary.counts.DONE) || 0;
+      const totCnt = s.summary.total_tasks || tasks.length || 0;
+      const pct = totCnt > 0 ? Math.round((doneCnt / totCnt) * 100) : 0;
+      document.getElementById("wizProgressText").textContent = `${doneCnt} / ${totCnt} phần hoàn thành (${pct}%)`;
+      document.getElementById("wizProgressFill").style.width = `${pct}%`;
+
+      document.getElementById("wizTaskSimpleList").innerHTML = tasks.map(t =>
+        `<div class="q-card" style="flex-direction:row; justify-content:space-between; align-items:center;">
+          <span><b>${esc(t.task_id)}:</b> ${esc(t.title)}</span>
+          <span class="badge b-${esc(t.status)}">${esc(t.status)}</span>
+        </div>`
+      ).join("");
+
+      const doneBanner = document.getElementById("wizDoneBanner");
+      if (w.done_message) {
+        doneBanner.style.display = "block";
+        doneBanner.textContent = w.done_message;
+      } else {
+        doneBanner.style.display = "none";
+      }
+      document.getElementById("wizPreviewHint").textContent = w.preview_cmd ? `Lệnh chạy thử: ${w.preview_cmd}` : "";
+    }
+
+    function updateWizInput(qIdx, val) {
+      const q = latestState && latestState.wizard && latestState.wizard.interview && latestState.wizard.interview.questions[qIdx];
+      if (q) wizardAnswers[q.question] = val;
+    }
+
+    function selectWizOpt(btn, qIdx, oIdx) {
+      const q = latestState && latestState.wizard && latestState.wizard.interview && latestState.wizard.interview.questions[qIdx];
+      if (!q) return;
+      const optVal = (q.options && q.options[oIdx]) || "";
+      const card = btn.closest(".q-card");
+      card.querySelectorAll(".opt-btn").forEach(b => b.classList.remove("selected"));
+      btn.classList.add("selected");
+      card.querySelector("input[type='text']").value = optVal;
+      wizardAnswers[q.question] = optVal;
     }
 
     function renderState(s) {
@@ -465,11 +808,16 @@
       wp.textContent = busy ? `${s.worker.status}: ${s.worker.message}` : "idle (Sẵn sàng)";
       wp.className = "pill " + (busy ? "busy" : "ok");
 
+      const medModel = (s.config.agy && s.config.agy.tiers && s.config.agy.tiers.coder_medium && s.config.agy.tiers.coder_medium.model) || "";
+      document.getElementById("modelPill").textContent = "Model: " + (medModel || "Mặc định agy");
+
       ["btnPlan", "btnRun", "btnResume"].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.disabled = busy;
       });
       document.getElementById("btnStop").disabled = !busy;
+
+      renderWizard(s);
 
       // Tools row
       const toolsRow = document.getElementById("toolsRow");
@@ -509,7 +857,12 @@
           <td><code>${esc(files)}</code></td>
           <td><span class="badge b-${esc(t.status)}">${esc(t.status)}</span></td>
           <td>${tok.toLocaleString()}</td>
-          <td><button class="btn sm" onclick="rollbackTask('${esc(t.task_id)}')">Rollback</button></td>
+          <td>
+            <div class="row" style="gap:6px;">
+              ${t.status === "BLOCKED" ? `<button class="btn sm primary" onclick="retryTask('${esc(t.task_id)}')">Retry</button>` : ""}
+              <button class="btn sm" onclick="rollbackTask('${esc(t.task_id)}')">Rollback</button>
+            </div>
+          </td>
         </tr>`;
       }).join("") || `<tr><td colspan="7" style="color:var(--muted);">Chưa có task nào trong state.db.</td></tr>`;
 
@@ -531,7 +884,6 @@
         </tr>`;
       }).join("") || `<tr><td colspan="8" style="color:var(--muted);">Chưa có lịch sử chạy.</td></tr>`;
 
-      // Fill settings only if user is not currently editing them
       if (!document.getElementById("view-config").classList.contains("active")) {
         populateConfigForm(s.config);
       }
@@ -561,6 +913,7 @@
       document.getElementById("cfgDefaultVerify").value = (c.executor.default_verify_commands || []).join("\n");
       document.getElementById("cfgFinalVerify").value = (c.sprint.final_verify_commands || []).join("\n");
 
+      document.getElementById("chkAutoApproveTools").checked = !!c.agy.auto_approve_tools;
       document.getElementById("chkDynamicMcp").checked = !!c.agy.dynamic_mcp_gating;
       document.getElementById("chkUseRtk").checked = !!c.tools.use_rtk;
       document.getElementById("chkRequireApprove").checked = !!c.sprint.require_plan_approval;
@@ -584,11 +937,74 @@
       renderState(data);
     }
 
+    async function pickWizardFolder() {
+      const res = await api("/api/pick-folder", "POST");
+      if (res.path) document.getElementById("wizParentDir").value = res.path;
+    }
+
+    async function submitWizardInterview() {
+      const idea = document.getElementById("wizIdeaInput").value.trim();
+      const stackHint = document.getElementById("wizStackHint").value;
+      const parentDir = document.getElementById("wizParentDir").value.trim();
+      const selectedModel = document.getElementById("wizModelSelect").value;
+      try {
+        await api("/api/wizard/interview", "POST", {
+          idea,
+          stack_hint: stackHint,
+          parent_dir: parentDir,
+          selected_model: selectedModel,
+        });
+        showToast("Đang phân tích ý tưởng...");
+        await refreshState();
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function submitWizardSynthesize() {
+      const idea = document.getElementById("wizIdeaInput").value.trim() || (latestState.wizard && latestState.wizard.idea) || "";
+      const stack = (latestState.wizard && latestState.wizard.interview && latestState.wizard.interview.recommended_stack) || "web_react";
+      try {
+        await api("/api/wizard/synthesize", "POST", { idea, answers: wizardAnswers, stack });
+        showToast("Đang tạo danh sách tính năng...");
+        await refreshState();
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function submitWizardBuild() {
+      const parentDir = document.getElementById("wizParentDir").value.trim();
+      const projectName = document.getElementById("wizProjectName").value.trim() || "my-ai-app";
+      const stack = document.getElementById("wizChosenStack").value;
+      const prdMarkdown = document.getElementById("wizPrdPreview").value;
+      const installDeps = document.getElementById("wizInstallDeps").checked;
+      try {
+        await api("/api/wizard/build", "POST", {
+          parent_dir: parentDir,
+          project_name: projectName,
+          stack,
+          prd_markdown: prdMarkdown,
+          install_deps: installDeps,
+        });
+        goWizardStep(4);
+        await refreshState();
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function resetWizard() {
+      const next = await api("/api/wizard/reset", "POST");
+      document.getElementById("wizProjectName").value = "";
+      document.getElementById("wizPrdPreview").dataset.loadedTitle = "";
+      document.getElementById("wizQuestionsList").dataset.renderedFor = "";
+      renderState(next);
+      goWizardStep(1);
+    }
+
+    async function openTargetFolder() {
+      try { await api("/api/open-folder", "POST"); }
+      catch (e) { showToast(e.message); }
+    }
+
     async function pickRepoFolder() {
       const res = await api("/api/pick-folder", "POST");
-      if (res.path) {
-        document.getElementById("cfgTargetRepo").value = res.path;
-      }
+      if (res.path) document.getElementById("cfgTargetRepo").value = res.path;
     }
 
     async function pickPrdFile() {
@@ -622,6 +1038,7 @@
       cfg.limits.max_tool_calls_per_attempt = Number(document.getElementById("limToolCalls").value);
       cfg.limits.max_consecutive_blocked_tasks = Number(document.getElementById("limConsecBlocked").value);
 
+      cfg.agy.auto_approve_tools = document.getElementById("chkAutoApproveTools").checked;
       cfg.agy.dynamic_mcp_gating = document.getElementById("chkDynamicMcp").checked;
       cfg.tools.use_rtk = document.getElementById("chkUseRtk").checked;
       cfg.sprint.require_plan_approval = document.getElementById("chkRequireApprove").checked;
@@ -687,6 +1104,14 @@
       showToast("Đã gửi yêu cầu dừng an toàn.");
     }
 
+    async function retryTask(taskId) {
+      try {
+        const next = await api(`/api/tasks/${encodeURIComponent(taskId)}/retry`, "POST");
+        renderState(next);
+        showToast(`Đã đặt lại ${taskId} về PENDING`);
+      } catch (e) { showToast(e.message); }
+    }
+
     async function rollbackTask(taskId) {
       try {
         const next = await api(`/api/tasks/${encodeURIComponent(taskId)}/rollback`, "POST");
@@ -695,8 +1120,60 @@
       } catch (e) { showToast(e.message); }
     }
 
-    // Boot: load state + subscribe SSE logs + poll state while worker active
+    let cachedAgyModels = [];
+
+    function applyModelOptionsToSelect(sel, models, defaultLabel) {
+      const prev = sel.value;
+      sel.innerHTML = `<option value="">${esc(defaultLabel)}</option>`;
+      const seen = new Set([""]);
+      for (const m of models) {
+        if (!seen.has(m.id)) {
+          seen.add(m.id);
+          const opt = document.createElement("option");
+          opt.value = m.id;
+          opt.textContent = m.label ? `${m.label} (${m.id})` : m.id;
+          sel.appendChild(opt);
+        }
+      }
+      if (prev && !seen.has(prev)) {
+        const custom = document.createElement("option");
+        custom.value = prev;
+        custom.textContent = prev;
+        sel.appendChild(custom);
+      }
+      sel.value = prev;
+    }
+
+    async function loadAgyModels(notify = false) {
+      try {
+        const res = await api("/api/agy/models");
+        cachedAgyModels = res.models || [];
+        document.querySelectorAll(".agy-model-select").forEach(sel => {
+          applyModelOptionsToSelect(sel, cachedAgyModels, "Mặc định agy");
+        });
+        applyModelOptionsToSelect(
+          document.getElementById("wizModelSelect"),
+          cachedAgyModels,
+          "Theo cấu hình hiện tại (Mặc định agy)"
+        );
+        if (latestState && latestState.config && !document.getElementById("view-config").classList.contains("active")) {
+          populateConfigForm(latestState.config);
+        }
+        if (notify) showToast(`Đã tải ${cachedAgyModels.length} model từ agy`);
+      } catch (e) {
+        if (notify) showToast("Không tải được danh sách model: " + e.message);
+      }
+    }
+
+    async function openAgyLogin() {
+      try {
+        await api("/api/agy/login", "POST");
+        showToast("Đã mở cửa sổ Terminal đăng nhập agy!");
+      } catch (e) { showToast(e.message); }
+    }
+
     (async () => {
+      await loadAgyModels(false);
       await refreshState();
       if (latestState && latestState.config) populateConfigForm(latestState.config);
 

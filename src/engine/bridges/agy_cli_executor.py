@@ -103,9 +103,11 @@ def build_agy_command(
     ]
     if inline_prompt is None:
         cmd.extend(["--input-format", input_format])
-    if model.strip():
-        cmd.extend(["--model", model.strip()])
-    if effort:
+    cleaned_model = model.strip()
+    if cleaned_model:
+        cmd.extend(["--model", cleaned_model])
+    model_has_effort = cleaned_model.lower().endswith(("-low", "-medium", "-high", "-xhigh"))
+    if effort and not model_has_effort:
         cmd.extend(["--effort", effort])
     if config.agy.permission_mode:
         cmd.extend(["--mode", config.agy.permission_mode])
@@ -166,8 +168,15 @@ def _extract_tool_call(event: dict[str, Any]) -> tuple[str, dict[str, Any]] | No
     for scope in scopes:
         ev_type = str(scope.get("type") or scope.get("step_type") or "").lower()
         if ("tool" in ev_type and "result" not in ev_type) or "tool_name" in scope:
-            name = str(scope.get("tool_name") or scope.get("name") or "")
-            args = scope.get("args") or scope.get("arguments") or scope.get("input") or {}
+            tool_info = scope.get("tool_info") if isinstance(scope.get("tool_info"), dict) else {}
+            name = str(scope.get("tool_name") or tool_info.get("name") or scope.get("name") or "")
+            args = (
+                scope.get("args")
+                or scope.get("arguments")
+                or scope.get("input")
+                or tool_info.get("parameters")
+                or {}
+            )
             if name:
                 return name, args if isinstance(args, dict) else {"raw": str(args)}
 
@@ -295,8 +304,11 @@ class AgyCliExecutor:
             assert proc.stdout is not None
             assert proc.stderr is not None
 
-            proc.stdin.write(encode_stream_user_message(prompt))
-            proc.stdin.close()
+            try:
+                proc.stdin.write(encode_stream_user_message(prompt))
+                proc.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
 
             line_queue: queue.Queue[str | None] = queue.Queue()
 
@@ -312,6 +324,7 @@ class AgyCliExecutor:
 
             raw_lines: list[str] = []
             tool_calls = 0
+            seen_tool_steps: set[int] = set()
             latest_usage = TokenUsage()
             verdict_override: str | None = None
             err_msg = ""
@@ -361,7 +374,12 @@ class AgyCliExecutor:
                 tc = _extract_tool_call(event)
                 if tc is not None:
                     tool_name, args = tc
-                    tool_calls += 1
+                    step_obj = event.get("step_update")
+                    step_idx = step_obj.get("step_index") if isinstance(step_obj, dict) else event.get("step_index")
+                    if not isinstance(step_idx, int) or step_idx not in seen_tool_steps:
+                        if isinstance(step_idx, int):
+                            seen_tool_steps.add(step_idx)
+                        tool_calls += 1
                     if tool_name.lower() in SHELL_TOOL_NAMES:
                         cmd_str = str(args.get("CommandLine") or args.get("command") or args.get("raw") or "")
                         if FORBIDDEN_SHELL_CMD_RE.search(cmd_str):
@@ -454,3 +472,39 @@ def smoke_test_agy(config: EngineConfig) -> tuple[bool, str]:
         f"prompt_tokens={found_usage.prompt_tokens}, completion_tokens={found_usage.completion_tokens})"
     )
     return True, summary
+
+
+def list_agy_models(agy_binary: str = "agy") -> list[dict[str, str]]:
+    """Query `agy models` and return a list of {id, label} dictionaries."""
+    if shutil.which(agy_binary) is None:
+        return []
+    try:
+        proc = subprocess.run(
+            [agy_binary, "models"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return []
+
+    if proc.returncode != 0:
+        return []
+
+    models: list[dict[str, str]] = []
+    for raw in proc.stdout.splitlines():
+        line = raw.strip()
+        if not line or line.lower().startswith("fetching available models"):
+            continue
+        if "\t" in line:
+            model_id, label = line.split("\t", 1)
+        else:
+            parts = line.split(None, 1)
+            model_id = parts[0]
+            label = parts[1] if len(parts) > 1 else parts[0]
+        if model_id.strip():
+            models.append({"id": model_id.strip(), "label": label.strip()})
+    return models

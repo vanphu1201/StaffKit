@@ -2,6 +2,7 @@
 
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 from starlette.testclient import TestClient
 
@@ -67,7 +68,20 @@ def test_ui_index_state_config_approve_and_rollback(tmp_path: Path) -> None:
     assert rb_res.json()["tasks"][0]["status"] == "BLOCKED"
     assert (repo / "app.py").read_text(encoding="utf-8") == "x = 1\n"
 
-    # 5. Stop flag endpoint
+    rt_res = client.post("/api/tasks/T-01/retry")
+    assert rt_res.status_code == 200
+    assert rt_res.json()["tasks"][0]["status"] == "PENDING"
+
+    # 5. Stop flag endpoint & verify Verifier symbol is imported cleanly
     stop_res = client.post("/api/stop")
     assert stop_res.status_code == 200
     assert stop_res.json()["stopping"] is True
+
+    import engine.ui.server as ui_server
+
+    assert hasattr(ui_server, "Verifier")
+
+    with patch("engine.ui.server.list_agy_models", return_value=[{"id": "gemini-4-neon-high", "label": "Gemini 4 Neon (High)"}]):
+        m_res = client.get("/api/agy/models")
+        assert m_res.status_code == 200
+        assert m_res.json()["models"][0]["id"] == "gemini-4-neon-high"

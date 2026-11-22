@@ -10,9 +10,11 @@ import pytest
 from engine.bridges.agy_cli_executor import (
     AgyCliExecutor,
     LockError,
+    _extract_tool_call,
     acquire_run_lock,
     build_agy_command,
     dynamic_mcp_guard,
+    list_agy_models,
 )
 from engine.bridges.agy_sdk_executor import inspect_tool_call_scope
 from engine.models import AgyConfig, EngineConfig, LimitsConfig, ProjectConfig, TaskSpec
@@ -36,6 +38,19 @@ def test_build_agy_command_flags(tmp_path: Path) -> None:
     assert "--disable-slash-commands" in cmd
     assert "--dangerously-skip-permissions" not in cmd
     assert "--print-timeout" in cmd and "300s" in cmd
+
+    cfg_auto = EngineConfig(project=ProjectConfig(target_repo=str(tmp_path)))
+    cmd_auto = build_agy_command(cfg_auto, "gemini-2.5-flash", "low")
+    assert "--dangerously-skip-permissions" in cmd_auto
+
+    # Models that already embed an effort suffix must omit --effort to avoid CLI conflict
+    cmd_suffixed = build_agy_command(cfg_auto, "gemini-4-neon-medium", "high")
+    assert "--model" in cmd_suffixed and "gemini-4-neon-medium" in cmd_suffixed
+    assert "--effort" not in cmd_suffixed
+
+    cmd_default = build_agy_command(cfg_auto, "", "high")
+    assert "--model" not in cmd_default
+    assert "--effort" in cmd_default and "high" in cmd_default
 
 
 def test_run_lock_prevents_concurrent_execution(tmp_path: Path) -> None:
@@ -166,3 +181,68 @@ def test_sdk_tool_call_scope_inspector() -> None:
     assert inspect_tool_call_scope("edit_file", {"Path": r"src\app.py"}, allowed, protected) is None
     viol = inspect_tool_call_scope("edit_file", {"Path": "tests/core.test.ts"}, allowed, protected)
     assert viol is not None and "out-of-scope" in viol
+
+
+def test_list_agy_models_parses_tab_separated_output() -> None:
+    sample_stdout = (
+        "Fetching available models...\n"
+        "gemini-4-neon-high\tGemini 4 Neon (High)\n"
+        "claude-sonnet-5-5-medium\tClaude Sonnet 5.5 (Medium)\n"
+    )
+    fake = type("P", (), {"returncode": 0, "stdout": sample_stdout})()
+    with (
+        patch("shutil.which", return_value="agy"),
+        patch("subprocess.run", return_value=fake),
+    ):
+        models = list_agy_models("agy")
+    assert models == [
+        {"id": "gemini-4-neon-high", "label": "Gemini 4 Neon (High)"},
+        {"id": "claude-sonnet-5-5-medium", "label": "Claude Sonnet 5.5 (Medium)"},
+    ]
+
+
+def test_stream_watchdog_deduplicates_same_step_index_deltas(tmp_path: Path) -> None:
+    cfg = EngineConfig(
+        project=ProjectConfig(target_repo=str(tmp_path)),
+        agy=AgyConfig(dynamic_mcp_gating=False),
+        limits=LimitsConfig(max_tool_calls_per_attempt=2, max_tokens_per_task=50000),
+    )
+    executor = AgyCliExecutor(cfg)
+    task = TaskSpec(task_id="T-01", title="Edit", objective="Edit", allowed_write_files=["a.py"])
+
+    # 15 streaming delta events sharing step_index=1 count as 1 tool call, not 15
+    events = [
+        json.dumps(
+            {
+                "event": "step_update",
+                "step_update": {
+                    "step_index": 1,
+                    "state": "ACTIVE" if i < 14 else "DONE",
+                    "step_type": "tool_call",
+                    "tool_name": "write_to_file",
+                    "args": {"TargetFile": "a.py"},
+                },
+            }
+        )
+        for i in range(15)
+    ]
+    fake_proc = _FakeProc(events)
+    with patch("subprocess.Popen", return_value=fake_proc):
+        res = executor.execute("prompt", task, "m", "low")
+    assert res.success is True
+    assert res.verdict_override is None
+
+
+def test_extract_tool_call_reads_tool_info_parameters() -> None:
+    event = {
+        "event": "step_update",
+        "step_update": {
+            "step_index": 2,
+            "state": "ACTIVE",
+            "step_type": "tool",
+            "tool_name": "run_command",
+            "tool_info": {"name": "run_command", "parameters": {"CommandLine": "npm test"}},
+        },
+    }
+    extracted = _extract_tool_call(event)
+    assert extracted == ("run_command", {"CommandLine": "npm test"})

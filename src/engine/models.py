@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
 Complexity = Literal["low", "medium", "high"]
 Effort = Literal["low", "medium", "high"]
+StackType = Literal["auto", "web_react", "python_app", "existing"]
 ExecutorMode = Literal["agy_cli", "agy_sdk", "mcp_only", "aider", "opencode"]
 TaskStatus = Literal["PENDING", "RUNNING", "VERIFYING", "DONE", "BLOCKED"]
 Verdict = Literal[
@@ -32,6 +34,31 @@ def normalize_posix_path(path_value: str) -> str:
     while cleaned.startswith("./"):
         cleaned = cleaned[2:]
     return cleaned
+
+
+def inline_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Resolve all `#/$defs/...` `$ref` pointers inline so CLI validators need no external URI fetch."""
+    defs: dict[str, Any] = copy.deepcopy(schema.get("$defs") or {})
+
+    def _resolve(node: Any, stack: tuple[str, ...] = ()) -> Any:
+        if isinstance(node, list):
+            return [_resolve(item, stack) for item in node]
+        if not isinstance(node, dict):
+            return node
+
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            def_name = ref[len("#/$defs/") :]
+            if def_name in defs and def_name not in stack:
+                resolved = copy.deepcopy(defs[def_name])
+                for k, v in node.items():
+                    if k != "$ref":
+                        resolved[k] = v
+                return _resolve(resolved, (*stack, def_name))
+
+        return {k: _resolve(v, stack) for k, v in node.items() if k != "$defs"}
+
+    return _resolve(schema)
 
 
 class ProjectConfig(BaseModel):
@@ -65,7 +92,7 @@ class AgyConfig(BaseModel):
     binary: str = "agy"
     permission_mode: Literal["accept-edits", "plan"] = "accept-edits"
     disable_slash_commands: bool = True
-    auto_approve_tools: bool = False
+    auto_approve_tools: bool = True
     dynamic_mcp_gating: bool = True
     tiers: dict[str, AgyTierConfig] = Field(
         default_factory=lambda: {
@@ -81,8 +108,8 @@ class LimitsConfig(BaseModel):
     """Hard token, cost, retry, and circuit-breaker thresholds."""
 
     max_retries_per_task: int = Field(default=2, ge=0)
-    max_tokens_per_task: int = Field(default=60000, ge=500)
-    max_tool_calls_per_attempt: int = Field(default=12, ge=1)
+    max_tokens_per_task: int = Field(default=150000, ge=500)
+    max_tool_calls_per_attempt: int = Field(default=25, ge=1)
     max_prompt_tokens_per_call: int = Field(default=12000, ge=500)
     inline_file_max_lines: int = Field(default=300, ge=20)
     max_budget_usd_per_sprint: float = Field(default=2.0, ge=0.0)
@@ -278,3 +305,40 @@ class VerifyResult(BaseModel):
     trimmed_error_log: str = ""
     error_hash: str | None = None
     violating_files: list[str] = Field(default_factory=list)
+
+
+class InterviewQuestion(BaseModel):
+    """A single plain-Vietnamese clarifying question for non-technical users."""
+
+    id: str
+    question: str
+    options: list[str] = Field(default_factory=list)
+    default_answer: str = ""
+
+
+class InterviewOutput(BaseModel):
+    """Structured output of Layer 0A ProductInterviewer."""
+
+    recommended_stack: Literal["web_react", "python_app"] = "web_react"
+    suggested_project_name: str = "my-ai-app"
+    product_summary_vi: str = ""
+    questions: list[InterviewQuestion] = Field(default_factory=list)
+
+
+class ProductSpec(BaseModel):
+    """Plain-Vietnamese feature list plus synthesized technical PRD for Layer 2 Planner."""
+
+    product_title: str
+    features_vi: list[str] = Field(default_factory=list)
+    prd_markdown: str
+
+
+class BootstrapResult(BaseModel):
+    """Outcome of zero-token project scaffolding and Git initialization."""
+
+    project_dir: str
+    stack: str
+    verify_commands: list[str] = Field(default_factory=list)
+    final_verify_commands: list[str] = Field(default_factory=list)
+    preview_command: str = ""
+    is_new_repo: bool = False
