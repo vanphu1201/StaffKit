@@ -520,7 +520,7 @@ class AgyCliExecutor:
                             model=used_model,
                             effort=effort,
                         )
-                    if tool_name.lower() in SHELL_TOOL_NAMES:
+                    if self.config.agy.forbid_shell_verify_commands and tool_name.lower() in SHELL_TOOL_NAMES:
                         cmd_str = str(args.get("CommandLine") or args.get("command") or args.get("raw") or "")
                         if FORBIDDEN_SHELL_CMD_RE.search(cmd_str):
                             kill_process_tree(proc)

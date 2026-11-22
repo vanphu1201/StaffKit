@@ -30,12 +30,17 @@ class PromptCompiler:
 
     def build_static_prefix(self) -> str:
         """Build the immutable system rules prefix (optionally appending shared_rules_file)."""
+        verify_rule = (
+            "- CHỈ sửa code theo đặc tả rồi kết thúc ngay. TUYỆT ĐỐI KHÔNG tự chạy lệnh test, build, typecheck hay lint bên trong phiên (hệ thống bên ngoài sẽ tự chạy verify và trả log rút gọn nếu cần)."
+            if self.config.agy.forbid_shell_verify_commands
+            else "- Sau khi sửa xong, hãy kiểm tra nhanh bằng lệnh verify mục tiêu nếu cần rồi kết thúc ngay (tránh chạy lặp lại dư thừa)."
+        )
         lines = [
             "[STATIC PREFIX]",
             "# SYSTEM RULES",
             "- Thực thi chính xác theo đặc tả TASK bên dưới.",
-            "- CHỈ được sửa/tạo file trong `ALLOWED_WRITE_FILES` và `CREATE_NEW_FILES`. Tuyệt đối không sửa `PROTECTED_TEST_FILES` hay file khác.",
-            "- CHỈ sửa code theo đặc tả rồi kết thúc ngay. TUYỆT ĐỐI KHÔNG tự chạy lệnh test, build, typecheck hay lint bên trong phiên (hệ thống bên ngoài sẽ tự chạy verify và trả log rút gọn nếu cần).",
+            "- Tuân thủ phạm vi file được giao; tuyệt đối không sửa `PROTECTED_TEST_FILES`.",
+            verify_rule,
             "- KHÔNG lách luật bằng `@ts-ignore`, `eslint-disable`, `# type: ignore`, `# noqa`, `.skip()`, `.only()`, hoặc xóa bỏ assertion trong test.",
             "- Ưu tiên sửa gọn trực tiếp (targeted edit), không viết lại phần code không liên quan.",
             "- Thực thi sản phẩm thật, sạch sẽ theo đặc tả TASK; KHÔNG tạo tài khoản/dữ liệu demo, stub giữ chỗ hay bỏ qua chức năng thật.",
@@ -191,6 +196,7 @@ class PromptCompiler:
             f"- Acceptance Criteria: {task.acceptance_criteria}",
             f"- Allowed Write Files: {task.allowed_write_files}",
             f"- Create New Files: {task.create_new_files}",
+            f"- Scope Mode: {'STRICT (chỉ sửa/tạo các file trong danh sách trên)' if task.strict_scope else 'FLEXIBLE (có thể sửa/tạo các file cần thiết cho TASK; tuyệt đối không sửa PROTECTED_TEST_FILES)'}",
             f"- Protected Test Files (DO NOT TOUCH): {task.protected_test_files}",
             f"- Constraints: {task.constraints}",
             f"- Verification Commands (Engine sẽ chạy sau khi bạn xong): {verify_cmds}",

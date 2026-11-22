@@ -359,6 +359,7 @@ class Orchestrator:
                     task.task_id,
                     task.title,
                     task.allowed_write_files + task.create_new_files,
+                    stage_all_changed=not task.strict_scope,
                 )
                 self.db.update_task_status(task.task_id, "DONE", commit_sha=commit_sha, retry_count=attempt)
                 self._emit("success", f"[{task.task_id}] PASS -> Committed {commit_sha[:8]}")

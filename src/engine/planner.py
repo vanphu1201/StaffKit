@@ -447,9 +447,29 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
             raise PlannerError(f"PRD file not found: {prd_path}")
 
         prd_text = prd_path.read_text(encoding="utf-8", errors="replace")
+        real_files = list_real_files(self.config.target_repo_path)
+
+        # 0-token fast-path for small focused repositories/tasks (avoids LLM Planner & repomix overhead)
+        if self._llm_caller is None and len(real_files) <= 8 and len(prd_text.strip()) <= 2500:
+            title = next(
+                (ln.lstrip("# ").strip() for ln in prd_text.splitlines() if ln.strip()),
+                prd_path.stem,
+            )[:100]
+            direct_task = TaskSpec(
+                task_id="T-01",
+                title=title or "Direct implementation",
+                complexity="medium",
+                objective=prd_text.strip(),
+                allowed_write_files=sorted(real_files),
+                strict_scope=False,
+                verify_commands=list(self.config.executor.default_verify_commands),
+            )
+            self._persist_plan([direct_task], auto_approve=auto_approve)
+            self._emit("info", f"Fast-Path (0 Planner tokens): thực thi trực tiếp `{direct_task.task_id}` trên repo gọn ({len(real_files)} files).")
+            return PlanOutput(status="READY", tasks=[direct_task])
+
         repo_map_path = self.indexer.build_repo_map(force=force_reindex)
         repo_map_xml = repo_map_path.read_text(encoding="utf-8", errors="replace")
-        real_files = list_real_files(self.config.target_repo_path)
 
         schema_path = self.config.auto_engine_dir / "plan_schema.json"
         schema_path.write_text(

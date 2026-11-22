@@ -1,0 +1,93 @@
+id: eval-sqlite-ledger
+title: "Transactional SQLite Ledger (ACID Rollback & Idempotency)"
+domain: database
+blueprint: python_app
+prd_markdown: |
+  Implement `Ledger` in `src/ledger.py` backed by real `sqlite3` on disk (`db_path`).
+  Requirements:
+  - `create_account(account_id: str, initial_balance: int = 0) -> None`: persist account with non-negative integer cents/units. Raise `ValueError` on duplicate or negative initial balance.
+  - `get_balance(account_id: str) -> int`: read current balance from SQLite (raise `KeyError` if account does not exist).
+  - `transfer(from_id: str, to_id: str, amount: int, idempotency_key: str | None = None) -> str`:
+    + Validate `amount > 0`, both accounts exist (`KeyError`), and `from_id != to_id` (`ValueError`).
+    + Execute atomically inside a SQLite transaction: if `from_id` has balance `< amount`, roll back cleanly and raise `ValueError`.
+    + If `idempotency_key` was already processed previously, return the stored `tx_id` without repeating the transfer.
+    + All data must persist cleanly on disk when opening a brand-new `Ledger(db_path)` instance.
+starter_files:
+  "src/__init__.py": ""
+  "src/ledger.py": |
+    """SQLite-backed transactional ledger."""
+
+
+    class Ledger:
+        def __init__(self, db_path: str) -> None:
+            self.db_path = db_path
+
+        def create_account(self, account_id: str, initial_balance: int = 0) -> None:
+            raise NotImplementedError
+
+        def get_balance(self, account_id: str) -> int:
+            raise NotImplementedError
+
+        def transfer(self, from_id: str, to_id: str, amount: int, idempotency_key: str | None = None) -> str:
+            raise NotImplementedError
+  "tests/test_public.py": |
+    from pathlib import Path
+    from src.ledger import Ledger
+
+    def test_basic_transfer(tmp_path: Path) -> None:
+        ledger = Ledger(str(tmp_path / "ledger.db"))
+        ledger.create_account("alice", 100)
+        ledger.create_account("bob", 20)
+        ledger.transfer("alice", "bob", 30)
+        assert ledger.get_balance("alice") == 70
+        assert ledger.get_balance("bob") == 50
+public_verify_commands:
+  - "{python} -m pytest tests/test_public.py -q"
+hidden_files:
+  "hidden_tests/test_hidden_ledger.py": |
+    import random
+    from pathlib import Path
+    import pytest
+    from src.ledger import Ledger
+
+    def test_persistence_across_reopen_and_atomic_rollback(tmp_path: Path) -> None:
+        db_file = str(tmp_path / "prod.db")
+        l1 = Ledger(db_file)
+        l1.create_account("a", 500)
+        l1.create_account("b", 100)
+        tx1 = l1.transfer("a", "b", 150, idempotency_key="idem-1")
+        tx2 = l1.transfer("a", "b", 150, idempotency_key="idem-1")
+        assert tx1 == tx2
+
+        with pytest.raises(ValueError):
+            l1.transfer("a", "b", 9999)
+
+        # Open a completely fresh instance to prove real SQLite persistence (rejects RAM mocks)
+        l2 = Ledger(db_file)
+        assert l2.get_balance("a") == 350
+        assert l2.get_balance("b") == 250
+
+    def test_randomized_transfer_conservation_invariant(tmp_path: Path) -> None:
+        rng = random.Random(2026)
+        ledger = Ledger(str(tmp_path / "inv.db"))
+        ids = [f"u{i}" for i in range(6)]
+        for i, uid in enumerate(ids):
+            ledger.create_account(uid, 1000 * (i + 1))
+        initial_total = sum(ledger.get_balance(uid) for uid in ids)
+
+        for _ in range(40):
+            src, dst = rng.sample(ids, 2)
+            amt = rng.randint(1, 1500)
+            try:
+                ledger.transfer(src, dst, amt)
+            except ValueError:
+                pass
+            assert ledger.get_balance(src) >= 0
+            assert ledger.get_balance(dst) >= 0
+
+        assert sum(ledger.get_balance(uid) for uid in ids) == initial_total
+hidden_pass_to_pass_commands:
+  - "{python} -c \"import src.ledger\""
+hidden_fail_to_pass_commands:
+  - "{python} -m pytest tests/test_public.py -q"
+  - "{python} -m pytest hidden_tests/test_hidden_ledger.py -q"

@@ -15,6 +15,7 @@ from engine.bridges.agy_cli_executor import smoke_test_agy
 from engine.bridges.mcp_server import run_mcp_server
 from engine.compiler import PromptCompiler
 from engine.database import StateDB
+from engine.evaluator import ArmName, Evaluator, load_eval_cases
 from engine.git_guard import GitGuard
 from engine.indexer import RepoIndexer
 from engine.models import EngineConfig
@@ -249,6 +250,11 @@ def _print_report_table(summary: dict, halted_reason: str | None = None, final_o
     table.add_row("Tasks", str(summary["counts"]))
     table.add_row("Prompt Tokens", str(summary["prompt_tokens"]))
     table.add_row("Completion Tokens", str(summary["completion_tokens"]))
+    if summary.get("planning_prompt_tokens") or summary.get("planning_completion_tokens"):
+        table.add_row(
+            "Planning Tokens (In/Out)",
+            f"{summary.get('planning_prompt_tokens', 0)} / {summary.get('planning_completion_tokens', 0)}",
+        )
     table.add_row("Cost (USD)", f"${summary['cost_usd']:.4f}")
     table.add_row("Verdicts", str(summary["verdicts"]))
     if halted_reason:
@@ -277,6 +283,59 @@ def ui(
 ) -> None:
     """Launch the local Desktop App GUI in a standalone window."""
     launch_desktop_app(config_path=config_path, port=port, no_window=no_window)
+
+
+@app.command(name="eval")
+def eval_suite(
+    config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Path to config.yaml"),
+    cases_dir: Optional[Path] = typer.Option(None, "--cases-dir", help="Directory containing YAML eval cases"),
+    case_ids: Optional[list[str]] = typer.Option(None, "--case", help="Filter by specific case ID (repeatable)"),
+    arm: str = typer.Option("both", "--arm", help="Which arm to evaluate: both | baseline | engine"),
+    output: Path = typer.Option(Path(".auto-engine/eval_report.md"), "--output", help="Markdown report path"),
+) -> None:
+    """Run isolated A/B hidden-test benchmark (Baseline `agy` vs Auto-Prompt Engine)."""
+    if arm not in ("both", "baseline", "engine"):
+        console.print("[red]Invalid --arm value. Use: both | baseline | engine[/red]")
+        raise typer.Exit(code=2)
+
+    cfg = EngineConfig.load(config_path) if config_path.is_file() else EngineConfig()
+    cases = load_eval_cases(cases_dir=cases_dir, case_ids=case_ids)
+    if not cases:
+        console.print("[yellow]No evaluation cases found.[/yellow]")
+        raise typer.Exit(code=1)
+
+    selected_arms: tuple[ArmName, ...] = ("baseline", "engine") if arm == "both" else (arm,)  # type: ignore[assignment]
+    console.print(f"[cyan]Running A/B Hidden-Test Eval across {len(cases)} case(s), arms={selected_arms}...[/cyan]")
+    evaluator = Evaluator(cfg)
+    report_obj = evaluator.run_suite(cases, arms=selected_arms)
+
+    json_out = output.with_suffix(".json")
+    Evaluator.write_report(report_obj, output, json_path=json_out)
+
+    table = Table(title="A/B Hidden-Test Benchmark Summary")
+    table.add_column("Arm", style="cyan")
+    table.add_column("Resolve Rate")
+    table.add_column("Regression PASS")
+    table.add_column("Total Tokens")
+    table.add_column("Tokens / Resolved")
+    table.add_column("Avg Time")
+    for arm_name in selected_arms:
+        s = report_obj.summaries[arm_name]
+        tpr = f"{s.tokens_per_resolved:,.0f}" if s.tokens_per_resolved is not None else "N/A"
+        table.add_row(
+            s.arm,
+            f"{s.resolved_cases}/{s.total_cases} ({s.resolve_rate * 100:.1f}%)",
+            f"{s.regression_pass_rate * 100:.1f}%",
+            f"{s.total_tokens:,}",
+            tpr,
+            f"{s.avg_duration_sec:.2f}s",
+        )
+    console.print(table)
+    if report_obj.resolve_rate_delta is not None:
+        console.print(f"Resolve Rate Delta (engine - baseline): [bold]{report_obj.resolve_rate_delta * 100:+.1f} pp[/bold]")
+    if report_obj.token_savings_pct is not None:
+        console.print(f"Token Savings: [bold]{report_obj.token_savings_pct:+.1f}%[/bold]")
+    console.print(f"[green]Reports written:[/green] {output} & {json_out}")
 
 
 if __name__ == "__main__":

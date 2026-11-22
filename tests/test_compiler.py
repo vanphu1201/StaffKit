@@ -74,7 +74,11 @@ def test_compiler_static_prefix_invariance_and_xml_lookup(tmp_path: Path) -> Non
     prefix1 = p1.split("---\n[DYNAMIC TASK PAYLOAD", 1)[0]
     prefix2 = p2.split("---\n[DYNAMIC TASK PAYLOAD", 1)[0]
     assert prefix1 == prefix2
-    assert "TUYỆT ĐỐI KHÔNG tự chạy lệnh test" in prefix1
+    assert "PROTECTED_TEST_FILES" in prefix1
+
+    cfg_no_shell = cfg.model_copy(deep=True)
+    cfg_no_shell.agy.forbid_shell_verify_commands = True
+    assert "TUYỆT ĐỐI KHÔNG tự chạy lệnh test" in PromptCompiler(cfg_no_shell).build_static_prefix()
 
     # Full repo_map is NOT dumped; unrelated module must not appear
     assert "UNRELATED_MARKER_SHOULD_NOT_APPEAR_IN_PROMPT" not in p1

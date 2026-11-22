@@ -203,6 +203,7 @@ class Verifier:
             task.allowed_write_files,
             task.create_new_files,
             task.protected_test_files,
+            strict_scope=task.strict_scope,
         )
         if not scope_ok:
             msg = "SCOPE_VIOLATION: Modified or created forbidden files:\n" + "\n".join(

@@ -1,0 +1,510 @@
+"""Industry-standard A/B Hidden-Test Evaluation Harness (`agy` baseline vs Auto-Prompt Engine)."""
+
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Literal
+
+import yaml
+from pydantic import BaseModel, Field
+
+from engine.bootstrapper import ensure_git_repo_ready
+from engine.bridges.agy_cli_executor import (
+    _extract_usage_from_event,
+    build_agy_command,
+    encode_stream_user_message,
+    kill_process_tree,
+)
+from engine.compiler import PromptCompiler
+from engine.database import StateDB
+from engine.git_guard import GitGuard
+from engine.indexer import RepoIndexer
+from engine.models import EngineConfig, TokenUsage
+from engine.orchestrator import Orchestrator
+from engine.planner import Planner
+from engine.verifier import Verifier
+
+ArmName = Literal["baseline", "engine"]
+ArmRunner = Callable[["EvalCase", Path, EngineConfig], tuple[TokenUsage, float, str]]
+
+
+def default_eval_cases_dir() -> Path:
+    """Resolve built-in `evals/cases` directory cleanly regardless of current working directory."""
+    return Path(__file__).resolve().parents[2] / "evals" / "cases"
+
+
+def _quoted_python() -> str:
+    exe = sys.executable
+    return f'"{exe}"' if " " in exe else exe
+
+
+def _format_cmd(cmd: str) -> str:
+    return cmd.replace("{python}", _quoted_python())
+
+
+class EvalCase(BaseModel):
+    """Single isolated benchmark task with holdout hidden tests."""
+
+    id: str
+    title: str
+    domain: str = "general"
+    blueprint: str = "generic"
+    prd_markdown: str
+    starter_files: dict[str, str] = Field(default_factory=dict)
+    public_verify_commands: list[str] = Field(default_factory=list)
+    hidden_files: dict[str, str] = Field(default_factory=dict)
+    hidden_pass_to_pass_commands: list[str] = Field(default_factory=list)
+    hidden_fail_to_pass_commands: list[str] = Field(default_factory=list)
+
+
+class ArmCaseResult(BaseModel):
+    """Execution and hidden-test grading outcome for one (case, arm) run."""
+
+    case_id: str
+    arm: ArmName
+    resolved: bool
+    regression_passed: bool
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    duration_sec: float = 0.0
+    files_changed: int = 0
+    error_summary: str = ""
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
+
+
+class ArmSummary(BaseModel):
+    """Aggregated benchmark metrics across all evaluated cases for one arm."""
+
+    arm: ArmName
+    total_cases: int = 0
+    resolved_cases: int = 0
+    regression_passed_cases: int = 0
+    resolve_rate: float = 0.0
+    regression_pass_rate: float = 0.0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    tokens_per_resolved: float | None = None
+    avg_duration_sec: float = 0.0
+
+
+class EvalReport(BaseModel):
+    """Comparative A/B evaluation report with delta metrics."""
+
+    generated_at: str
+    cases_evaluated: list[str] = Field(default_factory=list)
+    results: list[ArmCaseResult] = Field(default_factory=list)
+    summaries: dict[str, ArmSummary] = Field(default_factory=dict)
+    resolve_rate_delta: float | None = None
+    token_savings_pct: float | None = None
+
+    def to_markdown(self) -> str:
+        lines = [
+            "# Auto-Prompt Engine A/B Hidden-Test Evaluation Report",
+            f"- Generated: `{self.generated_at}`",
+            f"- Cases ({len(self.cases_evaluated)}): {', '.join(self.cases_evaluated)}",
+            "",
+            "## Arm Summary",
+            "| Arm | Resolved | Resolve Rate | Regression PASS | Total Tokens | Tokens / Resolved | Avg Duration |",
+            "|---|---:|---:|---:|---:|---:|---:|",
+        ]
+        for arm_key in ("baseline", "engine"):
+            s = self.summaries.get(arm_key)
+            if s is None:
+                continue
+            tpr = f"{s.tokens_per_resolved:,.0f}" if s.tokens_per_resolved is not None else "N/A"
+            lines.append(
+                f"| `{s.arm}` | {s.resolved_cases}/{s.total_cases} | {s.resolve_rate * 100:.1f}% | "
+                f"{s.regression_pass_rate * 100:.1f}% | {s.total_tokens:,} | {tpr} | {s.avg_duration_sec:.2f}s |"
+            )
+
+        if self.resolve_rate_delta is not None or self.token_savings_pct is not None:
+            lines.extend(["", "## A/B Comparison (`engine` vs `baseline`)"])
+            if self.resolve_rate_delta is not None:
+                lines.append(f"- Resolve Rate Delta: `{self.resolve_rate_delta * 100:+.1f} pp`")
+            if self.token_savings_pct is not None:
+                lines.append(f"- Token Savings: `{self.token_savings_pct:+.1f}%`")
+
+        lines.extend(
+            [
+                "",
+                "## Per-Case Breakdown",
+                "| Case | Arm | Resolved | Regression | Prompt Tok | Completion Tok | Time | Changed Files | Notes |",
+                "|---|---|---:|---:|---:|---:|---:|---:|---|",
+            ]
+        )
+        for r in self.results:
+            note = r.error_summary.replace("\n", " ").strip()[:120] or "-"
+            lines.append(
+                f"| `{r.case_id}` | `{r.arm}` | {'PASS' if r.resolved else 'FAIL'} | "
+                f"{'PASS' if r.regression_passed else 'FAIL'} | {r.prompt_tokens:,} | "
+                f"{r.completion_tokens:,} | {r.duration_sec:.2f}s | {r.files_changed} | {note} |"
+            )
+        return "\n".join(lines) + "\n"
+
+
+def load_eval_cases(
+    cases_dir: Path | None = None,
+    case_ids: list[str] | None = None,
+) -> list[EvalCase]:
+    """Load YAML hidden-test benchmark cases from `evals/cases`."""
+    root = cases_dir or default_eval_cases_dir()
+    if not root.is_dir():
+        return []
+    wanted = {cid.strip() for cid in (case_ids or []) if cid.strip()}
+    loaded: list[EvalCase] = []
+    for path in sorted(root.glob("*.yaml")):
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            continue
+        case = EvalCase.model_validate(raw)
+        if not wanted or case.id in wanted:
+            loaded.append(case)
+    return loaded
+
+
+def setup_isolated_case_repo(case: EvalCase, work_dir: Path) -> Path:
+    """Create a fresh Git repository with ONLY starter_files (hidden_files are strictly withheld)."""
+    if work_dir.exists():
+        shutil.rmtree(work_dir, ignore_errors=True)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    for rel, content in case.starter_files.items():
+        target = work_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    ensure_git_repo_ready(work_dir, base_branch="main")
+    return work_dir
+
+
+def _count_changed_files(repo_dir: Path, initial_sha: str) -> int:
+    changed: set[str] = set()
+    diff_proc = subprocess.run(
+        ["git", "diff", "--name-only", initial_sha, "HEAD"],
+        cwd=str(repo_dir),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    for line in diff_proc.stdout.splitlines():
+        if line.strip() and not line.strip().startswith(".auto-engine"):
+            changed.add(line.strip())
+    st_proc = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=str(repo_dir),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    for line in st_proc.stdout.splitlines():
+        if len(line) > 3:
+            p = line[3:].strip()
+            if p and not p.startswith(".auto-engine"):
+                changed.add(p)
+    return len(changed)
+
+
+def _run_hidden_commands(commands: list[str], repo_dir: Path, timeout_sec: int) -> tuple[bool, str]:
+    for raw_cmd in commands:
+        cmd = _format_cmd(raw_cmd.strip())
+        if not cmd:
+            continue
+        try:
+            proc = subprocess.run(
+                cmd,
+                shell=True,
+                cwd=str(repo_dir),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout_sec,
+            )
+        except subprocess.TimeoutExpired:
+            return False, f"TIMEOUT running hidden check `{cmd}`"
+        if proc.returncode != 0:
+            snippet = (proc.stdout + "\n" + proc.stderr).strip().splitlines()[-8:]
+            return False, f"FAIL `{cmd}`: " + " | ".join(snippet)
+    return True, ""
+
+
+def grade_with_hidden_tests(
+    case: EvalCase,
+    repo_dir: Path,
+    timeout_sec: int = 90,
+) -> tuple[bool, bool, str]:
+    """Inject holdout hidden_files AFTER agent completion and run PASS_TO_PASS + FAIL_TO_PASS."""
+    for rel, content in case.hidden_files.items():
+        target = repo_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+    reg_ok, reg_err = _run_hidden_commands(case.hidden_pass_to_pass_commands, repo_dir, timeout_sec)
+    f2p_ok, f2p_err = _run_hidden_commands(case.hidden_fail_to_pass_commands, repo_dir, timeout_sec)
+
+    resolved = reg_ok and f2p_ok
+    errs = [e for e in (reg_err, f2p_err) if e]
+    return resolved, reg_ok, "; ".join(errs)
+
+
+def run_baseline_arm(case: EvalCase, repo_dir: Path, config: EngineConfig) -> tuple[TokenUsage, float, str]:
+    """Baseline Arm A: call raw `agy` directly with PRD + public verify commands without Engine orchestration."""
+    start = time.monotonic()
+    tier = config.agy.tiers.get("coder_medium") or config.agy.tiers.get("planner")
+    model = tier.model if tier else ""
+    effort = tier.effort if tier else "medium"
+    cmd = build_agy_command(config, model, effort, input_format="stream-json", output_format="stream-json")
+
+    prompt = (
+        f"# TASK: {case.title}\n\n"
+        f"{case.prd_markdown.strip()}\n\n"
+        f"Public checks available: {[_format_cmd(c) for c in case.public_verify_commands]}\n"
+        "Implement the complete working solution directly in this repository."
+    )
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(repo_dir),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
+    try:
+        proc.stdin.write(encode_stream_user_message(prompt))
+        proc.stdin.close()
+    except (BrokenPipeError, OSError):
+        pass
+
+    latest_usage = TokenUsage()
+    timed_out = False
+    try:
+        stdout_data, stderr_data = proc.communicate(timeout=config.executor.timeout_seconds)
+    except subprocess.TimeoutExpired:
+        kill_process_tree(proc)
+        stdout_data, stderr_data = proc.communicate()
+        timed_out = True
+
+    for line in (stdout_data or "").splitlines():
+        try:
+            ev = json.loads(line.strip())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(ev, dict):
+            u = _extract_usage_from_event(ev)
+            if u is not None:
+                latest_usage = u
+
+    duration = round(time.monotonic() - start, 3)
+    if timed_out:
+        return latest_usage, duration, f"Baseline `agy` timed out after {config.executor.timeout_seconds}s"
+    if proc.returncode != 0:
+        err = (stderr_data or "").strip() or f"agy exited with code {proc.returncode}"
+        return latest_usage, duration, err
+    return latest_usage, duration, ""
+
+
+def run_engine_arm(case: EvalCase, repo_dir: Path, config: EngineConfig) -> tuple[TokenUsage, float, str]:
+    """Treatment Arm B: run full Auto-Prompt Engine (Planner + Compiler + Orchestrator + Guards)."""
+    start = time.monotonic()
+    cfg = config.model_copy(deep=True)
+    cfg.project.target_repo = str(repo_dir.resolve())
+    cfg.project.base_branch = "main"
+    cfg.project.blueprint = case.blueprint
+    formatted_cmds = [_format_cmd(c) for c in case.public_verify_commands]
+    cfg.executor.default_verify_commands = formatted_cmds
+    cfg.sprint.final_verify_commands = formatted_cmds
+    cfg.sprint.require_plan_approval = False
+
+    auto_dir = repo_dir / ".auto-engine"
+    auto_dir.mkdir(parents=True, exist_ok=True)
+    prd_path = auto_dir / "eval_prd.md"
+    prd_path.write_text(case.prd_markdown, encoding="utf-8")
+
+    db = StateDB(cfg.state_db_path)
+    guard = GitGuard(
+        cfg.target_repo_path,
+        ignore_artifacts=cfg.guards.ignore_artifacts,
+        forbid_demo_patterns=cfg.guards.forbid_demo_patterns,
+        enforce_production_only=cfg.guards.enforce_production_only,
+    )
+    guard.ensure_git_exclude()
+    indexer = RepoIndexer(cfg)
+    planner = Planner(cfg, db, indexer)
+    plan_res = planner.plan_from_prd(prd_path, auto_approve=True)
+    if plan_res.status != "READY":
+        summary = db.get_sprint_summary()
+        usage = TokenUsage(
+            prompt_tokens=summary.get("planning_prompt_tokens", 0),
+            completion_tokens=summary.get("planning_completion_tokens", 0),
+        )
+        return usage, round(time.monotonic() - start, 3), f"Planner status={plan_res.status}"
+
+    verifier = Verifier(cfg, guard)
+    compiler = PromptCompiler(cfg)
+    orch = Orchestrator(cfg, db, guard, verifier, compiler)
+    res = orch.run_sprint(auto_approve=True, sprint_name="eval-1")
+
+    summary = db.get_sprint_summary()
+    usage = TokenUsage(
+        prompt_tokens=summary["prompt_tokens"] + summary.get("planning_prompt_tokens", 0),
+        completion_tokens=summary["completion_tokens"] + summary.get("planning_completion_tokens", 0),
+        cost_usd=summary["cost_usd"],
+    )
+    duration = round(time.monotonic() - start, 3)
+    err = res.get("halted_reason") or res.get("final_verify_error") or ""
+    return usage, duration, str(err)
+
+
+def _summarize_arm(arm: ArmName, rows: list[ArmCaseResult]) -> ArmSummary:
+    n = len(rows)
+    if n == 0:
+        return ArmSummary(arm=arm)
+    resolved_cnt = sum(1 for r in rows if r.resolved)
+    reg_cnt = sum(1 for r in rows if r.regression_passed)
+    p_tok = sum(r.prompt_tokens for r in rows)
+    c_tok = sum(r.completion_tokens for r in rows)
+    tot_tok = p_tok + c_tok
+    avg_dur = round(sum(r.duration_sec for r in rows) / n, 3)
+    tpr = round(tot_tok / resolved_cnt, 2) if resolved_cnt > 0 else None
+    return ArmSummary(
+        arm=arm,
+        total_cases=n,
+        resolved_cases=resolved_cnt,
+        regression_passed_cases=reg_cnt,
+        resolve_rate=round(resolved_cnt / n, 4),
+        regression_pass_rate=round(reg_cnt / n, 4),
+        prompt_tokens=p_tok,
+        completion_tokens=c_tok,
+        total_tokens=tot_tok,
+        tokens_per_resolved=tpr,
+        avg_duration_sec=avg_dur,
+    )
+
+
+class Evaluator:
+    """Runs isolated A/B hidden-test benchmarks and computes objective effectiveness deltas."""
+
+    def __init__(
+        self,
+        config: EngineConfig,
+        *,
+        baseline_runner: ArmRunner | None = None,
+        engine_runner: ArmRunner | None = None,
+        hidden_test_timeout_sec: int = 90,
+    ) -> None:
+        self.config = config
+        self.baseline_runner = baseline_runner or run_baseline_arm
+        self.engine_runner = engine_runner or run_engine_arm
+        self.hidden_test_timeout_sec = hidden_test_timeout_sec
+
+    def evaluate_case(
+        self,
+        case: EvalCase,
+        arm: ArmName,
+        work_root: Path,
+    ) -> ArmCaseResult:
+        """Set up fresh sandbox for one (case, arm), execute agent, then grade with hidden tests."""
+        repo_dir = setup_isolated_case_repo(case, work_root / f"{case.id}__{arm}")
+        initial_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(repo_dir),
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+        runner = self.baseline_runner if arm == "baseline" else self.engine_runner
+        run_err = ""
+        usage = TokenUsage()
+        duration = 0.0
+        try:
+            usage, duration, run_err = runner(case, repo_dir, self.config)
+        except Exception as exc:
+            run_err = str(exc)
+
+        files_changed = _count_changed_files(repo_dir, initial_sha)
+        resolved, reg_ok, grade_err = grade_with_hidden_tests(
+            case,
+            repo_dir,
+            timeout_sec=self.hidden_test_timeout_sec,
+        )
+        combined_err = "; ".join(part for part in (run_err, grade_err) if part)
+        return ArmCaseResult(
+            case_id=case.id,
+            arm=arm,
+            resolved=resolved,
+            regression_passed=reg_ok,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            duration_sec=duration,
+            files_changed=files_changed,
+            error_summary=combined_err,
+        )
+
+    def run_suite(
+        self,
+        cases: list[EvalCase],
+        *,
+        arms: tuple[ArmName, ...] = ("baseline", "engine"),
+        work_dir: Path | None = None,
+    ) -> EvalReport:
+        """Run all cases across requested arms and return comparative EvalReport."""
+        results: list[ArmCaseResult] = []
+        if work_dir is None:
+            with tempfile.TemporaryDirectory(prefix="auto_engine_eval_") as tmp:
+                base_work = Path(tmp)
+                for case in cases:
+                    for arm in arms:
+                        results.append(self.evaluate_case(case, arm, base_work))
+        else:
+            work_dir.mkdir(parents=True, exist_ok=True)
+            for case in cases:
+                for arm in arms:
+                    results.append(self.evaluate_case(case, arm, work_dir))
+
+        summaries: dict[str, ArmSummary] = {}
+        for arm in arms:
+            arm_rows = [r for r in results if r.arm == arm]
+            summaries[arm] = _summarize_arm(arm, arm_rows)
+
+        resolve_delta: float | None = None
+        token_savings_pct: float | None = None
+        if "baseline" in summaries and "engine" in summaries:
+            base_s = summaries["baseline"]
+            eng_s = summaries["engine"]
+            resolve_delta = round(eng_s.resolve_rate - base_s.resolve_rate, 4)
+            if base_s.total_tokens > 0:
+                token_savings_pct = round((base_s.total_tokens - eng_s.total_tokens) / base_s.total_tokens * 100.0, 2)
+
+        return EvalReport(
+            generated_at=datetime.now(timezone.utc).isoformat(),
+            cases_evaluated=[c.id for c in cases],
+            results=results,
+            summaries=summaries,
+            resolve_rate_delta=resolve_delta,
+            token_savings_pct=token_savings_pct,
+        )
+
+    @staticmethod
+    def write_report(report: EvalReport, md_path: Path, json_path: Path | None = None) -> None:
+        md_path.parent.mkdir(parents=True, exist_ok=True)
+        md_path.write_text(report.to_markdown(), encoding="utf-8")
+        if json_path is not None:
+            json_path.parent.mkdir(parents=True, exist_ok=True)
+            json_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")

@@ -204,11 +204,16 @@ class GitGuard:
         allowed_files: list[str],
         create_new_files: list[str],
         protected_test_files: list[str] | None = None,
+        strict_scope: bool = True,
     ) -> tuple[bool, list[str]]:
-        """Ensure every changed/created file belongs strictly to allowed scope and is not protected."""
+        """Ensure changed/created files belong to allowed scope (when strict) and are never protected."""
         tracked, untracked = self.get_changed_files()
         changed = tracked + untracked
         protected_set = {normalize_posix_path(p) for p in (protected_test_files or [])}
+        if not strict_scope:
+            violations = [p for p in changed if p in protected_set]
+            return len(violations) == 0, violations
+
         base_permitted = {normalize_posix_path(p) for p in allowed_files} | {
             normalize_posix_path(p) for p in create_new_files
         }
@@ -323,13 +328,23 @@ class GitGuard:
         head = "\n".join(lines[:max_lines])
         return f"{head}\n... [truncated {len(lines) - max_lines} diff lines]"
 
-    def commit_task(self, task_id: str, title: str, files_to_stage: list[str]) -> str:
-        """Stage strictly permitted files (plus changed companion lockfiles) and commit cleanly."""
-        base_files = {normalize_posix_path(f) for f in files_to_stage}
-        expanded_set = self._expand_manifest_lockfiles(base_files)
+    def commit_task(
+        self,
+        task_id: str,
+        title: str,
+        files_to_stage: list[str],
+        *,
+        stage_all_changed: bool = False,
+    ) -> str:
+        """Stage strictly permitted files (or all changed non-artifacts in flexible mode) and commit cleanly."""
         tracked, untracked = self.get_changed_files()
         changed_set = set(tracked + untracked)
-        norm_files = sorted(base_files | (expanded_set & changed_set))
+        if stage_all_changed:
+            norm_files = sorted(changed_set)
+        else:
+            base_files = {normalize_posix_path(f) for f in files_to_stage}
+            expanded_set = self._expand_manifest_lockfiles(base_files)
+            norm_files = sorted(base_files | (expanded_set & changed_set))
         if not norm_files:
             raise GitGuardError(f"No files specified to commit for task {task_id}.")
 

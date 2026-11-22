@@ -116,14 +116,19 @@ def test_stream_watchdog_aborts_on_forbidden_shell_and_max_turns(tmp_path: Path)
     executor = AgyCliExecutor(cfg)
     task = TaskSpec(task_id="T-01", title="Fix", objective="Fix", allowed_write_files=["a.py"])
 
-    # 1. Forbidden shell command triggers immediate kill
+    # 1. Opt-in forbidden shell command triggers immediate kill when enabled
+    cfg_strict_shell = EngineConfig(
+        project=ProjectConfig(target_repo=str(tmp_path)),
+        agy=AgyConfig(dynamic_mcp_gating=False, forbid_shell_verify_commands=True),
+        limits=LimitsConfig(max_tool_calls_per_attempt=2, max_tokens_per_task=5000),
+    )
     shell_event = json.dumps({"type": "tool_call", "tool_name": "run_command", "args": {"CommandLine": "pytest tests/"}})
     fake_proc = _FakeProc([shell_event])
     with (
         patch("subprocess.Popen", return_value=fake_proc),
         patch("engine.bridges.agy_cli_executor.kill_process_tree") as kill_mock,
     ):
-        res = executor.execute("prompt", task, "m", "low")
+        res = AgyCliExecutor(cfg_strict_shell).execute("prompt", task, "m", "low")
     assert not res.success and res.verdict_override == "MAX_TURNS_EXCEEDED"
     assert kill_mock.called
 

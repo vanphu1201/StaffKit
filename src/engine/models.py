@@ -95,6 +95,7 @@ class AgyConfig(BaseModel):
     disable_slash_commands: bool = True
     auto_approve_tools: bool = True
     dynamic_mcp_gating: bool = False
+    forbid_shell_verify_commands: bool = False
     tiers: dict[str, AgyTierConfig] = Field(
         default_factory=lambda: {
             "planner": AgyTierConfig(model="", effort="high"),
@@ -258,6 +259,7 @@ class TaskSpec(BaseModel):
     needs_lsp_mcp: bool = False
     constraints: list[str] = Field(default_factory=list)
     user_questions: list[str] = Field(default_factory=list)
+    strict_scope: bool = True
     verify_commands: list[str] = Field(default_factory=list)
 
     @field_validator(

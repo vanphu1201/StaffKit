@@ -150,3 +150,23 @@ def test_production_guard_blocks_demo_accounts_and_placeholders(temp_repo: Path)
     assert not ok
     assert any("Production-only violation" in h for h in hits)
     assert any("user@demo.com" in h for h in hits)
+
+
+def test_flexible_scope_allows_new_files_while_blocking_protected_tests(temp_repo: Path) -> None:
+    guard = GitGuard(temp_repo)
+    guard.ensure_work_branch("main", "auto-engine/sprint-flex")
+    chk = guard.create_checkpoint()
+
+    (temp_repo / "src" / "extra.py").write_text("X = 1\n", encoding="utf-8")
+    ok, viols = guard.check_scope(["src/app.py"], [], ["tests/test_core.py"], strict_scope=False)
+    assert ok and viols == []
+
+    # Committing in flexible mode stages all non-artifact changes cleanly
+    sha = guard.commit_task("T-FLEX", "Flexible scope commit", ["src/app.py"], stage_all_changed=True)
+    assert len(sha) >= 7 and not guard.has_changes()
+
+    # Modifying a protected test file is still forbidden even when strict_scope=False
+    (temp_repo / "tests" / "test_core.py").write_text("def test_core():\n    assert False\n", encoding="utf-8")
+    ok2, viols2 = guard.check_scope(["src/app.py"], [], ["tests/test_core.py"], strict_scope=False)
+    assert not ok2 and "tests/test_core.py" in viols2
+    guard.hard_rollback(chk)

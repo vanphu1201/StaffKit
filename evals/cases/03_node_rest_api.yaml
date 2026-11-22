@@ -1,0 +1,157 @@
+id: eval-node-rest-api
+title: "Node.js Zero-Dep HTTP REST API with Real Disk Persistence"
+domain: web_api
+blueprint: generic
+prd_markdown: |
+  Build a real persistent REST API in `src/server.js` using built-in Node.js modules (`node:http`, `node:fs`, `node:crypto`).
+  Requirements:
+  - Read `PORT` (default `3000`) and `DATA_FILE` (default `./data/tasks.json`) from environment variables.
+  - Print a line containing `LISTENING:` followed by the actual bound URL/port once listening (supports `PORT=0`).
+  - Persist all tasks on disk in `DATA_FILE` on every mutation so restarting the server preserves all tasks.
+  - Endpoints:
+    + `GET /health` -> `200` `{"ok": true}`
+    + `GET /api/tasks` -> `200` array of task objects
+    + `POST /api/tasks` with JSON `{"title": "..."}` -> validate non-empty string `title` (`400` if invalid), create `{id, title, done: false, createdAt}` -> `201`
+    + `PATCH /api/tasks/:id` with `{title?, done?}` -> update task and return `200` (`404` if missing)
+    + `DELETE /api/tasks/:id` -> remove task and return `200` (`404` if missing)
+starter_files:
+  "package.json": |
+    {
+      "name": "persistent-task-api",
+      "version": "1.0.0",
+      "type": "module",
+      "scripts": {
+        "start": "node src/server.js",
+        "test": "node tests/public.test.mjs"
+      }
+    }
+  "src/server.js": |
+    import http from "node:http";
+
+    const port = Number(process.env.PORT ?? 3000);
+    const server = http.createServer((req, res) => {
+      if (req.method === "GET" && req.url === "/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Not implemented" }));
+    });
+
+    server.listen(port, "127.0.0.1", () => {
+      const addr = server.address();
+      console.log(`LISTENING: http://127.0.0.1:${addr.port}`);
+    });
+  "tests/public.test.mjs": |
+    import assert from "node:assert/strict";
+    import fs from "node:fs";
+
+    assert.equal(fs.existsSync("src/server.js"), true);
+public_verify_commands:
+  - "node --check src/server.js"
+  - "node tests/public.test.mjs"
+hidden_files:
+  "hidden_tests/hidden_api.test.mjs": |
+    import assert from "node:assert/strict";
+    import { spawn } from "node:child_process";
+    import fs from "node:fs";
+    import os from "node:os";
+    import path from "node:path";
+
+    function startServer(dataFile) {
+      return new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, ["src/server.js"], {
+          env: { ...process.env, PORT: "0", DATA_FILE: dataFile },
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        let out = "";
+        const timer = setTimeout(() => {
+          child.kill();
+          reject(new Error("Server startup timed out: " + out));
+        }, 8000);
+        child.stdout.on("data", (chunk) => {
+          out += chunk.toString();
+          const m = out.match(/LISTENING:\s*(http:\/\/[^\s]+)/i);
+          if (m) {
+            clearTimeout(timer);
+            resolve({ child, baseUrl: m[1].replace(/\/$/, "") });
+          }
+        });
+        child.on("exit", (code) => {
+          clearTimeout(timer);
+          if (!out.includes("LISTENING:")) reject(new Error("Exited early " + code));
+        });
+      });
+    }
+
+    function stopServer(child) {
+      return new Promise((resolve) => {
+        if (child.exitCode !== null) return resolve();
+        child.once("exit", () => resolve());
+        child.kill();
+      });
+    }
+
+    async function run() {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "eval-node-"));
+      const dataFile = path.join(tmpDir, "store", "tasks.json");
+
+      const s1 = await startServer(dataFile);
+      try {
+        const bad = await fetch(`${s1.baseUrl}/api/tasks`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: "   " }),
+        });
+        assert.equal(bad.status, 400);
+
+        const cRes = await fetch(`${s1.baseUrl}/api/tasks`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: "Deploy DB" }),
+        });
+        assert.equal(cRes.status, 201);
+        const created = await cRes.json();
+        assert.ok(created.id);
+        assert.equal(created.done, false);
+
+        const pRes = await fetch(`${s1.baseUrl}/api/tasks/${created.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ done: true }),
+        });
+        assert.equal(pRes.status, 200);
+        assert.equal((await pRes.json()).done, true);
+      } finally {
+        await stopServer(s1.child);
+      }
+
+      // Restart fresh process to verify disk persistence
+      const s2 = await startServer(dataFile);
+      try {
+        const listRes = await fetch(`${s2.baseUrl}/api/tasks`);
+        assert.equal(listRes.status, 200);
+        const items = await listRes.json();
+        assert.equal(items.length, 1);
+        assert.equal(items[0].title, "Deploy DB");
+        assert.equal(items[0].done, true);
+
+        const dRes = await fetch(`${s2.baseUrl}/api/tasks/${items[0].id}`, { method: "DELETE" });
+        assert.equal(dRes.status, 200);
+        const listAfter = await (await fetch(`${s2.baseUrl}/api/tasks`)).json();
+        assert.equal(listAfter.length, 0);
+      } finally {
+        await stopServer(s2.child);
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    }
+
+    run().catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
+hidden_pass_to_pass_commands:
+  - "node tests/public.test.mjs"
+hidden_fail_to_pass_commands:
+  - "node hidden_tests/hidden_api.test.mjs"

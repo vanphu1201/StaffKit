@@ -88,6 +88,7 @@ def test_ui_index_state_config_approve_and_rollback(tmp_path: Path) -> None:
 
     # 6. Live traces and mid-sprint Human-in-the-Loop interaction API
     controller = app.state.controller
+    controller.stop_event.clear()
     controller.emit_trace({"phase": "executor", "kind": "prompt_sent", "title": "P1", "content": "Hello"})
     st2 = client.get("/api/state").json()
     assert len(st2["traces"]) == 1
