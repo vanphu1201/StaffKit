@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import re
 import shutil
 import statistics
 import subprocess
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Iterator, Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -50,17 +54,42 @@ def _format_cmd(cmd: str) -> str:
     return cmd.replace("{python}", _quoted_python())
 
 
+@contextmanager
+def _temp_env(extra_env: dict[str, str] | None) -> Iterator[None]:
+    """Temporarily apply extra environment variables around subprocess/engine execution."""
+    if not extra_env:
+        yield
+        return
+    saved: dict[str, str | None] = {}
+    try:
+        for k, v in extra_env.items():
+            saved[k] = os.environ.get(k)
+            os.environ[k] = v
+        yield
+    finally:
+        for k, old in saved.items():
+            if old is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = old
+
+
 class EvalCase(BaseModel):
-    """Single isolated benchmark task with holdout hidden tests."""
+    """Single isolated benchmark task (starter_files or real git repo_url+base_commit) with holdout tests."""
 
     id: str
     title: str
     domain: str = "general"
     blueprint: str = "generic"
     prd_markdown: str
+    repo_url: str = ""
+    base_commit: str = ""
+    setup_commands: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
     starter_files: dict[str, str] = Field(default_factory=dict)
     public_verify_commands: list[str] = Field(default_factory=list)
     hidden_files: dict[str, str] = Field(default_factory=dict)
+    hidden_patch: str = ""
     hidden_pass_to_pass_commands: list[str] = Field(default_factory=list)
     hidden_fail_to_pass_commands: list[str] = Field(default_factory=list)
 
@@ -178,9 +207,76 @@ def load_eval_cases(
 
 
 def setup_isolated_case_repo(case: EvalCase, work_dir: Path) -> Path:
-    """Create a fresh Git repository with ONLY starter_files (hidden_files are strictly withheld)."""
+    """Create a fresh Git repository from `repo_url`@`base_commit` or `starter_files` (hidden tests withheld)."""
     if work_dir.exists():
         shutil.rmtree(work_dir, ignore_errors=True)
+
+    if case.repo_url.strip():
+        repo_url = case.repo_url.strip()
+        slug_base = re.sub(r"[^A-Za-z0-9._-]+", "_", case.id or Path(repo_url).stem)[:40]
+        url_hash = hashlib.sha256(repo_url.encode("utf-8")).hexdigest()[:8]
+        cache_root = Path(tempfile.gettempdir()) / "auto_engine_eval_git_cache"
+        cache_root.mkdir(parents=True, exist_ok=True)
+        cache_dir = cache_root / f"{slug_base}_{url_hash}.git"
+
+        if not cache_dir.is_dir():
+            subprocess.run(
+                ["git", "clone", "--bare", repo_url, str(cache_dir)],
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+        if case.base_commit.strip():
+            sha = case.base_commit.strip()
+            has_obj = subprocess.run(
+                ["git", "--git-dir", str(cache_dir), "cat-file", "-e", f"{sha}^{{commit}}"],
+                capture_output=True,
+                check=False,
+            )
+            if has_obj.returncode != 0:
+                subprocess.run(
+                    ["git", "--git-dir", str(cache_dir), "fetch", "--all", "--tags"],
+                    capture_output=True,
+                    check=False,
+                )
+                has_obj = subprocess.run(
+                    ["git", "--git-dir", str(cache_dir), "cat-file", "-e", f"{sha}^{{commit}}"],
+                    capture_output=True,
+                    check=False,
+                )
+                if has_obj.returncode != 0:
+                    subprocess.run(
+                        ["git", "--git-dir", str(cache_dir), "fetch", "origin", sha],
+                        capture_output=True,
+                        check=True,
+                    )
+
+        work_dir.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["git", "clone", str(cache_dir), str(work_dir)],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        checkout_cmd = ["git", "checkout", "-B", "main"]
+        if case.base_commit.strip():
+            checkout_cmd.append(case.base_commit.strip())
+        subprocess.run(checkout_cmd, cwd=str(work_dir), check=True, capture_output=True, text=True)
+        subprocess.run(["git", "config", "user.name", "EvalBot"], cwd=str(work_dir), check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "eval@example.com"], cwd=str(work_dir), check=True, capture_output=True)
+
+        run_env = (os.environ | case.env) if case.env else None
+        for raw_setup in case.setup_commands:
+            cmd = _format_cmd(raw_setup.strip())
+            if cmd:
+                subprocess.run(cmd, shell=True, cwd=str(work_dir), env=run_env, check=True)
+        return work_dir
+
     work_dir.mkdir(parents=True, exist_ok=True)
     for rel, content in case.starter_files.items():
         target = work_dir / rel
@@ -221,7 +317,13 @@ def _count_changed_files(repo_dir: Path, initial_sha: str) -> int:
     return len(changed)
 
 
-def _run_hidden_commands(commands: list[str], repo_dir: Path, timeout_sec: int) -> tuple[bool, str]:
+def _run_hidden_commands(
+    commands: list[str],
+    repo_dir: Path,
+    timeout_sec: int,
+    extra_env: dict[str, str] | None = None,
+) -> tuple[bool, str]:
+    run_env = (os.environ | extra_env) if extra_env else None
     for raw_cmd in commands:
         cmd = _format_cmd(raw_cmd.strip())
         if not cmd:
@@ -231,6 +333,7 @@ def _run_hidden_commands(commands: list[str], repo_dir: Path, timeout_sec: int) 
                 cmd,
                 shell=True,
                 cwd=str(repo_dir),
+                env=run_env,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -250,14 +353,51 @@ def grade_with_hidden_tests(
     repo_dir: Path,
     timeout_sec: int = 90,
 ) -> tuple[bool, bool, str]:
-    """Inject holdout hidden_files AFTER agent completion and run PASS_TO_PASS + FAIL_TO_PASS."""
+    """Inject holdout hidden_files / hidden_patch AFTER agent completion and run PASS_TO_PASS + FAIL_TO_PASS."""
     for rel, content in case.hidden_files.items():
         target = repo_dir / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
 
-    reg_ok, reg_err = _run_hidden_commands(case.hidden_pass_to_pass_commands, repo_dir, timeout_sec)
-    f2p_ok, f2p_err = _run_hidden_commands(case.hidden_fail_to_pass_commands, repo_dir, timeout_sec)
+    if case.hidden_patch.strip():
+        patch_text = case.hidden_patch if case.hidden_patch.endswith("\n") else (case.hidden_patch + "\n")
+        already_applied = subprocess.run(
+            ["git", "apply", "--reverse", "--check", "--whitespace=nowarn", "-"],
+            cwd=str(repo_dir),
+            input=patch_text,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if already_applied.returncode != 0:
+            apply_proc = subprocess.run(
+                ["git", "apply", "--whitespace=nowarn", "-"],
+                cwd=str(repo_dir),
+                input=patch_text,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            if apply_proc.returncode != 0:
+                err = (apply_proc.stderr or apply_proc.stdout).strip()
+                return False, False, f"git apply hidden_patch failed: {err}"
+
+    reg_ok, reg_err = _run_hidden_commands(
+        case.hidden_pass_to_pass_commands,
+        repo_dir,
+        timeout_sec,
+        extra_env=case.env or None,
+    )
+    f2p_ok, f2p_err = _run_hidden_commands(
+        case.hidden_fail_to_pass_commands,
+        repo_dir,
+        timeout_sec,
+        extra_env=case.env or None,
+    )
 
     resolved = reg_ok and f2p_ok
     errs = [e for e in (reg_err, f2p_err) if e]
@@ -278,9 +418,11 @@ def run_baseline_arm(case: EvalCase, repo_dir: Path, config: EngineConfig) -> tu
         f"Public checks available: {[_format_cmd(c) for c in case.public_verify_commands]}\n"
         "Implement the complete working solution directly in this repository."
     )
+    run_env = (os.environ | case.env) if case.env else None
     proc = subprocess.Popen(
         cmd,
         cwd=str(repo_dir),
+        env=run_env,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -340,29 +482,30 @@ def run_engine_arm(case: EvalCase, repo_dir: Path, config: EngineConfig) -> tupl
     prd_path = auto_dir / "eval_prd.md"
     prd_path.write_text(case.prd_markdown, encoding="utf-8")
 
-    db = StateDB(cfg.state_db_path)
-    guard = GitGuard(
-        cfg.target_repo_path,
-        ignore_artifacts=cfg.guards.ignore_artifacts,
-        forbid_demo_patterns=cfg.guards.forbid_demo_patterns,
-        enforce_production_only=cfg.guards.enforce_production_only,
-    )
-    guard.ensure_git_exclude()
-    indexer = RepoIndexer(cfg)
-    planner = Planner(cfg, db, indexer)
-    plan_res = planner.plan_from_prd(prd_path, auto_approve=True)
-    if plan_res.status != "READY":
-        summary = db.get_sprint_summary()
-        usage = TokenUsage(
-            prompt_tokens=summary.get("planning_prompt_tokens", 0),
-            completion_tokens=summary.get("planning_completion_tokens", 0),
+    with _temp_env(case.env):
+        db = StateDB(cfg.state_db_path)
+        guard = GitGuard(
+            cfg.target_repo_path,
+            ignore_artifacts=cfg.guards.ignore_artifacts,
+            forbid_demo_patterns=cfg.guards.forbid_demo_patterns,
+            enforce_production_only=cfg.guards.enforce_production_only,
         )
-        return usage, round(time.monotonic() - start, 3), f"Planner status={plan_res.status}"
+        guard.ensure_git_exclude()
+        indexer = RepoIndexer(cfg)
+        planner = Planner(cfg, db, indexer)
+        plan_res = planner.plan_from_prd(prd_path, auto_approve=True)
+        if plan_res.status != "READY":
+            summary = db.get_sprint_summary()
+            usage = TokenUsage(
+                prompt_tokens=summary.get("planning_prompt_tokens", 0),
+                completion_tokens=summary.get("planning_completion_tokens", 0),
+            )
+            return usage, round(time.monotonic() - start, 3), f"Planner status={plan_res.status}"
 
-    verifier = Verifier(cfg, guard)
-    compiler = PromptCompiler(cfg)
-    orch = Orchestrator(cfg, db, guard, verifier, compiler)
-    res = orch.run_sprint(auto_approve=True, sprint_name="eval-1")
+        verifier = Verifier(cfg, guard)
+        compiler = PromptCompiler(cfg)
+        orch = Orchestrator(cfg, db, guard, verifier, compiler)
+        res = orch.run_sprint(auto_approve=True, sprint_name="eval-1")
 
     summary = db.get_sprint_summary()
     usage = TokenUsage(

@@ -233,3 +233,62 @@ def test_smoke_http_health_script_validates_live_endpoint() -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_real_world_git_repo_and_hidden_patch_grading(tmp_path: Path) -> None:
+    import subprocess
+
+    upstream = tmp_path / "upstream_repo"
+    upstream.mkdir(parents=True)
+    for args in (
+        ["init", "-b", "main"],
+        ["config", "user.name", "Author"],
+        ["config", "user.email", "author@example.com"],
+    ):
+        subprocess.run(["git", *args], cwd=str(upstream), check=True, capture_output=True)
+
+    (upstream / "pkg").mkdir()
+    (upstream / "pkg" / "calc.py").write_text("def add(a: int, b: int) -> int:\n    return a\n", encoding="utf-8")
+    (upstream / "tests").mkdir()
+    (upstream / "tests" / "test_calc.py").write_text(
+        "from pkg.calc import add\n\ndef test_zero() -> None:\n    assert add(3, 0) == 3\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "."], cwd=str(upstream), check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "buggy base"], cwd=str(upstream), check=True, capture_output=True)
+    base_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(upstream), check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    hidden_patch = (
+        "diff --git a/tests/test_calc.py b/tests/test_calc.py\n"
+        "--- a/tests/test_calc.py\n"
+        "+++ b/tests/test_calc.py\n"
+        "@@ -2,3 +2,6 @@ from pkg.calc import add\n"
+        " \n"
+        " def test_zero() -> None:\n"
+        "     assert add(3, 0) == 3\n"
+        "+\n"
+        "+def test_nonzero() -> None:\n"
+        "+    assert add(3, 4) == 7\n"
+    )
+    case = EvalCase(
+        id="real-git-patch-test",
+        title="Fix add()",
+        prd_markdown="Fix add(a, b) in pkg/calc.py",
+        repo_url=str(upstream),
+        base_commit=base_sha,
+        env={"PYTHONPATH": "."},
+        hidden_patch=hidden_patch,
+        hidden_pass_to_pass_commands=["{python} -m pytest tests/test_calc.py -k test_zero -q"],
+        hidden_fail_to_pass_commands=["{python} -m pytest tests/test_calc.py -k test_nonzero -q"],
+    )
+
+    sandbox = setup_isolated_case_repo(case, tmp_path / "sandbox")
+    assert "test_nonzero" not in (sandbox / "tests" / "test_calc.py").read_text(encoding="utf-8")
+    res_fail, reg_ok, _ = grade_with_hidden_tests(case, sandbox, timeout_sec=30)
+    assert reg_ok is True and res_fail is False
+
+    (sandbox / "pkg" / "calc.py").write_text("def add(a: int, b: int) -> int:\n    return a + b\n", encoding="utf-8")
+    res_pass, reg_ok2, err2 = grade_with_hidden_tests(case, sandbox, timeout_sec=30)
+    assert reg_ok2 is True and res_pass is True, err2
