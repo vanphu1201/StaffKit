@@ -263,7 +263,7 @@ class DesktopAppController:
             db = StateDB(cfg.state_db_path)
             GitGuard(cfg.target_repo_path, ignore_artifacts=cfg.guards.ignore_artifacts).ensure_git_exclude()
             indexer = RepoIndexer(cfg)
-            planner = Planner(cfg, db, indexer)
+            planner = Planner(cfg, db, indexer, on_event=self.emit_log, stop_event=self.stop_event)
 
             with self._lock:
                 self.clarifying_questions = []

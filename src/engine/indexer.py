@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from engine.models import EngineConfig, normalize_posix_path
+
+FILE_TAG_RE = re.compile(r'<file path="([^"]+)">\r?\n?([\s\S]*?)\r?\n?</file>')
+DIR_STRUCT_RE = re.compile(r"<directory_structure>([\s\S]*?)</directory_structure>")
 
 
 class IndexerError(RuntimeError):
@@ -118,24 +121,45 @@ def list_real_files(repo_path: Path) -> set[str]:
 
 
 def extract_file_skeletons(repo_map_path: Path, target_paths: list[str]) -> dict[str, str]:
-    """Parse `<file path='...'>` nodes from cached repomix XML in O(file) with 0 LLM tokens."""
+    """Parse `<file path='...'>` blocks from repomix output (supports plain-text preamble & unescaped HTML/XML)."""
     if not repo_map_path.is_file() or not target_paths:
         return {}
 
     wanted = {normalize_posix_path(p) for p in target_paths}
+    text = repo_map_path.read_text(encoding="utf-8", errors="replace")
     result: dict[str, str] = {}
 
-    try:
-        tree = ET.parse(repo_map_path)
-        root = tree.getroot()
-    except ET.ParseError:
-        return {}
-
-    for elem in root.iter("file"):
-        raw_path = elem.attrib.get("path", "")
-        norm = normalize_posix_path(raw_path)
+    for match in FILE_TAG_RE.finditer(text):
+        norm = normalize_posix_path(match.group(1))
         if norm in wanted:
-            content = (elem.text or "").strip()
+            content = match.group(2).strip()
             if content:
                 result[norm] = content
     return result
+
+
+def compact_repo_map_for_planner(repo_map_text: str, max_chars: int = 50000) -> str:
+    """Keep directory structure + code skeletons while skipping large docs and enforcing max_chars."""
+    sections: list[str] = []
+    dir_match = DIR_STRUCT_RE.search(repo_map_text)
+    if dir_match:
+        sections.append(f"<directory_structure>{dir_match.group(1)}</directory_structure>")
+
+    used = sum(len(s) for s in sections)
+    for match in FILE_TAG_RE.finditer(repo_map_text):
+        rel = normalize_posix_path(match.group(1))
+        body = match.group(2).strip()
+        if rel.lower().endswith(".md") and len(body) > 4000:
+            block = f'<file path="{rel}">\n(Markdown doc omitted: {len(body)} chars)\n</file>'
+        else:
+            block = f'<file path="{rel}">\n{body}\n</file>'
+
+        if used + len(block) > max_chars:
+            sections.append("... [remaining files omitted to stay within planner budget]")
+            break
+        sections.append(block)
+        used += len(block)
+
+    if not sections:
+        return repo_map_text[:max_chars]
+    return "\n\n".join(sections)

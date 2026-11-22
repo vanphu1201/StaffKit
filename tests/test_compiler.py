@@ -115,3 +115,23 @@ def test_extract_file_skeletons_handles_windows_paths(tmp_path: Path) -> None:
     map_path = _write_repo_map(repo)
     found = extract_file_skeletons(map_path, [r"src\types\user.ts"])
     assert "src/types/user.ts" in found
+
+
+def test_extract_file_skeletons_handles_real_repomix_preamble_and_html(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    auto_dir = repo / ".auto-engine"
+    auto_dir.mkdir(parents=True, exist_ok=True)
+    xml_path = auto_dir / "repo_map.xml"
+    xml_path.write_text(
+        "This file is a merged representation of a subset of the codebase.\n\n"
+        "<file_summary>notes</file_summary>\n"
+        "<files>\n"
+        '<file path="src/ui/index.html">\n'
+        '<div class="box">a & b < 3</div>\n'
+        "</file>\n"
+        "</files>\n",
+        encoding="utf-8",
+    )
+    found = extract_file_skeletons(xml_path, ["src/ui/index.html"])
+    assert "src/ui/index.html" in found
+    assert '<div class="box">a & b < 3</div>' in found["src/ui/index.html"]

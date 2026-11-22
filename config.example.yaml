@@ -82,6 +82,7 @@ tools:
     - "dist/**"
     - "build/**"
     - ".venv/**"
+    - ".ui-profile/**"
     - "*.lock"
 
 notifications:

@@ -5,17 +5,25 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import queue
 import re
 import subprocess
+import threading
+import time
 from collections import deque
 from pathlib import Path
 from typing import Callable
 
 import httpx
 
-from engine.bridges.agy_cli_executor import build_agy_command, encode_stream_user_message
+from engine.bridges.agy_cli_executor import (
+    _extract_tool_call,
+    build_agy_command,
+    encode_stream_user_message,
+    kill_process_tree,
+)
 from engine.database import StateDB
-from engine.indexer import RepoIndexer, list_real_files
+from engine.indexer import RepoIndexer, compact_repo_map_for_planner, list_real_files
 from engine.models import EngineConfig, PlanOutput, TaskSpec, normalize_posix_path
 
 JSON_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
@@ -168,11 +176,19 @@ class Planner:
         db: StateDB,
         indexer: RepoIndexer,
         llm_caller: Callable[[str, Path], str] | None = None,
+        on_event: Callable[[str, str], None] | None = None,
+        stop_event: threading.Event | None = None,
     ) -> None:
         self.config = config
         self.db = db
         self.indexer = indexer
         self._llm_caller = llm_caller
+        self.on_event = on_event
+        self.stop_event = stop_event
+
+    def _emit(self, level: str, message: str) -> None:
+        if self.on_event is not None:
+            self.on_event(level, message)
 
     def _call_llm(self, prompt: str, schema_path: Path) -> str:
         if self._llm_caller is not None:
@@ -192,21 +208,91 @@ class Planner:
             output_format="stream-json",
             json_schema_path=schema_path,
         )
-        proc = subprocess.run(
+        self._emit("info", f"Gọi Planner `agy` (effort={effort}, prompt={len(prompt)} chars)...")
+        proc = subprocess.Popen(
             cmd,
             cwd=str(self.config.target_repo_path),
-            input=encode_stream_user_message(prompt),
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=self.config.executor.timeout_seconds,
         )
+        assert proc.stdin is not None
+        assert proc.stdout is not None
+        assert proc.stderr is not None
+
+        proc.stdin.write(encode_stream_user_message(prompt))
+        proc.stdin.close()
+
+        line_q: queue.Queue[str | None] = queue.Queue()
+
+        def _reader() -> None:
+            try:
+                for raw in proc.stdout:  # type: ignore[union-attr]
+                    line_q.put(raw)
+            finally:
+                line_q.put(None)
+
+        t = threading.Thread(target=_reader, daemon=True)
+        t.start()
+
+        out_lines: list[str] = []
+        tool_calls = 0
+        deadline = time.monotonic() + self.config.executor.timeout_seconds
+
+        while True:
+            if self.stop_event is not None and self.stop_event.is_set():
+                kill_process_tree(proc)
+                raise PlannerError("Planner đã được dừng theo yêu cầu người dùng.")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                kill_process_tree(proc)
+                raise PlannerError(f"Planner `agy` quá thời gian {self.config.executor.timeout_seconds}s.")
+            try:
+                item = line_q.get(timeout=min(0.5, remaining))
+            except queue.Empty:
+                if proc.poll() is not None and not t.is_alive():
+                    break
+                continue
+            if item is None:
+                break
+
+            line = item.strip()
+            if not line:
+                continue
+            out_lines.append(line)
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(ev, dict):
+                continue
+
+            tc = _extract_tool_call(ev)
+            if tc is not None:
+                tool_calls += 1
+                self._emit("warn", f"Planner đang gọi tool `{tc[0]}` ({tool_calls}/3)...")
+                if tool_calls > 3:
+                    kill_process_tree(proc)
+                    raise PlannerError(
+                        "Planner cố gọi quá nhiều tool đọc repo thay vì dùng Repo Skeleton Map. Đã ngắt để tiết kiệm token."
+                    )
+
+            step = ev.get("step_update")
+            if isinstance(step, dict) and step.get("state") == "DONE":
+                stype = step.get("step_type")
+                if stype == "agent_response":
+                    self._emit("info", "Planner đã phản hồi xong, đang kiểm tra DAG...")
+
+        proc.wait(timeout=5)
+        stderr_text = proc.stderr.read().strip()
         if proc.returncode != 0:
             raise PlannerError(
-                f"Planner agy invocation failed (exit {proc.returncode}): {proc.stderr.strip() or proc.stdout.strip()}"
+                f"Planner agy invocation failed (exit {proc.returncode}): {stderr_text or '\n'.join(out_lines)}"
             )
-        return proc.stdout
+        return "\n".join(out_lines)
 
     def _call_litellm_planner(self, prompt: str) -> str:
         gw = self.config.gateway
@@ -228,7 +314,10 @@ class Planner:
         return resp.json()["choices"][0]["message"]["content"]
 
     def _build_planner_prompt(self, prd_text: str, repo_map_xml: str, repair_errors: list[str] | None = None) -> str:
+        compact_map = compact_repo_map_for_planner(repo_map_xml)
         base = f"""Bạn là Software Architect lập kế hoạch DAG cho Auto-Prompt Engine.
+QUY TẮC TỐI QUAN TRỌNG: TUYỆT ĐỐI KHÔNG gọi bất kỳ tool nào (`view_file`, `list_dir`, `grep_search`, `run_command`...). Toàn bộ danh sách file và chữ ký code cần thiết đã có sẵn trong `# REPO SKELETON MAP` bên dưới — hãy phân tích và trả về JSON ngay trong 1 lượt duy nhất.
+
 Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON đúng schema `PlanOutput`:
 1. Nếu PRD mơ hồ, thiếu thông số API/DB/UX cốt lõi hoặc mâu thuẫn không thể suy đoán an toàn:
    - Đặt `status = "NEEDS_CLARIFICATION"`, liệt kê tối đa 5 câu hỏi ngắn gọn trong `clarifying_questions`, để `tasks = []`.
@@ -241,7 +330,7 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
 {prd_text}
 
 # REPO SKELETON MAP
-{repo_map_xml}
+{compact_map}
 """
         if repair_errors:
             err_bullets = "\n".join(f"- {e}" for e in repair_errors)

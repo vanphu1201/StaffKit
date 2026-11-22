@@ -141,6 +141,7 @@ class ToolsConfig(BaseModel):
             "dist/**",
             "build/**",
             ".venv/**",
+            ".ui-profile/**",
             "*.lock",
         ]
     )
