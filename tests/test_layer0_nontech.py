@@ -55,6 +55,24 @@ def test_bootstrap_react_offline_fallback_and_existing_stack_detection(tmp_path:
     assert preview == "npm run dev"
 
 
+def test_bootstrap_fullstack_web_creates_real_backend_and_prisma(tmp_path: Path) -> None:
+    fs_dir = tmp_path / "real-shop"
+    res = bootstrap_project(fs_dir, stack="fullstack_web", install_deps=False)
+
+    assert res.stack == "fullstack_web"
+    assert (fs_dir / "server" / "index.ts").is_file()
+    assert (fs_dir / "prisma" / "schema.prisma").is_file()
+    assert (fs_dir / "src" / "lib" / "utils.ts").is_file()
+    assert (fs_dir / "vite.config.ts").is_file()
+    assert (fs_dir / ".env").is_file()
+
+    detected, cmds, _, preview = detect_existing_stack(fs_dir)
+    assert detected == "fullstack_web"
+    assert "npx tsc --noEmit" in cmds
+    assert "npm run build" in cmds
+    assert preview == "npm run dev"
+
+
 def test_interviewer_parses_stream_json_for_interview_and_spec(tmp_path: Path) -> None:
     cfg = EngineConfig()
     cfg.project.target_repo = str(tmp_path)

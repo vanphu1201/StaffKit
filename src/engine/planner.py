@@ -12,19 +12,23 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import httpx
 
 from engine.bridges.agy_cli_executor import (
+    TextDeltaBuffer,
+    _extract_text_delta,
     _extract_tool_call,
+    _extract_usage_from_event,
     build_agy_command,
+    emit_trace,
     encode_stream_user_message,
     kill_process_tree,
 )
 from engine.database import StateDB
 from engine.indexer import RepoIndexer, compact_repo_map_for_planner, list_real_files
-from engine.models import EngineConfig, PlanOutput, TaskSpec, inline_json_schema, normalize_posix_path
+from engine.models import EngineConfig, PlanOutput, TaskSpec, TokenUsage, inline_json_schema, normalize_posix_path
 
 JSON_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
 
@@ -178,6 +182,7 @@ class Planner:
         llm_caller: Callable[[str, Path], str] | None = None,
         on_event: Callable[[str, str], None] | None = None,
         stop_event: threading.Event | None = None,
+        on_trace: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.config = config
         self.db = db
@@ -185,21 +190,45 @@ class Planner:
         self._llm_caller = llm_caller
         self.on_event = on_event
         self.stop_event = stop_event
+        self.on_trace = on_trace
 
     def _emit(self, level: str, message: str) -> None:
         if self.on_event is not None:
             self.on_event(level, message)
 
     def _call_llm(self, prompt: str, schema_path: Path) -> str:
+        tier = self.config.agy.tiers.get("planner")
+        model = tier.model if tier else ""
+        effort = tier.effort if tier else "high"
+        used_model = model or "agy-default"
+
+        emit_trace(
+            self.on_trace,
+            phase="planner",
+            kind="prompt_sent",
+            title="Planner Prompt → Antigravity",
+            content=prompt,
+            model=used_model,
+            effort=effort,
+        )
+
         if self._llm_caller is not None:
-            return self._llm_caller(prompt, schema_path)
+            raw_mock = self._llm_caller(prompt, schema_path)
+            emit_trace(
+                self.on_trace,
+                phase="planner",
+                kind="response_done",
+                title="OK",
+                content=raw_mock[:500],
+                model=used_model,
+                effort=effort,
+            )
+            return raw_mock
 
         if self.config.executor.mode in ("aider", "opencode") and self.config.gateway is not None:
             return self._call_litellm_planner(prompt)
 
-        tier = self.config.agy.tiers.get("planner")
-        model = tier.model if tier else ""
-        effort = tier.effort if tier else "high"
+        start = time.monotonic()
         cmd = build_agy_command(
             self.config,
             model,
@@ -244,14 +273,18 @@ class Planner:
         out_lines: list[str] = []
         tool_calls = 0
         seen_tool_steps: set[int] = set()
+        latest_usage = TokenUsage()
+        delta_buf = TextDeltaBuffer(self.on_trace, phase="planner", model=used_model, effort=effort)
         deadline = time.monotonic() + self.config.executor.timeout_seconds
 
         while True:
             if self.stop_event is not None and self.stop_event.is_set():
+                delta_buf.flush()
                 kill_process_tree(proc)
                 raise PlannerError("Planner đã được dừng theo yêu cầu người dùng.")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                delta_buf.flush()
                 kill_process_tree(proc)
                 raise PlannerError(f"Planner `agy` quá thời gian {self.config.executor.timeout_seconds}s.")
             try:
@@ -259,6 +292,7 @@ class Planner:
             except queue.Empty:
                 if proc.poll() is not None and not t.is_alive():
                     break
+                delta_buf.flush()
                 continue
             if item is None:
                 break
@@ -274,6 +308,13 @@ class Planner:
             if not isinstance(ev, dict):
                 continue
 
+            usage = _extract_usage_from_event(ev)
+            if usage is not None:
+                latest_usage = usage
+            delta = _extract_text_delta(ev)
+            if delta:
+                delta_buf.push(delta)
+
             tc = _extract_tool_call(ev)
             if tc is not None:
                 step_obj = ev.get("step_update")
@@ -282,6 +323,16 @@ class Planner:
                     if isinstance(step_idx, int):
                         seen_tool_steps.add(step_idx)
                     tool_calls += 1
+                    delta_buf.flush()
+                    emit_trace(
+                        self.on_trace,
+                        phase="planner",
+                        kind="tool_call",
+                        title=tc[0],
+                        content=json.dumps(tc[1], ensure_ascii=False)[:600],
+                        model=used_model,
+                        effort=effort,
+                    )
                     self._emit("warn", f"Planner đang gọi tool `{tc[0]}` ({tool_calls}/3)...")
                     if tool_calls > 3:
                         kill_process_tree(proc)
@@ -296,11 +347,33 @@ class Planner:
                     self._emit("info", "Planner đã phản hồi xong, đang kiểm tra DAG...")
 
         proc.wait(timeout=5)
+        delta_buf.flush()
         stderr_text = proc.stderr.read().strip()
+        duration = round(time.monotonic() - start, 3)
         if proc.returncode != 0:
-            raise PlannerError(
-                f"Planner agy invocation failed (exit {proc.returncode}): {stderr_text or '\n'.join(out_lines)}"
+            err = stderr_text or "\n".join(out_lines)
+            emit_trace(
+                self.on_trace,
+                phase="planner",
+                kind="response_done",
+                title="ERROR",
+                content=err[:500],
+                model=used_model,
+                effort=effort,
+                meta={"usage": latest_usage.model_dump(), "duration_sec": duration, "verdict": "VERIFY_FAIL"},
             )
+            raise PlannerError(f"Planner agy invocation failed (exit {proc.returncode}): {err}")
+
+        emit_trace(
+            self.on_trace,
+            phase="planner",
+            kind="response_done",
+            title="OK",
+            content=f"Planner hoàn tất trong {duration}s",
+            model=used_model,
+            effort=effort,
+            meta={"usage": latest_usage.model_dump(), "duration_sec": duration, "verdict": "OK"},
+        )
         return "\n".join(out_lines)
 
     def _call_litellm_planner(self, prompt: str) -> str:
@@ -334,6 +407,8 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
    - Đặt `status = "READY"`, chia thành các Atomic Task nhỏ gọn (`len(allowed_write_files) <= {self.config.limits.max_files_per_task}`).
    - Gán đúng `complexity` (`low` | `medium` | `high`), `protected_test_files` (không trùng `allowed_write_files`), `needs_lsp_mcp`, `needs_docs_mcp`, và mảng `verify_commands: list[str]` (từng lệnh đơn, KHÔNG ghép `&&`).
    - Tuyệt đối KHÔNG bịa đường dẫn file không có trong repo (trừ file khai báo trong `create_new_files`).
+   - QUY TẮC SẢN PHẨM THẬT (KHÔNG DEMO): Không thiết kế task tạo dữ liệu/tài khoản giả lập (`@demo.vn`, "Đăng nhập nhanh Demo"). Với web có người dùng/sản phẩm/đơn hàng, ưu tiên Backend API + Database thật (Prisma/SQLite trong `prisma/schema.prisma`, `server/...`) và tài nguyên thật.
+   - NẾU 1 TASK CẦN THÔNG TIN/TÀI NGUYÊN THẬT TỪ NGƯỜI DÙNG (tên shop, SĐT/Zalo, API key, đường dẫn ảnh thực tế hoặc model 3D `.glb`/`.gltf`), hãy ghi 1–3 câu hỏi cụ thể vào `user_questions` của task đó để hệ thống hỏi lại người dùng trước khi code task.
 
 # PRD
 {prd_text}
@@ -454,6 +529,7 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
                     needs_docs_mcp=bool(item.get("needs_docs_mcp", False)),
                     needs_lsp_mcp=bool(item.get("needs_lsp_mcp", False)),
                     constraints=item.get("constraints", []),
+                    user_questions=item.get("user_questions", []),
                     verify_commands=v_cmds or [],
                 )
             )

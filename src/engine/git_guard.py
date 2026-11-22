@@ -7,7 +7,7 @@ import re
 import subprocess
 from pathlib import Path, PurePosixPath
 
-from engine.models import normalize_posix_path
+from engine.models import GuardsConfig, normalize_posix_path
 
 ASSERTION_PATTERN = re.compile(
     r"\bexpect\s*\(|\bassert\b|\bassertEqual\b|\bassertRaises\b|\btoThrow\s*\(|\btoEqual\s*\(|\btoBe\s*\(|pytest\.raises"
@@ -57,12 +57,24 @@ def is_test_file(rel_path: str) -> bool:
 class GitGuard:
     """Deterministic Git guardrails executing strictly inside target_repo."""
 
-    def __init__(self, repo_path: Path, ignore_artifacts: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        repo_path: Path,
+        ignore_artifacts: list[str] | None = None,
+        forbid_demo_patterns: list[str] | None = None,
+        enforce_production_only: bool = True,
+    ) -> None:
         self.repo_path = repo_path.resolve()
         artifacts = list(ignore_artifacts or [])
         if ".auto-engine/**" not in artifacts:
             artifacts.insert(0, ".auto-engine/**")
         self.ignore_artifacts = artifacts
+        self.enforce_production_only = enforce_production_only
+        self.forbid_demo_patterns = (
+            list(GuardsConfig().forbid_demo_patterns)
+            if forbid_demo_patterns is None
+            else list(forbid_demo_patterns)
+        )
 
     def _run_git(self, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
         proc = subprocess.run(
@@ -210,12 +222,13 @@ class GitGuard:
         rel_path: str,
         lines: list[str],
         compiled_patterns: list[tuple[str, re.Pattern[str]]],
+        prefix: str = "matches forbidden pattern",
     ) -> list[str]:
         hits: list[str] = []
         for idx, line in enumerate(lines, start=1):
             for raw_pat, regex in compiled_patterns:
                 if regex.search(line):
-                    hits.append(f"{rel_path}:{idx} matches forbidden pattern `{raw_pat}`: {line.strip()}")
+                    hits.append(f"{rel_path}:{idx} {prefix} `{raw_pat}`: {line.strip()}")
         return hits
 
     def check_diff_sanity(
@@ -223,9 +236,14 @@ class GitGuard:
         create_new_files: list[str],
         forbid_patterns: list[str],
         forbid_assertion_deletion: bool = True,
+        forbid_demo_patterns: list[str] | None = None,
+        enforce_production_only: bool | None = None,
     ) -> tuple[bool, list[str]]:
-        """Detect anti-test-gaming patterns in git diff + untracked files and net deleted assertions."""
+        """Detect anti-test-gaming patterns, demo/mock placeholders, and net deleted assertions."""
         compiled = [(pat, re.compile(pat)) for pat in forbid_patterns]
+        prod_only = self.enforce_production_only if enforce_production_only is None else enforce_production_only
+        raw_demo = self.forbid_demo_patterns if forbid_demo_patterns is None else forbid_demo_patterns
+        compiled_demo = [(pat, re.compile(pat, re.IGNORECASE)) for pat in (raw_demo if prod_only else [])]
         violations: list[str] = []
 
         # 1. Scan tracked diff (+ added lines and - deleted assertions in test files).
@@ -250,6 +268,11 @@ class GitGuard:
                         violations.append(
                             f"{current_file} added forbidden `{raw_pat}`: {content.strip()}"
                         )
+                for raw_pat, regex in compiled_demo:
+                    if regex.search(content):
+                        violations.append(
+                            f"{current_file} Production-only violation (demo/mock pattern `{raw_pat}`): {content.strip()}"
+                        )
                 if forbid_assertion_deletion and is_test_file(current_file) and ASSERTION_PATTERN.search(content):
                     added_assertions[current_file] = added_assertions.get(current_file, 0) + 1
             elif raw_line.startswith("-"):
@@ -273,7 +296,17 @@ class GitGuard:
             full_path = self.repo_path / rel_path
             if full_path.is_file():
                 text = full_path.read_text(encoding="utf-8", errors="replace")
-                violations.extend(self._scan_lines_for_patterns(rel_path, text.splitlines(), compiled))
+                lines = text.splitlines()
+                violations.extend(self._scan_lines_for_patterns(rel_path, lines, compiled))
+                if compiled_demo:
+                    violations.extend(
+                        self._scan_lines_for_patterns(
+                            rel_path,
+                            lines,
+                            compiled_demo,
+                            prefix="Production-only violation (demo/mock pattern",
+                        )
+                    )
 
         return len(violations) == 0, violations
 

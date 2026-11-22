@@ -325,3 +325,61 @@ def test_scenario_7_ignore_artifacts_across_retries(tmp_path: Path) -> None:
     res = orch.run_sprint()
     assert res["summary"]["counts"]["DONE"] == 1
     assert res["summary"]["verdicts"].get("SCOPE_VIOLATION", 0) == 0
+
+
+def test_orchestrator_mid_sprint_hitl_saves_answers_and_injects_into_prompt(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    cfg = _make_config(repo)
+    db = StateDB(cfg.state_db_path)
+    guard = GitGuard(repo, ignore_artifacts=cfg.guards.ignore_artifacts)
+    verifier = Verifier(cfg, guard)
+    compiler = PromptCompiler(cfg)
+
+    t1 = TaskSpec(
+        task_id="T-HITL",
+        title="Configure real brand & 3D assets",
+        complexity="low",
+        objective="Write config values from user",
+        allowed_write_files=["src/base.py"],
+        user_questions=["So dien thoai Zalo that cua shop la gi?", "Duong dan file model 3D .glb?"],
+        verify_commands=["python -c \"import src.base; assert src.base.VALUE == 7\""],
+    )
+    db.replace_plan([t1], plan_hash="p-hitl", approved=True)
+
+    captured_prompts: list[str] = []
+    traces: list[dict] = []
+
+    class HitlExec:
+        def execute(self, prompt: str, task: TaskSpec, model: str, effort: str) -> ExecutionResult:
+            captured_prompts.append(prompt)
+            (repo / "src" / "base.py").write_text("VALUE = 7\n", encoding="utf-8")
+            return ExecutionResult(success=True, model_used=model, effort_used=effort)
+
+    def _ask_user(task_id: str, title: str, questions: list[str]) -> dict[str, str]:
+        assert task_id == "T-HITL"
+        assert len(questions) == 2
+        return {
+            questions[0]: "0988777666",
+            questions[1]: "C:/assets/shirt.glb",
+        }
+
+    orch = Orchestrator(
+        cfg,
+        db,
+        guard,
+        verifier,
+        compiler,
+        executor=HitlExec(),
+        on_trace=traces.append,
+        ask_user=_ask_user,
+    )
+    res = orch.run_sprint()
+    assert res["summary"]["counts"]["DONE"] == 1
+    assert "0988777666" in captured_prompts[0]
+    assert "C:/assets/shirt.glb" in captured_prompts[0]
+    assert (repo / ".auto-engine" / "user_answers.json").is_file()
+    trace_kinds = [t["kind"] for t in traces]
+    assert "user_question" in trace_kinds
+    assert "user_answer" in trace_kinds
+    assert "verify_result" in trace_kinds

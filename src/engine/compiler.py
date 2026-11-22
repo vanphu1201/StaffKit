@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from engine.indexer import extract_file_skeletons
@@ -36,6 +37,11 @@ class PromptCompiler:
             "- CHỈ sửa code theo đặc tả rồi kết thúc ngay. TUYỆT ĐỐI KHÔNG tự chạy lệnh test, build, typecheck hay lint bên trong phiên (hệ thống bên ngoài sẽ tự chạy verify và trả log rút gọn nếu cần).",
             "- KHÔNG lách luật bằng `@ts-ignore`, `eslint-disable`, `# type: ignore`, `# noqa`, `.skip()`, `.only()`, hoặc xóa bỏ assertion trong test.",
             "- Ưu tiên sửa gọn trực tiếp (targeted edit), không viết lại phần code không liên quan.",
+            "",
+            "# PRODUCTION & UI QUALITY RULES",
+            "- KHÔNG tạo dữ liệu, tài khoản hay nút chuyển nhanh giả lập (`demo.vn`, \"Đăng nhập nhanh Demo\", \"Chuyển nhanh bản demo\", \"Kênh liên hệ Demo\"). Mọi chức năng lưu trữ phải dùng Backend API + Database thật khi dự án có server/Prisma.",
+            "- Giao diện chuyên nghiệp, tiết chế: KHÔNG dùng icon lấp lánh AI hay gradient tím-xanh đại trà; dùng bố cục editorial gọn gàng, tương phản rõ, các khung 3D/canvas phải đặt chiều cao viewport rõ ràng (vd `min-h-[600px]` / `h-[calc(100vh-4rem)]`).",
+            "- Tài nguyên thật: TUYỆT ĐỐI KHÔNG tự ghép hình người hoặc quần áo kiểu hoạt hình từ khối hộp/hình trụ; hãy hỗ trợ ảnh chụp thực tế hoặc nạp file model `.glb`/`.gltf` thật (kèm hỗ trợ upload/đường dẫn file từ người dùng).",
         ]
 
         shared_rel = self.config.project.shared_rules_file.strip()
@@ -150,6 +156,19 @@ class PromptCompiler:
 
         return "\n\n".join(parts)
 
+    def _load_user_answers_text(self) -> str:
+        ans_path = self.config.auto_engine_dir / "user_answers.json"
+        if not ans_path.is_file():
+            return ""
+        try:
+            data = json.loads(ans_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return ""
+        if not isinstance(data, dict) or not data:
+            return ""
+        lines = [f"- {k}: {v}" for k, v in data.items() if str(v).strip()]
+        return "\n".join(lines)
+
     def _assemble_prompt(
         self,
         static_prefix: str,
@@ -157,6 +176,7 @@ class PromptCompiler:
         readonly_text: str,
         targets_text: str,
         feedback_text: str,
+        user_answers_text: str = "",
     ) -> str:
         verify_cmds = task.verify_commands or self.config.executor.default_verify_commands
         payload_lines = [
@@ -177,6 +197,8 @@ class PromptCompiler:
             "# TARGET FILES TO MODIFY",
             targets_text,
         ]
+        if user_answers_text:
+            payload_lines.extend(["", "# USER ANSWERS & REAL ASSETS", user_answers_text])
         if feedback_text:
             payload_lines.extend(["", feedback_text])
         return f"{static_prefix}\n\n" + "\n".join(payload_lines)
@@ -198,6 +220,7 @@ class PromptCompiler:
 
         static_prefix = self.build_static_prefix()
         targets_text, all_inlined = self._format_target_files(task, skeletons)
+        user_answers_text = self._load_user_answers_text()
         feedback_text = self._format_retry_feedback(
             attempt=attempt,
             last_error=last_error,
@@ -211,7 +234,14 @@ class PromptCompiler:
             skeletons,
             compact_mode=False,
         )
-        prompt = self._assemble_prompt(static_prefix, task, readonly_text, targets_text, feedback_text)
+        prompt = self._assemble_prompt(
+            static_prefix,
+            task,
+            readonly_text,
+            targets_text,
+            feedback_text,
+            user_answers_text=user_answers_text,
+        )
         tokens = estimate_tokens(prompt)
 
         cap = self.config.limits.max_prompt_tokens_per_call
@@ -221,7 +251,14 @@ class PromptCompiler:
                 skeletons,
                 compact_mode=True,
             )
-            prompt = self._assemble_prompt(static_prefix, task, compact_readonly, targets_text, feedback_text)
+            prompt = self._assemble_prompt(
+                static_prefix,
+                task,
+                compact_readonly,
+                targets_text,
+                feedback_text,
+                user_answers_text=user_answers_text,
+            )
             tokens = estimate_tokens(prompt)
 
         if tokens > cap:

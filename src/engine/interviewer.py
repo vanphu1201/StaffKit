@@ -8,15 +8,19 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from engine.bridges.agy_cli_executor import (
+    TextDeltaBuffer,
+    _extract_text_delta,
     _extract_tool_call,
+    _extract_usage_from_event,
     build_agy_command,
+    emit_trace,
     encode_stream_user_message,
     kill_process_tree,
 )
-from engine.models import EngineConfig, InterviewOutput, ProductSpec, StackType, inline_json_schema
+from engine.models import EngineConfig, InterviewOutput, ProductSpec, StackType, TokenUsage, inline_json_schema
 from engine.planner import _extract_plan_json_payload
 
 
@@ -33,28 +37,60 @@ class ProductInterviewer:
         llm_caller: Callable[[str, Path, str], str] | None = None,
         on_event: Callable[[str, str], None] | None = None,
         stop_event: threading.Event | None = None,
+        on_trace: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.config = config
         self._llm_caller = llm_caller
         self.on_event = on_event
         self.stop_event = stop_event
+        self.on_trace = on_trace
 
     def _emit(self, level: str, message: str) -> None:
         if self.on_event is not None:
             self.on_event(level, message)
 
-    def _call_agy_no_tools(self, prompt: str, schema_obj: dict, schema_name: str, effort: str) -> str:
+    def _call_agy_no_tools(
+        self,
+        prompt: str,
+        schema_obj: dict,
+        schema_name: str,
+        effort: str,
+        *,
+        phase_label: str = "Interviewer Prompt → Antigravity",
+    ) -> str:
         schema_dir = self.config.auto_engine_dir if self.config.target_repo_path.is_dir() else Path.cwd() / ".auto-engine"
         schema_dir.mkdir(parents=True, exist_ok=True)
         schema_path = schema_dir / schema_name
         schema_path.write_text(json.dumps(inline_json_schema(schema_obj), indent=2), encoding="utf-8")
 
-        if self._llm_caller is not None:
-            return self._llm_caller(prompt, schema_path, effort)
-
-        cwd = self.config.target_repo_path if self.config.target_repo_path.is_dir() else Path.cwd()
         tier = self.config.agy.tiers.get("planner")
         model = tier.model if tier else ""
+        used_model = model or "agy-default"
+        emit_trace(
+            self.on_trace,
+            phase="interviewer",
+            kind="prompt_sent",
+            title=phase_label,
+            content=prompt,
+            model=used_model,
+            effort=effort,
+        )
+
+        if self._llm_caller is not None:
+            raw_mock = self._llm_caller(prompt, schema_path, effort)
+            emit_trace(
+                self.on_trace,
+                phase="interviewer",
+                kind="response_done",
+                title="OK",
+                content=raw_mock[:500],
+                model=used_model,
+                effort=effort,
+            )
+            return raw_mock
+
+        start = time.monotonic()
+        cwd = self.config.target_repo_path if self.config.target_repo_path.is_dir() else Path.cwd()
         cmd = build_agy_command(
             self.config,
             model,
@@ -95,14 +131,18 @@ class ProductInterviewer:
         threading.Thread(target=_reader, daemon=True).start()
 
         out_lines: list[str] = []
+        latest_usage = TokenUsage()
+        delta_buf = TextDeltaBuffer(self.on_trace, phase="interviewer", model=used_model, effort=effort)
         deadline = time.monotonic() + min(180, self.config.executor.timeout_seconds)
 
         while True:
             if self.stop_event is not None and self.stop_event.is_set():
+                delta_buf.flush()
                 kill_process_tree(proc)
                 raise InterviewerError("Đã dừng phân tích theo yêu cầu người dùng.")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                delta_buf.flush()
                 kill_process_tree(proc)
                 raise InterviewerError("Phân tích ý tưởng quá thời gian cho phép.")
             try:
@@ -110,6 +150,7 @@ class ProductInterviewer:
             except queue.Empty:
                 if proc.poll() is not None:
                     break
+                delta_buf.flush()
                 continue
             if item is None:
                 break
@@ -121,20 +162,52 @@ class ProductInterviewer:
                 ev = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(ev, dict) and _extract_tool_call(ev) is not None:
-                kill_process_tree(proc)
-                raise InterviewerError("Interviewer đã cố gọi tool không cần thiết; đã ngắt để tiết kiệm token.")
+            if isinstance(ev, dict):
+                usage = _extract_usage_from_event(ev)
+                if usage is not None:
+                    latest_usage = usage
+                delta = _extract_text_delta(ev)
+                if delta:
+                    delta_buf.push(delta)
+                if _extract_tool_call(ev) is not None:
+                    delta_buf.flush()
+                    kill_process_tree(proc)
+                    raise InterviewerError("Interviewer đã cố gọi tool không cần thiết; đã ngắt để tiết kiệm token.")
 
         proc.wait(timeout=5)
+        delta_buf.flush()
         stderr_text = proc.stderr.read().strip()
+        duration = round(time.monotonic() - start, 3)
         if proc.returncode != 0:
-            raise InterviewerError(f"agy failed (exit {proc.returncode}): {stderr_text or '\n'.join(out_lines)}")
+            err = stderr_text or "\n".join(out_lines)
+            emit_trace(
+                self.on_trace,
+                phase="interviewer",
+                kind="response_done",
+                title="ERROR",
+                content=err[:500],
+                model=used_model,
+                effort=effort,
+                meta={"usage": latest_usage.model_dump(), "duration_sec": duration, "verdict": "VERIFY_FAIL"},
+            )
+            raise InterviewerError(f"agy failed (exit {proc.returncode}): {err}")
+
+        emit_trace(
+            self.on_trace,
+            phase="interviewer",
+            kind="response_done",
+            title="OK",
+            content=f"Hoàn tất phân tích trong {duration}s",
+            model=used_model,
+            effort=effort,
+            meta={"usage": latest_usage.model_dump(), "duration_sec": duration, "verdict": "OK"},
+        )
         return "\n".join(out_lines)
 
     def generate_interview(self, idea: str, stack_hint: StackType = "auto") -> InterviewOutput:
         """Analyze a vague idea and emit 3-5 plain-Vietnamese non-tech clarifying questions."""
         self._emit("info", "Đang phân tích ý tưởng & tạo 3-5 câu hỏi làm rõ (tiếng Việt dễ hiểu)...")
-        prompt = f"""Bạn là chuyên gia tư vấn sản phẩm công nghệ cho người KHÔNG rành kỹ thuật.
+        prompt = f"""Bạn là chuyên gia tư vấn sản phẩm công nghệ cho người KHÔNG rành kỹ thuật, luôn hướng tới SẢN PHẨM CHẠY THẬT (production-ready, không làm bản demo giả lập).
 QUY TẮC BẮT BUỘC: TUYỆT ĐỐI KHÔNG gọi bất kỳ tool nào (`view_file`, `list_dir`, `run_command`...). Chỉ trả về JSON đúng schema `InterviewOutput` trong 1 lượt duy nhất.
 
 Người dùng có ý tưởng sau:
@@ -142,26 +215,30 @@ Người dùng có ý tưởng sau:
 Gợi ý loại sản phẩm: "{stack_hint}"
 
 Yêu cầu:
-1. Chọn `recommended_stack` là `"web_react"` (nếu là website/dashboard/quản lý) hoặc `"python_app"` (nếu là tool tự động hóa/AI script/CLI/xử lý file).
+1. Chọn `recommended_stack`:
+   - `"fullstack_web"` nếu website/app có lưu dữ liệu, người dùng, sản phẩm, đơn hàng, giỏ hàng hoặc trang quản trị (cần Backend API + Database thật).
+   - `"web_react"` CHỈ khi là website tĩnh / công cụ thuần trình duyệt không cần lưu dữ liệu nhiều người dùng.
+   - `"python_app"` nếu là tool tự động hóa / AI script / CLI / xử lý file.
 2. Đặt `suggested_project_name` ngắn gọn viết thường không dấu nối bằng gạch ngang (vd: `ai-hr-manager`).
-3. Viết `product_summary_vi`: 1-2 câu mô tả sản phẩm bằng tiếng Việt bình dân.
-4. Sinh 3 đến 5 câu hỏi ngắn gọn trong `questions` hoàn toàn bằng tiếng Việt dễ hiểu (KHÔNG nhắc tên framework, database hay code; tập trung vào nhu cầu thật: người dùng cần màn hình gì, lưu trữ/xuất file gì, có cần đăng nhập hay tích hợp API AI nào, giá trị mặc định hợp lý `default_answer`). Mỗi câu có 2-4 `options` gợi ý để người dùng bấm chọn nhanh.
+3. Viết `product_summary_vi`: 1-2 câu mô tả sản phẩm thật bằng tiếng Việt bình dân.
+4. Sinh 3 đến 5 câu hỏi ngắn gọn trong `questions` hoàn toàn bằng tiếng Việt dễ hiểu (KHÔNG hỏi chuyện code, tập trung vào thông tin thật cần để chạy sản phẩm: tên thương hiệu/SĐT/Zalo liên hệ thật, nhu cầu lưu trữ dữ liệu/đăng nhập thật, nguồn ảnh chụp hoặc file 3D `.glb` sản phẩm thật thay vì hình khối hoạt hình, giá trị mặc định `default_answer`). Mỗi câu có 2-4 `options` gợi ý để người dùng bấm chọn nhanh.
 """
         raw = self._call_agy_no_tools(
             prompt,
             InterviewOutput.model_json_schema(),
             "interview_schema.json",
             effort="low",
+            phase_label="Phân tích ý tưởng → Antigravity",
         )
         out = InterviewOutput.model_validate_json(_extract_plan_json_payload(raw))
         out.questions = out.questions[:5]
         return out
 
     def synthesize_spec(self, idea: str, answers: dict[str, str], stack: str) -> ProductSpec:
-        """Turn idea + user answers into plain-Vietnamese features and a crisp OpenSpec PRD."""
+        """Turn idea + user answers into plain-Vietnamese features and a production OpenSpec PRD."""
         self._emit("info", "Đang tổng hợp danh sách tính năng & bản đặc tả PRD chuẩn...")
         qa_lines = "\n".join(f"- {k}: {v}" for k, v in answers.items()) or "- (Người dùng giữ mặc định hợp lý)"
-        prompt = f"""Bạn là Product Manager & Software Architect.
+        prompt = f"""Bạn là Product Manager & Software Architect xây dựng SẢN PHẨM THẬT (KHÔNG làm bản demo hay dữ liệu giả).
 QUY TẮC BẮT BUỘC: TUYỆT ĐỐI KHÔNG gọi bất kỳ tool nào. Chỉ trả về JSON đúng schema `ProductSpec` trong 1 lượt duy nhất.
 
 Ý tưởng gốc: "{idea.strip()}"
@@ -170,18 +247,21 @@ Câu trả lời của người dùng:
 {qa_lines}
 
 Yêu cầu:
-1. `product_title`: Tên sản phẩm tiếng Việt ngắn gọn.
-2. `features_vi`: 4–7 gạch đầu dòng mô tả tính năng cốt lõi bằng tiếng Việt đời thường để người phi công nghệ đọc và bấm duyệt.
-3. `prd_markdown`: Tài liệu PRD ngắn gọn, rõ ràng (Markdown) gồm:
-   - Mục tiêu sản phẩm
-   - Các chức năng & hành vi cụ thể cần xây dựng (chia vừa tầm 2–5 atomic tasks, ưu tiên làm sản phẩm chạy thật sạch sẽ, có giao diện/đầu ra rõ ràng, không dùng tính năng thừa)
-   - Tiêu chí kiểm thử tự động (chạy được với `pytest` nếu là `python_app` hoặc `tsc --noEmit` + `npm run build` nếu là `web_react`)
-   - Lưu ý: nếu tính năng cần gọi LLM/API ngoài mà chưa có key, thiết kế hỗ trợ chế độ Demo/Mock hoạt động ngay + đọc key từ biến môi trường.
+1. `product_title`: Tên sản phẩm tiếng Việt ngắn gọn, chuyên nghiệp.
+2. `features_vi`: 4–7 gạch đầu dòng mô tả tính năng dùng thật bằng tiếng Việt đời thường để người dùng đọc và bấm duyệt.
+3. `prd_markdown`: Tài liệu PRD chuẩn sản phẩm thật (Markdown) gồm:
+   - Mục tiêu sản phẩm & thông tin thương hiệu/liên hệ thật từ câu trả lời người dùng
+   - Kiến trúc dữ liệu & chức năng thật:
+     + Nếu `stack` là `fullstack_web`: bắt buộc có Backend API (`/api/...`), Database thật (Prisma + SQLite/PostgreSQL), xác thực tài khoản thật (mã hóa bcrypt + JWT, đăng ký/đăng nhập chuẩn — CẤM nút "Đăng nhập nhanh Demo", CẤM `@demo.vn`, CẤM giả lập dữ liệu bằng mảng hardcode hoặc `localStorage` làm DB chính).
+     + Tài nguyên hình ảnh / 3D thật: KHÔNG dùng nhân vật/đồ vật ghép khối hộp/hình trụ kiểu hoạt hình; hỗ trợ nạp ảnh sản phẩm thực tế hoặc file model 3D `.glb`/`.gltf` thật (kèm tính năng tải lên trong trang quản trị).
+     + Giao diện editorial chuyên nghiệp: bố cục gọn, tương phản rõ, KHÔNG dùng icon lấp lánh AI hay gradient tím-xanh đại trà, mọi vùng hiển thị chính hoặc canvas 3D phải có chiều cao viewport cố định không bị co rúm.
+   - Tiêu chí kiểm thử tự động (`npx tsc --noEmit`, `npm run build`, `npm run db:push` nếu có Prisma; hoặc `pytest` nếu là `python_app`).
 """
         raw = self._call_agy_no_tools(
             prompt,
             ProductSpec.model_json_schema(),
             "product_spec_schema.json",
             effort="medium",
+            phase_label="Tổng hợp đặc tả PRD → Antigravity",
         )
         return ProductSpec.model_validate_json(_extract_plan_json_payload(raw))

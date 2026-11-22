@@ -173,7 +173,12 @@ def approve(config_path: Path = typer.Option(Path("config.yaml"), "--config")) -
 
 def _build_orchestrator(cfg: EngineConfig) -> Orchestrator:
     db = StateDB(cfg.state_db_path)
-    guard = GitGuard(cfg.target_repo_path, ignore_artifacts=cfg.guards.ignore_artifacts)
+    guard = GitGuard(
+        cfg.target_repo_path,
+        ignore_artifacts=cfg.guards.ignore_artifacts,
+        forbid_demo_patterns=cfg.guards.forbid_demo_patterns,
+        enforce_production_only=cfg.guards.enforce_production_only,
+    )
     verifier = Verifier(cfg, guard)
     compiler = PromptCompiler(cfg)
     return Orchestrator(

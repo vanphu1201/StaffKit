@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import os
 import threading
-from typing import Callable, Protocol
+from pathlib import Path
+from typing import Any, Callable, Protocol
 
 import httpx
 
-from engine.bridges.agy_cli_executor import AgyCliExecutor
+from engine.bridges.agy_cli_executor import AgyCliExecutor, emit_trace
 from engine.bridges.agy_sdk_executor import AgySdkExecutor
 from engine.bridges.cli_executor import CliFallbackExecutor
 from engine.compiler import PromptCompiler, PromptTooLargeError
@@ -28,11 +30,14 @@ class PlanNotApprovedError(RuntimeError):
     """Raised when attempting to execute a sprint before Plan Approval Gate."""
 
 
-def build_executor(config: EngineConfig) -> ExecutorProtocol:
+def build_executor(
+    config: EngineConfig,
+    on_trace: Callable[[dict[str, Any]], None] | None = None,
+) -> ExecutorProtocol:
     """Instantiate configured execution bridge."""
     mode = config.executor.mode
     if mode == "agy_cli":
-        return AgyCliExecutor(config)
+        return AgyCliExecutor(config, on_trace=on_trace)
     if mode == "agy_sdk":
         return AgySdkExecutor(config)
     if mode in ("aider", "opencode"):
@@ -53,15 +58,45 @@ class Orchestrator:
         executor: ExecutorProtocol | None = None,
         on_event: Callable[[str, str], None] | None = None,
         stop_event: threading.Event | None = None,
+        on_trace: Callable[[dict[str, Any]], None] | None = None,
+        ask_user: Callable[[str, str, list[str]], dict[str, str] | None] | None = None,
     ) -> None:
         self.config = config
         self.db = db
         self.guard = guard
         self.verifier = verifier
         self.compiler = compiler
-        self.executor = executor or build_executor(config)
+        self.on_trace = on_trace
+        self.ask_user = ask_user
+        self.executor = executor or build_executor(config, on_trace=on_trace)
         self.on_event = on_event
         self.stop_event = stop_event
+
+    @property
+    def _user_answers_path(self) -> Path:
+        return self.config.auto_engine_dir / "user_answers.json"
+
+    def _load_user_answers(self) -> dict[str, str]:
+        if not self._user_answers_path.is_file():
+            return {}
+        try:
+            data = json.loads(self._user_answers_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return {str(k): str(v) for k, v in data.items() if str(v).strip()}
+        except (json.JSONDecodeError, OSError):
+            pass
+        return {}
+
+    def _save_user_answers(self, new_answers: dict[str, str]) -> None:
+        merged = self._load_user_answers()
+        for k, v in new_answers.items():
+            if k.strip() and str(v).strip():
+                merged[k.strip()] = str(v).strip()
+        self.config.auto_engine_dir.mkdir(parents=True, exist_ok=True)
+        self._user_answers_path.write_text(
+            json.dumps(merged, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
     def _emit(self, level: str, message: str) -> None:
         if self.on_event is not None:
@@ -129,6 +164,38 @@ class Orchestrator:
         last_verdict: str | None = None
         force_escalation = False
         task_tokens = 0
+
+        if task.user_questions and self.ask_user is not None:
+            saved_answers = self._load_user_answers()
+            unanswered = [q.strip() for q in task.user_questions if q.strip() and q.strip() not in saved_answers]
+            if unanswered:
+                emit_trace(
+                    self.on_trace,
+                    phase="orchestrator",
+                    kind="user_question",
+                    title=f"[{task.task_id}] Cần bạn cung cấp thông tin thật trước khi code",
+                    content="\n".join(f"- {q}" for q in unanswered),
+                    task_id=task.task_id,
+                    meta={"questions": unanswered},
+                )
+                self._emit("warn", f"[{task.task_id}] Tạm dừng chờ người dùng trả lời {len(unanswered)} câu hỏi...")
+                answers = self.ask_user(task.task_id, task.title, unanswered)
+                if self.stop_event is not None and self.stop_event.is_set():
+                    self.guard.hard_rollback(checkpoint)
+                    self.db.update_task_status(task.task_id, "PENDING", retry_count=0)
+                    return False, True
+                if answers:
+                    clean_answers = {k: str(v).strip() for k, v in answers.items() if str(v).strip()}
+                    if clean_answers:
+                        self._save_user_answers(clean_answers)
+                        emit_trace(
+                            self.on_trace,
+                            phase="orchestrator",
+                            kind="user_answer",
+                            title=f"[{task.task_id}] Đã nhận câu trả lời từ người dùng",
+                            content=json.dumps(clean_answers, ensure_ascii=False),
+                            task_id=task.task_id,
+                        )
 
         for attempt in range(self.config.limits.max_retries_per_task + 1):
             if self.stop_event is not None and self.stop_event.is_set():
@@ -205,6 +272,16 @@ class Orchestrator:
 
             self.db.update_task_status(task.task_id, "VERIFYING")
             verify_res = self.verifier.verify(task)
+            emit_trace(
+                self.on_trace,
+                phase="verifier",
+                kind="verify_result",
+                title=f"[{task.task_id}] Verify: {verify_res.verdict}",
+                content=verify_res.trimmed_error_log or "Scope Guard, Anti-Demo & Verify commands đều PASS.",
+                task_id=task.task_id,
+                attempt=attempt,
+                meta={"passed": verify_res.passed, "verdict": verify_res.verdict},
+            )
 
             if verify_res.passed:
                 self.db.record_run(
@@ -388,6 +465,14 @@ class Orchestrator:
             gate_res = self.verifier.run_commands(self.config.sprint.final_verify_commands)
             final_verify_passed = gate_res.passed
             final_verify_error = gate_res.trimmed_error_log
+            emit_trace(
+                self.on_trace,
+                phase="verifier",
+                kind="verify_result",
+                title=f"[FINAL_GATE] {gate_res.verdict}",
+                content=final_verify_error or "Final Sprint Gate PASS.",
+                meta={"passed": gate_res.passed, "verdict": gate_res.verdict},
+            )
 
         if halted_reason is None and final_verify_passed:
             self._notify_webhook({"event": "SPRINT_DONE", "summary": summary})

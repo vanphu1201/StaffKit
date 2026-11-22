@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, field_validator
 
 Complexity = Literal["low", "medium", "high"]
 Effort = Literal["low", "medium", "high"]
-StackType = Literal["auto", "web_react", "python_app", "existing"]
+StackType = Literal["auto", "fullstack_web", "web_react", "python_app", "existing"]
 ExecutorMode = Literal["agy_cli", "agy_sdk", "mcp_only", "aider", "opencode"]
 TaskStatus = Literal["PENDING", "RUNNING", "VERIFYING", "DONE", "BLOCKED"]
 Verdict = Literal[
@@ -119,9 +119,20 @@ class LimitsConfig(BaseModel):
 
 
 class GuardsConfig(BaseModel):
-    """Zero-token anti-gaming patterns and artifact exclusions."""
+    """Zero-token anti-gaming patterns, anti-demo production rules, and artifact exclusions."""
 
     forbid_test_assertion_deletion: bool = True
+    enforce_production_only: bool = True
+    forbid_demo_patterns: list[str] = Field(
+        default_factory=lambda: [
+            r"khachhang@demo\.vn",
+            r"admin@demo\.vn",
+            r"Đăng nhập nhanh.*Demo",
+            r"Chuyển nhanh bản demo",
+            r"Kênh liên hệ Demo",
+            r"Messenger Demo",
+        ]
+    )
     forbid_diff_patterns: list[str] = Field(
         default_factory=lambda: [
             "@ts-ignore",
@@ -248,6 +259,7 @@ class TaskSpec(BaseModel):
     needs_docs_mcp: bool = False
     needs_lsp_mcp: bool = False
     constraints: list[str] = Field(default_factory=list)
+    user_questions: list[str] = Field(default_factory=list)
     verify_commands: list[str] = Field(default_factory=list)
 
     @field_validator(
@@ -319,7 +331,7 @@ class InterviewQuestion(BaseModel):
 class InterviewOutput(BaseModel):
     """Structured output of Layer 0A ProductInterviewer."""
 
-    recommended_stack: Literal["web_react", "python_app"] = "web_react"
+    recommended_stack: Literal["fullstack_web", "web_react", "python_app"] = "fullstack_web"
     suggested_project_name: str = "my-ai-app"
     product_summary_vi: str = ""
     questions: list[InterviewQuestion] = Field(default_factory=list)

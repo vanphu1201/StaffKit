@@ -219,9 +219,11 @@ class Verifier:
             task.create_new_files,
             self.config.guards.forbid_diff_patterns,
             forbid_assertion_deletion=self.config.guards.forbid_test_assertion_deletion,
+            forbid_demo_patterns=self.config.guards.forbid_demo_patterns,
+            enforce_production_only=self.config.guards.enforce_production_only,
         )
         if not sanity_ok:
-            lines = ["TEST_GAMING: Detected forbidden suppression/skip or assertion deletion:"]
+            lines = ["TEST_GAMING: Detected forbidden suppression/skip, demo/mock placeholder, or assertion deletion:"]
             lines.extend(f"- {hit}" for hit in gaming_hits[: max(1, self.config.limits.max_error_log_lines - 1)])
             msg = "\n".join(lines)
             return VerifyResult(

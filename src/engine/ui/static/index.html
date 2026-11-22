@@ -279,6 +279,69 @@
       z-index: 99;
     }
     code { background: #0b0f14; padding: 1px 5px; border-radius: 4px; font-family: Consolas, monospace; font-size: 12px; }
+
+    .hitl-banner {
+      display: none;
+      background: #171c26;
+      border-bottom: 2px solid var(--yellow);
+      padding: 14px 20px;
+      gap: 10px;
+      flex-direction: column;
+      z-index: 40;
+      max-height: 45vh;
+      overflow-y: auto;
+    }
+    .hitl-banner.active { display: flex; }
+    .trace-box {
+      background: #080b10;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      height: 520px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      font-size: 13px;
+    }
+    .trace-card {
+      background: #101620;
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+    .trace-card.kind-text_delta { border-left-color: #38bdf8; background: #0d1520; }
+    .trace-card.kind-tool_call { border-left-color: #a78bfa; padding: 7px 10px; }
+    .trace-card.kind-response_done { border-left-color: var(--green); }
+    .trace-card.kind-verify_result { border-left-color: var(--yellow); }
+    .trace-card.kind-verify_pass { border-left-color: var(--green); }
+    .trace-card.kind-verify_fail { border-left-color: var(--red); }
+    .trace-card.kind-user_question, .trace-card.kind-user_answer { border-left-color: var(--yellow); background: #19170f; }
+    .trace-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+    .trace-pre {
+      margin: 6px 0 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: Consolas, "Cascadia Code", monospace;
+      font-size: 12px;
+      color: #d1d5db;
+      line-height: 1.45;
+      max-height: 280px;
+      overflow-y: auto;
+      background: #070a0f;
+      padding: 8px;
+      border-radius: 6px;
+      border: 1px solid #1f2937;
+    }
   </style>
 </head>
 <body>
@@ -300,6 +363,18 @@
       <button class="btn sm" onclick="refreshState()">Làm mới</button>
     </div>
   </header>
+
+  <!-- ==================== HỎI NGƯỜI DÙNG GIỮA SPRINT (HITL) ==================== -->
+  <div id="hitlBanner" class="hitl-banner">
+    <div class="row" style="justify-content:space-between;">
+      <div>
+        <span class="badge b-EMPTY_DIFF" id="hitlTaskBadge">TASK</span>
+        <b style="margin-left:8px; color:#fde047;" id="hitlTitle">Antigravity cần bạn cung cấp thêm thông tin thật để tiếp tục</b>
+      </div>
+      <button class="btn success sm" id="btnSubmitHitl" onclick="submitHitlAnswers()">Gửi câu trả lời &amp; Tiếp tục</button>
+    </div>
+    <div id="hitlQuestionsList" style="display:flex; flex-direction:column; gap:8px;"></div>
+  </div>
 
   <!-- ==================== CHẾ ĐỘ ĐƠN GIẢN (NON-TECH WIZARD) ==================== -->
   <div id="simpleContainer" class="wizard-wrap">
@@ -334,7 +409,8 @@
             <span>Loại sản phẩm</span>
             <select id="wizStackHint">
               <option value="auto">Để hệ thống tự chọn phù hợp nhất</option>
-              <option value="web_react">Website / Ứng dụng Web (React)</option>
+              <option value="fullstack_web">Website Full-Stack (Frontend + Backend + Database thật)</option>
+              <option value="web_react">Website giao diện tĩnh (React)</option>
               <option value="python_app">Tool tự động hóa / Script AI (Python)</option>
             </select>
           </label>
@@ -377,6 +453,7 @@
           <label class="field">
             <span>Công nghệ dựng khung (0 token)</span>
             <select id="wizChosenStack">
+              <option value="fullstack_web">Website Full-Stack (React + Express + Prisma/SQLite thật)</option>
               <option value="web_react">Website React + TypeScript (Vite)</option>
               <option value="python_app">Ứng dụng Python + Pytest</option>
             </select>
@@ -410,7 +487,12 @@
         <div id="wizTaskSimpleList" style="display:flex; flex-direction:column; gap:8px; margin-bottom:14px;"></div>
 
         <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">Nhật ký hoạt động trực tiếp:</div>
-        <div id="wizLogBox" class="log-box" style="height:200px; margin-bottom:14px;"></div>
+        <div id="wizLogBox" class="log-box" style="height:170px; margin-bottom:12px;"></div>
+
+        <details style="margin-bottom:14px;">
+          <summary style="cursor:pointer; color:#93c5fd; font-size:12px; font-weight:600;">Xem tương tác trực tiếp Engine ↔ Antigravity (Prompt / Phản hồi / Tool Call)</summary>
+          <div id="wizTraceBox" class="trace-box" style="height:280px; margin-top:8px;"></div>
+        </details>
 
         <div class="row" style="justify-content:space-between;">
           <div class="row">
@@ -430,6 +512,7 @@
   <div id="devContainer" class="layout" style="display:none;">
     <nav>
       <button class="nav-btn active" onclick="switchTab('dashboard', this)">Điều khiển (Dashboard)</button>
+      <button class="nav-btn" onclick="switchTab('live', this)">Tương tác Antigravity (Live)</button>
       <button class="nav-btn" onclick="switchTab('planner', this)">PRD &amp; Kế hoạch (Plan)</button>
       <button class="nav-btn" onclick="switchTab('config', this)">Cấu hình (Settings)</button>
       <button class="nav-btn" onclick="switchTab('runs', this)">Lịch sử chạy (Runs)</button>
@@ -470,6 +553,29 @@
             <button class="btn sm" onclick="clearLogs()">Xóa màn hình log</button>
           </div>
           <div id="logBox" class="log-box"></div>
+        </div>
+      </section>
+
+      <!-- VIEW LIVE: ANTIGRAVITY INTERACTION TRACE -->
+      <section id="view-live" class="view">
+        <div class="card">
+          <div class="row" style="justify-content:space-between; margin-bottom:10px;">
+            <div>
+              <h3 style="margin:0;">Luồng tương tác Realtime: Engine ↔ Antigravity</h3>
+              <div style="color:var(--muted); font-size:12px; margin-top:3px;">Hiển thị toàn bộ Prompt hệ thống gửi vào, phản hồi streaming từ Antigravity, Tool Call và kết quả kiểm thử.</div>
+            </div>
+            <div class="row">
+              <select id="traceFilter" style="width:auto;" onchange="reRenderAllTraces()">
+                <option value="all">Tất cả sự kiện</option>
+                <option value="prompt_sent">Chỉ Prompt gửi vào</option>
+                <option value="text_delta">Chỉ phản hồi Antigravity</option>
+                <option value="tool_call">Chỉ Tool Calls</option>
+                <option value="verify_result">Chỉ Verify / Lỗi</option>
+              </select>
+              <button class="btn sm" onclick="clearTraceBoxes()">Xóa hiển thị</button>
+            </div>
+          </div>
+          <div id="devTraceBox" class="trace-box"></div>
         </div>
       </section>
 
@@ -608,6 +714,7 @@
               <label class="check-label"><input type="checkbox" id="chkUseRtk" /> Dùng `rtk` nén log</label>
               <label class="check-label"><input type="checkbox" id="chkRequireApprove" /> Bắt buộc duyệt Plan</label>
               <label class="check-label"><input type="checkbox" id="chkForbidDelAssert" /> Chặn xóa assertion test</label>
+              <label class="check-label"><input type="checkbox" id="chkEnforceProd" /> Chặn code Demo/Mock giả lập</label>
             </div>
             <button class="btn primary" onclick="saveConfig()">Lưu cấu hình</button>
           </div>
@@ -647,6 +754,17 @@
     let currentAppMode = "simple";
     let localWizardStep = 1;
     let wizardAnswers = {};
+    let lastTraceSeq = 0;
+    let allTraces = [];
+    let refreshTimer = null;
+
+    function scheduleRefreshState(delayMs = 350) {
+      if (refreshTimer) return;
+      refreshTimer = setTimeout(async () => {
+        refreshTimer = null;
+        try { await refreshState(); } catch (_) {}
+      }, delayMs);
+    }
 
     function showToast(msg) {
       const el = document.getElementById("toast");
@@ -689,6 +807,148 @@
     function clearLogs() {
       document.getElementById("logBox").innerHTML = "";
       document.getElementById("wizLogBox").innerHTML = "";
+    }
+
+    function clearTraceBoxes() {
+      allTraces = [];
+      for (const boxId of ["devTraceBox", "wizTraceBox"]) {
+        const box = document.getElementById(boxId);
+        if (box) box.innerHTML = "";
+      }
+    }
+
+    function buildTraceElement(t) {
+      const kind = t.kind || "info";
+      let cls = "kind-" + kind;
+      if (kind === "verify_result") {
+        cls = (t.meta && t.meta.passed) ? "kind-verify_pass" : "kind-verify_fail";
+      }
+      const div = document.createElement("div");
+      div.className = "trace-card " + cls;
+      const badgeParts = [
+        `<span class="badge">${esc(t.phase || "engine")}</span>`,
+        t.task_id ? `<span class="badge b-PENDING">${esc(t.task_id)}</span>` : "",
+        t.model ? `<span class="badge">${esc(t.model)}${t.effort ? " / " + esc(t.effort) : ""}</span>` : "",
+        `<span style="color:var(--muted);">${esc(t.time || "")}</span>`,
+      ].filter(Boolean).join(" ");
+
+      let bodyHtml = "";
+      if (kind === "prompt_sent") {
+        const tokApprox = Math.max(1, Math.round(String(t.content || "").length / 3.5));
+        bodyHtml = `<details><summary style="cursor:pointer; color:#93c5fd;">Xem Prompt đã gửi (~${tokApprox.toLocaleString()} tokens, ${String(t.content || "").length} ký tự)</summary><pre class="trace-pre">${esc(t.content || "")}</pre></details>`;
+      } else if (kind === "text_delta") {
+        bodyHtml = `<pre class="trace-pre trace-delta-body">${esc(t.content || "")}</pre>`;
+      } else if (t.content) {
+        const metaUsage = t.meta && t.meta.usage
+          ? `<div style="color:var(--muted); font-size:11px; margin-top:4px;">Tokens: in=${t.meta.usage.prompt_tokens || 0}, out=${t.meta.usage.completion_tokens || 0}${t.meta.duration_sec ? ` • ${t.meta.duration_sec}s` : ""}</div>`
+          : "";
+        bodyHtml = `<pre class="trace-pre">${esc(t.content)}</pre>${metaUsage}`;
+      }
+
+      div.innerHTML = `<div class="trace-head"><div><b>${esc(t.title || kind)}</b></div><div class="row" style="gap:5px;">${badgeParts}</div></div>${bodyHtml}`;
+      div.dataset.phase = t.phase || "";
+      div.dataset.taskId = t.task_id || "";
+      div.dataset.kind = kind;
+      return div;
+    }
+
+    function appendTraceToBox(box, t, filterVal) {
+      if (!box) return;
+      if (filterVal && filterVal !== "all" && t.kind !== filterVal) return;
+
+      if (t.kind === "text_delta") {
+        const last = box.lastElementChild;
+        if (last && last.dataset.kind === "text_delta" && last.dataset.phase === (t.phase || "") && last.dataset.taskId === (t.task_id || "")) {
+          const pre = last.querySelector(".trace-delta-body");
+          if (pre) {
+            pre.textContent += t.content || "";
+            box.scrollTop = box.scrollHeight;
+            return;
+          }
+        }
+      }
+      box.appendChild(buildTraceElement(t));
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function appendTraceEntry(t) {
+      if (!t) return;
+      if (typeof t.seq === "number") {
+        if (t.seq <= lastTraceSeq) return;
+        lastTraceSeq = t.seq;
+      }
+      allTraces.push(t);
+      if (allTraces.length > 400) allTraces = allTraces.slice(-400);
+      const filterEl = document.getElementById("traceFilter");
+      const filterVal = filterEl ? filterEl.value : "all";
+      appendTraceToBox(document.getElementById("devTraceBox"), t, filterVal);
+      appendTraceToBox(document.getElementById("wizTraceBox"), t, "all");
+    }
+
+    function reRenderAllTraces() {
+      const filterEl = document.getElementById("traceFilter");
+      const filterVal = filterEl ? filterEl.value : "all";
+      const devBox = document.getElementById("devTraceBox");
+      if (!devBox) return;
+      devBox.innerHTML = "";
+      for (const t of allTraces) appendTraceToBox(devBox, t, filterVal);
+    }
+
+    function syncTraces(traces) {
+      for (const t of traces || []) {
+        if (typeof t.seq === "number" && t.seq <= lastTraceSeq) continue;
+        appendTraceEntry(t);
+      }
+    }
+
+    function renderInteractionBanner(pending) {
+      const banner = document.getElementById("hitlBanner");
+      const list = document.getElementById("hitlQuestionsList");
+      if (!pending || !pending.questions || pending.questions.length === 0) {
+        banner.classList.remove("active");
+        list.dataset.key = "";
+        return;
+      }
+      banner.classList.add("active");
+      document.getElementById("hitlTaskBadge").textContent = pending.task_id || "TASK";
+      document.getElementById("hitlTitle").textContent = `${pending.title || ""} — Antigravity đang chờ thông tin thật từ bạn:`;
+      const key = JSON.stringify(pending);
+      if (list.dataset.key !== key) {
+        list.dataset.key = key;
+        list.innerHTML = pending.questions.map((q, idx) => `
+          <div class="q-card" style="padding:10px;">
+            <div style="font-size:13px; font-weight:600;">${esc(q)}</div>
+            <div class="row" style="flex-wrap:nowrap;">
+              <input type="text" class="hitl-ans-input" id="hitlAns_${idx}" data-question="${esc(q).replace(/"/g, "&quot;")}" placeholder="Nhập câu trả lời thật (hoặc chọn file ảnh/3D bên cạnh)..." />
+              <button type="button" class="btn sm" onclick="pickAssetForHitl(${idx})">Chọn file ảnh / 3D...</button>
+            </div>
+          </div>
+        `).join("");
+      }
+    }
+
+    async function pickAssetForHitl(idx) {
+      try {
+        const res = await api("/api/pick-asset", "POST");
+        if (res.path) {
+          const inp = document.getElementById("hitlAns_" + idx);
+          if (inp) inp.value = inp.value.trim() ? `${inp.value.trim()}, ${res.path}` : res.path;
+        }
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function submitHitlAnswers() {
+      const inputs = document.querySelectorAll(".hitl-ans-input");
+      const answers = {};
+      inputs.forEach(inp => {
+        const q = inp.dataset.question || "";
+        if (q) answers[q] = inp.value.trim();
+      });
+      try {
+        const next = await api("/api/interaction/answer", "POST", { answers });
+        renderState(next);
+        showToast("Đã gửi thông tin cho Antigravity!");
+      } catch (e) { showToast(e.message); }
     }
 
     function goWizardStep(step) {
@@ -806,7 +1066,10 @@
       const wp = document.getElementById("workerPill");
       const busy = s.worker.status !== "idle";
       wp.textContent = busy ? `${s.worker.status}: ${s.worker.message}` : "idle (Sẵn sàng)";
-      wp.className = "pill " + (busy ? "busy" : "ok");
+      wp.className = "pill " + (s.worker.status === "waiting_user" ? "warn" : (busy ? "busy" : "ok"));
+
+      renderInteractionBanner(s.pending_interaction);
+      syncTraces(s.traces || []);
 
       const medModel = (s.config.agy && s.config.agy.tiers && s.config.agy.tiers.coder_medium && s.config.agy.tiers.coder_medium.model) || "";
       document.getElementById("modelPill").textContent = "Model: " + (medModel || "Mặc định agy");
@@ -918,6 +1181,7 @@
       document.getElementById("chkUseRtk").checked = !!c.tools.use_rtk;
       document.getElementById("chkRequireApprove").checked = !!c.sprint.require_plan_approval;
       document.getElementById("chkForbidDelAssert").checked = !!c.guards.forbid_test_assertion_deletion;
+      document.getElementById("chkEnforceProd").checked = c.guards.enforce_production_only !== false;
     }
 
     async function api(path, method = "GET", body = null) {
@@ -1043,6 +1307,7 @@
       cfg.tools.use_rtk = document.getElementById("chkUseRtk").checked;
       cfg.sprint.require_plan_approval = document.getElementById("chkRequireApprove").checked;
       cfg.guards.forbid_test_assertion_deletion = document.getElementById("chkForbidDelAssert").checked;
+      cfg.guards.enforce_production_only = document.getElementById("chkEnforceProd").checked;
 
       try {
         const next = await api("/api/config", "POST", cfg);
@@ -1177,12 +1442,19 @@
       await refreshState();
       if (latestState && latestState.config) populateConfigForm(latestState.config);
 
-      const es = new EventSource("/api/logs/stream");
+      const es = new EventSource("/api/events");
       es.onmessage = (ev) => {
         try {
           const entry = JSON.parse(ev.data);
-          appendLogEntry(entry);
-          refreshState();
+          if (entry.event_type === "trace" && entry.trace) {
+            appendTraceEntry(entry.trace);
+            if (["response_done", "verify_result", "user_question", "user_answer"].includes(entry.trace.kind)) {
+              scheduleRefreshState(200);
+            }
+          } else if (entry.message !== undefined) {
+            appendLogEntry(entry);
+            scheduleRefreshState(350);
+          }
         } catch (_) {}
       };
       setInterval(() => {

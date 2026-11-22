@@ -85,3 +85,36 @@ def test_ui_index_state_config_approve_and_rollback(tmp_path: Path) -> None:
         m_res = client.get("/api/agy/models")
         assert m_res.status_code == 200
         assert m_res.json()["models"][0]["id"] == "gemini-4-neon-high"
+
+    # 6. Live traces and mid-sprint Human-in-the-Loop interaction API
+    controller = app.state.controller
+    controller.emit_trace({"phase": "executor", "kind": "prompt_sent", "title": "P1", "content": "Hello"})
+    st2 = client.get("/api/state").json()
+    assert len(st2["traces"]) == 1
+    assert st2["traces"][0]["title"] == "P1"
+    assert st2["pending_interaction"] is None
+
+    import threading
+
+    result_box: list[dict | None] = []
+
+    def _wait_for_user() -> None:
+        result_box.append(controller.request_user_input("T-01", "Need asset", ["Model path?"]))
+
+    t = threading.Thread(target=_wait_for_user, daemon=True)
+    t.start()
+
+    for _ in range(30):
+        cur_state = client.get("/api/state").json()
+        if cur_state["pending_interaction"] is not None:
+            break
+        import time
+
+        time.sleep(0.05)
+
+    assert client.get("/api/state").json()["pending_interaction"]["task_id"] == "T-01"
+    ans_res = client.post("/api/interaction/answer", json={"answers": {"Model path?": "D:/models/jacket.glb"}})
+    assert ans_res.status_code == 200
+    assert ans_res.json()["pending_interaction"] is None
+    t.join(timeout=2)
+    assert result_box == [{"Model path?": "D:/models/jacket.glb"}]

@@ -12,8 +12,9 @@ import subprocess
 import threading
 import time
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from engine.models import EngineConfig, ExecutionResult, TaskSpec, TokenUsage
 
@@ -189,6 +190,104 @@ def _extract_tool_call(event: dict[str, Any]) -> tuple[str, dict[str, Any]] | No
     return None
 
 
+def _extract_text_delta(event: dict[str, Any]) -> str:
+    """Extract incremental text chunk from `step_update.text_delta` if present."""
+    step_obj = event.get("step_update")
+    if isinstance(step_obj, dict):
+        delta = step_obj.get("text_delta")
+        if isinstance(delta, str):
+            return delta
+    delta = event.get("text_delta")
+    return delta if isinstance(delta, str) else ""
+
+
+def emit_trace(
+    on_trace: Callable[[dict[str, Any]], None] | None,
+    *,
+    phase: str,
+    kind: str,
+    title: str,
+    content: str = "",
+    task_id: str = "",
+    attempt: int = 0,
+    model: str = "",
+    effort: str = "",
+    meta: dict[str, Any] | None = None,
+) -> None:
+    """Emit a structured real-time Engine <-> Antigravity interaction event."""
+    if on_trace is None:
+        return
+    on_trace(
+        {
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "phase": phase,
+            "kind": kind,
+            "title": title,
+            "content": content,
+            "task_id": task_id,
+            "attempt": attempt,
+            "model": model,
+            "effort": effort,
+            "meta": meta or {},
+        }
+    )
+
+
+class TextDeltaBuffer:
+    """Coalesce high-frequency `step_update.text_delta` chunks into readable UI updates."""
+
+    def __init__(
+        self,
+        on_trace: Callable[[dict[str, Any]], None] | None,
+        *,
+        phase: str,
+        task_id: str = "",
+        attempt: int = 0,
+        model: str = "",
+        effort: str = "",
+        min_chars: int = 180,
+        flush_interval: float = 0.3,
+    ) -> None:
+        self.on_trace = on_trace
+        self.phase = phase
+        self.task_id = task_id
+        self.attempt = attempt
+        self.model = model
+        self.effort = effort
+        self.min_chars = min_chars
+        self.flush_interval = flush_interval
+        self._buf: list[str] = []
+        self._chars = 0
+        self._last_flush = time.monotonic()
+
+    def push(self, delta: str) -> None:
+        if not delta or self.on_trace is None:
+            return
+        self._buf.append(delta)
+        self._chars += len(delta)
+        if self._chars >= self.min_chars or (time.monotonic() - self._last_flush) >= self.flush_interval:
+            self.flush()
+
+    def flush(self) -> None:
+        if not self._buf or self.on_trace is None:
+            return
+        text = "".join(self._buf)
+        self._buf.clear()
+        self._chars = 0
+        self._last_flush = time.monotonic()
+        emit_trace(
+            self.on_trace,
+            phase=self.phase,
+            kind="text_delta",
+            title="Phản hồi từ Antigravity",
+            content=text,
+            task_id=self.task_id,
+            attempt=self.attempt,
+            model=self.model,
+            effort=self.effort,
+        )
+
+
 def _snapshot_mcp_states(agy_binary: str) -> dict[str, bool]:
     """Query `agy mcp list` and return {server_name: is_enabled} when available."""
     proc = subprocess.run(
@@ -273,10 +372,15 @@ def dynamic_mcp_guard(config: EngineConfig, task: TaskSpec) -> Iterator[None]:
 
 
 class AgyCliExecutor:
-    """Stateless headless executor wrapping `agy --print --output-format stream-json`."""
+    """Stateless headless executor wrapping `agy --output-format stream-json`."""
 
-    def __init__(self, config: EngineConfig) -> None:
+    def __init__(
+        self,
+        config: EngineConfig,
+        on_trace: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
         self.config = config
+        self.on_trace = on_trace
 
     def execute(
         self,
@@ -288,6 +392,25 @@ class AgyCliExecutor:
         """Run one stateless `agy` session via stdin with real-time stream-json watchdog."""
         start = time.monotonic()
         cmd = build_agy_command(self.config, model, effort, output_format="stream-json")
+        used_model = model or "agy-default"
+
+        emit_trace(
+            self.on_trace,
+            phase="executor",
+            kind="prompt_sent",
+            title=f"[{task.task_id}] Surgical Prompt → Antigravity",
+            content=prompt,
+            task_id=task.task_id,
+            model=used_model,
+            effort=effort,
+        )
+        delta_buf = TextDeltaBuffer(
+            self.on_trace,
+            phase="executor",
+            task_id=task.task_id,
+            model=used_model,
+            effort=effort,
+        )
 
         with acquire_run_lock(self.config.auto_engine_dir), dynamic_mcp_guard(self.config, task):
             proc = subprocess.Popen(
@@ -342,6 +465,7 @@ class AgyCliExecutor:
                 except queue.Empty:
                     if proc.poll() is not None and not reader_thread.is_alive():
                         break
+                    delta_buf.flush()
                     continue
 
                 if item is None:
@@ -358,6 +482,10 @@ class AgyCliExecutor:
                     continue
                 if not isinstance(event, dict):
                     continue
+
+                text_delta = _extract_text_delta(event)
+                if text_delta:
+                    delta_buf.push(text_delta)
 
                 usage = _extract_usage_from_event(event)
                 if usage is not None:
@@ -376,10 +504,22 @@ class AgyCliExecutor:
                     tool_name, args = tc
                     step_obj = event.get("step_update")
                     step_idx = step_obj.get("step_index") if isinstance(step_obj, dict) else event.get("step_index")
-                    if not isinstance(step_idx, int) or step_idx not in seen_tool_steps:
+                    is_new_step = not isinstance(step_idx, int) or step_idx not in seen_tool_steps
+                    if is_new_step:
                         if isinstance(step_idx, int):
                             seen_tool_steps.add(step_idx)
                         tool_calls += 1
+                        delta_buf.flush()
+                        emit_trace(
+                            self.on_trace,
+                            phase="executor",
+                            kind="tool_call",
+                            title=tool_name,
+                            content=json.dumps(args, ensure_ascii=False)[:600],
+                            task_id=task.task_id,
+                            model=used_model,
+                            effort=effort,
+                        )
                     if tool_name.lower() in SHELL_TOOL_NAMES:
                         cmd_str = str(args.get("CommandLine") or args.get("command") or args.get("raw") or "")
                         if FORBIDDEN_SHELL_CMD_RE.search(cmd_str):
@@ -397,13 +537,25 @@ class AgyCliExecutor:
                         break
 
             proc.wait(timeout=5)
+            delta_buf.flush()
             stderr_text = proc.stderr.read().strip()
             duration = round(time.monotonic() - start, 3)
 
             if verdict_override:
+                emit_trace(
+                    self.on_trace,
+                    phase="executor",
+                    kind="response_done",
+                    title=verdict_override,
+                    content=err_msg,
+                    task_id=task.task_id,
+                    model=used_model,
+                    effort=effort,
+                    meta={"usage": latest_usage.model_dump(), "duration_sec": duration, "verdict": verdict_override},
+                )
                 return ExecutionResult(
                     success=False,
-                    model_used=model or "agy-default",
+                    model_used=used_model,
                     effort_used=effort,
                     usage=latest_usage,
                     duration_sec=duration,
@@ -413,14 +565,30 @@ class AgyCliExecutor:
                 )
 
             ok = proc.returncode == 0
+            final_err = "" if ok else (stderr_text or f"agy exited with code {proc.returncode}")
+            emit_trace(
+                self.on_trace,
+                phase="executor",
+                kind="response_done",
+                title="OK" if ok else "VERIFY_FAIL",
+                content=final_err or f"Hoàn tất trong {duration}s",
+                task_id=task.task_id,
+                model=used_model,
+                effort=effort,
+                meta={
+                    "usage": latest_usage.model_dump(),
+                    "duration_sec": duration,
+                    "verdict": "OK" if ok else "VERIFY_FAIL",
+                },
+            )
             return ExecutionResult(
                 success=ok,
-                model_used=model or "agy-default",
+                model_used=used_model,
                 effort_used=effort,
                 usage=latest_usage,
                 duration_sec=duration,
                 verdict_override=None if ok else "VERIFY_FAIL",
-                error_message="" if ok else (stderr_text or f"agy exited with code {proc.returncode}"),
+                error_message=final_err,
                 raw_output="\n".join(raw_lines),
             )
 

@@ -246,3 +246,31 @@ def test_extract_tool_call_reads_tool_info_parameters() -> None:
     }
     extracted = _extract_tool_call(event)
     assert extracted == ("run_command", {"CommandLine": "npm test"})
+
+
+def test_executor_emits_realtime_trace_events(tmp_path: Path) -> None:
+    cfg = EngineConfig(
+        project=ProjectConfig(target_repo=str(tmp_path)),
+        agy=AgyConfig(dynamic_mcp_gating=False),
+        limits=LimitsConfig(max_tool_calls_per_attempt=5, max_tokens_per_task=50000),
+    )
+    traces: list[dict] = []
+    executor = AgyCliExecutor(cfg, on_trace=traces.append)
+    task = TaskSpec(task_id="T-TRACE", title="Trace", objective="Check trace stream", allowed_write_files=["a.py"])
+
+    events = [
+        json.dumps({"event": "step_update", "step_update": {"step_index": 1, "step_type": "agent_response", "text_delta": "Dang doc file a.py..."}}),
+        json.dumps({"event": "step_update", "step_update": {"step_index": 2, "state": "ACTIVE", "step_type": "tool", "tool_name": "edit_file", "tool_info": {"name": "edit_file", "parameters": {"Path": "a.py"}}}}),
+        json.dumps({"event": "result", "result": {"usage": {"input_tokens": 120, "output_tokens": 35}}}),
+    ]
+    fake_proc = _FakeProc(events)
+    with patch("subprocess.Popen", return_value=fake_proc):
+        res = executor.execute("SURGICAL PROMPT BODY", task, "gemini-4-neon-medium", "medium")
+
+    assert res.success is True
+    kinds = [t["kind"] for t in traces]
+    assert "prompt_sent" in kinds
+    assert "text_delta" in kinds
+    assert "tool_call" in kinds
+    assert "response_done" in kinds
+    assert traces[0]["content"] == "SURGICAL PROMPT BODY"

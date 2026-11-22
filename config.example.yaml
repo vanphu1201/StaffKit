@@ -45,6 +45,7 @@ limits:
 
 guards:
   forbid_test_assertion_deletion: true # Chặn AI xóa bớt `expect(`/ `assert` trong file test để ép xanh
+  enforce_production_only: true        # Chặn AI tạo dữ liệu/nút đăng nhập giả lập kiểu Demo trong code sản phẩm
   forbid_diff_patterns:                # Chặn AI gian lận (quét cả `git diff` + file tạo mới untracked)
     - "@ts-ignore"
     - "@ts-nocheck"

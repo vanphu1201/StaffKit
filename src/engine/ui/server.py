@@ -83,6 +83,30 @@ def _pick_file_native(initial_dir: str | None = None) -> tuple[str, str]:
         root.destroy()
 
 
+def _pick_asset_native(initial_dir: str | None = None) -> tuple[str, str]:
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        chosen = filedialog.askopenfilename(
+            initialdir=initial_dir or None,
+            title="Chọn ảnh thực tế, file 3D (.glb/.gltf) hoặc file cấu hình",
+            filetypes=[
+                ("Ảnh & 3D Assets", "*.png *.jpg *.jpeg *.webp *.glb *.gltf *.hdr *.env *.json *.csv"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not chosen:
+            return "", ""
+        path = Path(chosen)
+        return path.as_posix(), path.name
+    finally:
+        root.destroy()
+
+
 class DesktopAppController:
     """Coordinates background Planner/Orchestrator execution and live SSE logging."""
 
@@ -97,6 +121,11 @@ class DesktopAppController:
         self.worker_message: str = "Sẵn sàng"
         self.clarifying_questions: list[str] = []
 
+        # Mid-sprint Human-in-the-Loop interaction state
+        self._interaction_event = threading.Event()
+        self._interaction_answers: dict[str, str] = {}
+        self.pending_interaction: dict[str, Any] | None = None
+
         # Layer 0 Non-Tech Wizard state
         self.wizard_step: int = 1
         self.wizard_idea: str = ""
@@ -108,7 +137,10 @@ class DesktopAppController:
         self.wizard_done_message: str = ""
 
         self._logs: deque[dict[str, str]] = deque(maxlen=400)
-        self._subscribers: list[tuple[asyncio.AbstractEventLoop, asyncio.Queue[dict[str, str]]]] = []
+        self._traces: deque[dict[str, Any]] = deque(maxlen=400)
+        self._sse_backlog: deque[dict[str, Any]] = deque(maxlen=500)
+        self._trace_seq: int = 0
+        self._subscribers: list[tuple[asyncio.AbstractEventLoop, asyncio.Queue[dict[str, Any]]]] = []
 
     def _ensure_config_file(self) -> None:
         if self.config_path.is_file():
@@ -128,12 +160,14 @@ class DesktopAppController:
 
     def emit_log(self, level: str, message: str) -> None:
         entry = {
+            "event_type": "log",
             "time": datetime.now().strftime("%H:%M:%S"),
             "level": level,
             "message": message,
         }
         with self._lock:
             self._logs.append(entry)
+            self._sse_backlog.append(entry)
             subs = list(self._subscribers)
         for loop, q in subs:
             try:
@@ -141,14 +175,70 @@ class DesktopAppController:
             except RuntimeError:
                 pass
 
-    def subscribe(self, loop: asyncio.AbstractEventLoop) -> tuple[list[dict[str, str]], asyncio.Queue[dict[str, str]]]:
-        q: asyncio.Queue[dict[str, str]] = asyncio.Queue(maxsize=500)
+    def emit_trace(self, trace_entry: dict[str, Any]) -> None:
         with self._lock:
-            backlog = list(self._logs)
+            self._trace_seq += 1
+            enriched = dict(trace_entry)
+            enriched.setdefault("time", datetime.now().strftime("%H:%M:%S"))
+            enriched["seq"] = self._trace_seq
+            self._traces.append(enriched)
+            sse_payload = {"event_type": "trace", "trace": enriched}
+            self._sse_backlog.append(sse_payload)
+            subs = list(self._subscribers)
+        for loop, q in subs:
+            try:
+                loop.call_soon_threadsafe(q.put_nowait, sse_payload)
+            except RuntimeError:
+                pass
+
+    def request_user_input(self, task_id: str, title: str, questions: list[str]) -> dict[str, str] | None:
+        """Pause worker and wait for the user to answer task-specific questions from the UI."""
+        with self._lock:
+            prev_status = self.worker_status
+            prev_msg = self.worker_message
+            self.worker_status = "waiting_user"
+            self.worker_message = f"Chờ người dùng trả lời cho {task_id}"
+            self.pending_interaction = {
+                "task_id": task_id,
+                "title": title,
+                "questions": list(questions),
+            }
+            self._interaction_answers = {}
+            self._interaction_event.clear()
+
+        self.emit_log("warn", f"[{task_id}] Cần bạn trả lời {len(questions)} câu hỏi trên giao diện để tiếp tục.")
+        while not self._interaction_event.wait(timeout=0.3):
+            if self.stop_event.is_set():
+                with self._lock:
+                    self.pending_interaction = None
+                    self.worker_status = prev_status
+                    self.worker_message = prev_msg
+                return None
+
+        with self._lock:
+            answers = dict(self._interaction_answers)
+            self.pending_interaction = None
+            self.worker_status = prev_status
+            self.worker_message = prev_msg
+        self.emit_log("info", f"[{task_id}] Đã nhận {len(answers)} câu trả lời, đang gửi vào Antigravity...")
+        return answers
+
+    def submit_interaction_answers(self, answers: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            if self.pending_interaction is None:
+                raise ValueError("Hiện không có câu hỏi tương tác nào đang chờ trả lời.")
+            self._interaction_answers = {str(k): str(v) for k, v in answers.items()}
+            self._interaction_event.set()
+        return self.get_state_payload()
+
+    def subscribe(self, loop: asyncio.AbstractEventLoop) -> tuple[list[dict[str, Any]], asyncio.Queue[dict[str, Any]]]:
+        q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=500)
+        with self._lock:
+            backlog = list(self._sse_backlog)
             self._subscribers.append((loop, q))
         return backlog, q
 
-    def unsubscribe(self, q: asyncio.Queue[dict[str, str]]) -> None:
+    def unsubscribe(self, q: asyncio.Queue[dict[str, Any]]) -> None:
         with self._lock:
             self._subscribers = [(lp, sub_q) for lp, sub_q in self._subscribers if sub_q is not q]
 
@@ -204,7 +294,9 @@ class DesktopAppController:
         with self._lock:
             worker = {"status": self.worker_status, "message": self.worker_message}
             questions = list(self.clarifying_questions)
+            pending_interaction = dict(self.pending_interaction) if self.pending_interaction else None
             logs = list(self._logs)
+            traces = list(self._traces)
             wizard = {
                 "step": self.wizard_step,
                 "idea": self.wizard_idea,
@@ -228,8 +320,10 @@ class DesktopAppController:
             "summary": summary,
             "worker": worker,
             "clarifying_questions": questions,
+            "pending_interaction": pending_interaction,
             "wizard": wizard,
             "logs": logs,
+            "traces": traces,
         }
 
     def save_config(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -287,9 +381,21 @@ class DesktopAppController:
                 return
 
             db = StateDB(cfg.state_db_path)
-            GitGuard(cfg.target_repo_path, ignore_artifacts=cfg.guards.ignore_artifacts).ensure_git_exclude()
+            GitGuard(
+                cfg.target_repo_path,
+                ignore_artifacts=cfg.guards.ignore_artifacts,
+                forbid_demo_patterns=cfg.guards.forbid_demo_patterns,
+                enforce_production_only=cfg.guards.enforce_production_only,
+            ).ensure_git_exclude()
             indexer = RepoIndexer(cfg)
-            planner = Planner(cfg, db, indexer, on_event=self.emit_log, stop_event=self.stop_event)
+            planner = Planner(
+                cfg,
+                db,
+                indexer,
+                on_event=self.emit_log,
+                stop_event=self.stop_event,
+                on_trace=self.emit_trace,
+            )
 
             with self._lock:
                 self.clarifying_questions = []
@@ -343,7 +449,12 @@ class DesktopAppController:
                 self.emit_log("error", f"Thư mục đích không phải Git repo hợp lệ: {cfg.target_repo_path}")
                 return
             db = StateDB(cfg.state_db_path)
-            guard = GitGuard(cfg.target_repo_path, ignore_artifacts=cfg.guards.ignore_artifacts)
+            guard = GitGuard(
+                cfg.target_repo_path,
+                ignore_artifacts=cfg.guards.ignore_artifacts,
+                forbid_demo_patterns=cfg.guards.forbid_demo_patterns,
+                enforce_production_only=cfg.guards.enforce_production_only,
+            )
             verifier = Verifier(cfg, guard)
             compiler = PromptCompiler(cfg)
             orch = Orchestrator(
@@ -354,6 +465,8 @@ class DesktopAppController:
                 compiler,
                 on_event=self.emit_log,
                 stop_event=self.stop_event,
+                on_trace=self.emit_trace,
+                ask_user=self.request_user_input,
             )
             self.emit_log("info", "Bắt đầu chạy Sprint qua Antigravity...")
             res = orch.run_sprint(auto_approve=auto_approve or resume_mode)
@@ -434,7 +547,12 @@ class DesktopAppController:
                 self.wizard_spec = None
                 self.wizard_done_message = ""
 
-            interviewer = ProductInterviewer(cfg, on_event=self.emit_log, stop_event=self.stop_event)
+            interviewer = ProductInterviewer(
+                cfg,
+                on_event=self.emit_log,
+                stop_event=self.stop_event,
+                on_trace=self.emit_trace,
+            )
             out = interviewer.generate_interview(idea, stack_hint=stack_hint)  # type: ignore[arg-type]
             with self._lock:
                 self.wizard_interview = out.model_dump()
@@ -446,7 +564,12 @@ class DesktopAppController:
     def start_wizard_synthesize(self, idea: str, answers: dict[str, str], stack: str) -> bool:
         def _job() -> None:
             cfg = self.load_config()
-            interviewer = ProductInterviewer(cfg, on_event=self.emit_log, stop_event=self.stop_event)
+            interviewer = ProductInterviewer(
+                cfg,
+                on_event=self.emit_log,
+                stop_event=self.stop_event,
+                on_trace=self.emit_trace,
+            )
             spec = interviewer.synthesize_spec(idea, answers, stack)
             with self._lock:
                 self.wizard_spec = spec.model_dump()
@@ -501,14 +624,26 @@ class DesktopAppController:
             self.emit_log("info", "Bước 2/4: Lập kế hoạch công việc DAG từ đặc tả...")
             db = StateDB(cfg.state_db_path)
             indexer = RepoIndexer(cfg)
-            planner = Planner(cfg, db, indexer, on_event=self.emit_log, stop_event=self.stop_event)
+            planner = Planner(
+                cfg,
+                db,
+                indexer,
+                on_event=self.emit_log,
+                stop_event=self.stop_event,
+                on_trace=self.emit_trace,
+            )
             plan_res = planner.plan_from_prd(prd_file, auto_approve=True)
             if plan_res.status == "NEEDS_CLARIFICATION":
                 self.emit_log("warn", "Planner cần bổ sung thông tin trước khi chạy.")
                 return
 
             self.emit_log("info", f"Bước 3/4: Thực thi tự động {len(plan_res.tasks)} bước qua Antigravity...")
-            guard = GitGuard(cfg.target_repo_path, ignore_artifacts=cfg.guards.ignore_artifacts)
+            guard = GitGuard(
+                cfg.target_repo_path,
+                ignore_artifacts=cfg.guards.ignore_artifacts,
+                forbid_demo_patterns=cfg.guards.forbid_demo_patterns,
+                enforce_production_only=cfg.guards.enforce_production_only,
+            )
             verifier = Verifier(cfg, guard)
             compiler = PromptCompiler(cfg)
             orch = Orchestrator(
@@ -519,6 +654,8 @@ class DesktopAppController:
                 compiler,
                 on_event=self.emit_log,
                 stop_event=self.stop_event,
+                on_trace=self.emit_trace,
+                ask_user=self.request_user_input,
             )
             res = orch.run_sprint(auto_approve=True, sprint_name="sprint-1")
             counts = res["summary"]["counts"]
@@ -591,6 +728,20 @@ def create_ui_app(config_path: Path) -> Starlette:
         initial = str(cfg.target_repo_path) if cfg.target_repo_path.is_dir() else None
         path_str, content = await asyncio.to_thread(_pick_file_native, initial)
         return JSONResponse({"path": path_str, "content": content})
+
+    async def api_pick_asset(_request: Request) -> JSONResponse:
+        cfg = controller.load_config()
+        initial = str(cfg.target_repo_path) if cfg.target_repo_path.is_dir() else None
+        path_str, name = await asyncio.to_thread(_pick_asset_native, initial)
+        return JSONResponse({"path": path_str, "name": name})
+
+    async def api_interaction_answer(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+            answers = dict(body.get("answers") or {})
+            return JSONResponse(controller.submit_interaction_answers(answers))
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
 
     async def api_smoke_agy(_request: Request) -> JSONResponse:
         if not controller.start_smoke_agy():
@@ -726,6 +877,8 @@ def create_ui_app(config_path: Path) -> Starlette:
         Route("/api/config", api_save_config, methods=["POST"]),
         Route("/api/pick-folder", api_pick_folder, methods=["POST"]),
         Route("/api/pick-file", api_pick_file, methods=["POST"]),
+        Route("/api/pick-asset", api_pick_asset, methods=["POST"]),
+        Route("/api/interaction/answer", api_interaction_answer, methods=["POST"]),
         Route("/api/smoke-agy", api_smoke_agy, methods=["POST"]),
         Route("/api/plan", api_plan, methods=["POST"]),
         Route("/api/approve", api_approve, methods=["POST"]),
@@ -741,6 +894,7 @@ def create_ui_app(config_path: Path) -> Starlette:
         Route("/api/open-folder", api_open_folder, methods=["POST"]),
         Route("/api/agy/models", api_agy_models, methods=["GET"]),
         Route("/api/agy/login", api_agy_login, methods=["POST"]),
+        Route("/api/events", api_logs_stream, methods=["GET"]),
         Route("/api/logs/stream", api_logs_stream, methods=["GET"]),
     ]
     app = Starlette(routes=routes)
