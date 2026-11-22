@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 import json
+import posixpath
 from pathlib import Path
 
 from engine.blueprints import get_blueprint
-from engine.indexer import IndexerError, extract_file_skeletons, list_real_files
+from engine.indexer import (
+    IndexerError,
+    _extract_prd_identifiers,
+    build_hierarchical_dir_summary,
+    extract_fast_skeleton,
+    extract_file_skeletons,
+    extract_symbol_windows,
+    list_real_files,
+)
 from engine.models import EngineConfig, TaskSpec, normalize_posix_path
 
 
@@ -126,9 +135,18 @@ class PromptCompiler:
                 blocks.append(f"## {rel} ({len(lines)} lines)\n```\n{numbered}\n```")
             else:
                 all_inlined = False
-                skel = skeletons.get(rel, "(File > 300 dòng; hãy đọc có chọn lọc theo symbol/line range)")
+                identifiers = _extract_prd_identifiers(task.objective)
+                skel = skeletons.get(rel) or extract_fast_skeleton(
+                    full_path, max_lines=100, priority_identifiers=identifiers
+                )
+                if not skel:
+                    skel = "(File > 300 dòng; hãy đọc có chọn lọc theo symbol/line range)"
+                win_text = extract_symbol_windows(full_path, identifiers, radius=25, max_total_lines=160)
+                body = skel
+                if win_text:
+                    body = f"{skel}\n\n// Relevant line windows:\n{win_text}"
                 blocks.append(
-                    f"## {rel} ({len(lines)} lines > {max_lines} limit — skeleton only)\n```\n{skel}\n```"
+                    f"## {rel} ({len(lines)} lines > {max_lines} limit — skeleton only)\n```\n{body}\n```"
                 )
 
         for raw_rel in task.create_new_files:
@@ -179,7 +197,7 @@ class PromptCompiler:
         return "\n".join(lines)
 
     def _format_repo_file_tree(self, task: TaskSpec) -> str:
-        """Build a compact paths-only file tree on larger repos so the coder skips list_dir exploration."""
+        """Build a relevant-first paths/folder tree so mega-repos stay compact while skipping list_dir exploration."""
         try:
             real_files = sorted(list_real_files(self.repo_path))
         except (IndexerError, OSError):
@@ -187,9 +205,48 @@ class PromptCompiler:
         known = len(task.allowed_write_files) + len(task.readonly_context_files)
         if len(real_files) <= 8 or len(real_files) <= known:
             return ""
-        shown = real_files[:120]
-        extra = f"\n... (+{len(real_files) - 120} more files)" if len(real_files) > 120 else ""
-        return "\n".join(shown) + extra
+        if len(real_files) <= 120:
+            return "\n".join(real_files)
+
+        focus_paths = [
+            normalize_posix_path(p)
+            for p in (*task.allowed_write_files, *task.readonly_context_files)
+        ]
+        exact_dirs = {posixpath.dirname(p) or "." for p in focus_paths}
+        depth_dirs: set[str] = set()
+        for p in focus_paths:
+            parts = p.split("/")
+            depth_dirs.add("." if len(parts) <= 1 else "/".join(parts[: min(len(parts) - 1, 3)]))
+
+        siblings = [p for p in real_files if (posixpath.dirname(p) or ".") in exact_dirs][:60]
+        summary = build_hierarchical_dir_summary(set(real_files), priority_dirs=depth_dirs, max_entries=50)
+        parts_out: list[str] = []
+        if siblings:
+            parts_out.append("## Nearby Sibling Files\n" + "\n".join(siblings))
+        parts_out.append(f"## Folder Overview ({len(real_files)} tracked files)\n{summary}")
+        return "\n\n".join(parts_out)
+
+    def _format_protected_tests(self, task: TaskSpec) -> str:
+        """Keep Protected Test Files concise on mega-repos while GitGuard enforces the full list."""
+        protected = task.protected_test_files
+        if len(protected) <= 25:
+            return repr(protected)
+        target_tokens = {
+            tok.lower()
+            for p in task.allowed_write_files
+            for tok in normalize_posix_path(p).replace(".", "/").split("/")
+            if len(tok) >= 3 and tok.lower() not in {"src", "lib", "app", "test", "tests", "py", "ts", "js"}
+        }
+        ranked = sorted(
+            protected,
+            key=lambda p: (
+                -sum(1 for tok in target_tokens if tok in p.lower()),
+                p,
+            ),
+        )
+        nearest = ranked[:15]
+        extra = len(protected) - 15
+        return f"{nearest!r} ... (+{extra} more protected test files; DO NOT modify any existing test file unless listed in Allowed Write Files)"
 
     def _assemble_prompt(
         self,
@@ -211,7 +268,7 @@ class PromptCompiler:
             f"- Allowed Write Files: {task.allowed_write_files}",
             f"- Create New Files: {task.create_new_files}",
             f"- Scope Mode: {'STRICT (chỉ sửa/tạo các file trong danh sách trên)' if task.strict_scope else 'FLEXIBLE (có thể sửa/tạo các file cần thiết cho TASK; tuyệt đối không sửa PROTECTED_TEST_FILES)'}",
-            f"- Protected Test Files (DO NOT TOUCH): {task.protected_test_files}",
+            f"- Protected Test Files (DO NOT TOUCH): {self._format_protected_tests(task)}",
             f"- Constraints: {task.constraints}",
             f"- Verification Commands (Engine sẽ chạy sau khi bạn xong): {verify_cmds}",
             "",

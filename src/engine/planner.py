@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import queue
@@ -528,7 +529,18 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
             self._emit("info", f"Fast-Path (0 Planner tokens): thực thi trực tiếp `{direct_task.task_id}` ({detail}).")
             return PlanOutput(status="READY", tasks=[direct_task])
 
-        repo_map_path = self.indexer.build_repo_map(force=force_reindex)
+        focus_files = list(dict.fromkeys(located.target_files + located.readonly_files + located.candidate_files))
+        build_sig = inspect.signature(self.indexer.build_repo_map)
+        if "focus_files" in build_sig.parameters and "priority_identifiers" in build_sig.parameters:
+            repo_map_path = self.indexer.build_repo_map(
+                force=force_reindex,
+                focus_files=focus_files,
+                priority_identifiers=located.identifiers,
+            )
+        elif "focus_files" in build_sig.parameters:
+            repo_map_path = self.indexer.build_repo_map(force=force_reindex, focus_files=focus_files)
+        else:
+            repo_map_path = self.indexer.build_repo_map(force=force_reindex)
         repo_map_xml = repo_map_path.read_text(encoding="utf-8", errors="replace")
 
         schema_path = self.config.auto_engine_dir / "plan_schema.json"

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import os
 import posixpath
 import re
 import shutil
 import subprocess
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -34,6 +36,23 @@ _JS_IMPORT_RE = re.compile(
     r"""(?:from\s+|require\s*\(\s*|import\s*\(\s*)["'](\.[^"']+)["']"""
 )
 _STUB_MARKER_RE = re.compile(r"\bNotImplementedError\b|\bTODO\b|\bFIXME\b")
+_DECL_LINE_RE = re.compile(
+    r"^\s*(?:"
+    r"export\s+(?:default\s+)?(?:async\s+)?(?:function|class|interface|type|enum|const)\b"
+    r"|(?:async\s+)?(?:function|def|class)\b"
+    r"|(?:interface|type|enum|struct|trait|impl|module)\s+[A-Za-z_]"
+    r"|func\s+(?:\([^)]*\)\s*)?[A-Za-z_]"
+    r"|(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:fn|struct|enum|trait|mod)\s+[A-Za-z_]"
+    r"|(?:public|private|protected|internal)\s+(?:static\s+)?(?:async\s+)?[A-Za-z_<>"
+    r"\[\]]+\s+[A-Za-z_]"
+    r"|const\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*(?:async\s+)?(?:\(|function\b)"
+    r")"
+)
+_ROOT_MANIFEST_NAMES = {
+    "package.json", "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt",
+    "tsconfig.json", "go.mod", "cargo.toml", "pom.xml", "build.gradle",
+    "readme.md", "makefile", "dockerfile", "docker-compose.yml",
+}
 _PRD_STOPWORDS = {
     "the", "and", "for", "with", "from", "this", "that", "must", "should", "all",
     "any", "not", "are", "can", "will", "has", "have", "into", "when", "each",
@@ -55,6 +74,8 @@ class LocatedFiles:
     readonly_files: list[str] = field(default_factory=list)
     protected_tests: list[str] = field(default_factory=list)
     confident: bool = False
+    candidate_files: list[str] = field(default_factory=list)
+    identifiers: list[str] = field(default_factory=list)
 
 
 def _is_test_path(rel_path: str) -> bool:
@@ -168,6 +189,44 @@ def _resolve_local_imports(rel_path: str, content: str, norm_real: set[str]) -> 
     return resolved
 
 
+def _git_grep_candidate_files(
+    repo_path: Path,
+    identifiers: list[str],
+    max_files: int = 120,
+) -> set[str] | None:
+    """Fast native C `git grep` pre-filter so content scoring never reads thousands of unrelated files."""
+    ranked_ids = sorted(
+        [ident for ident in identifiers if len(ident) >= 3],
+        key=lambda s: (-int("_" in s or any(c.isupper() for c in s[1:])), -len(s), s),
+    )[:20]
+    if not ranked_ids:
+        return set()
+    cmd = ["git", "grep", "-z", "-I", "-l", "-F"]
+    for ident in ranked_ids:
+        cmd.extend(["-e", ident])
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(repo_path.resolve()),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode not in (0, 1):
+        return None
+    hits: set[str] = set()
+    for entry in proc.stdout.split("\0"):
+        if entry.strip():
+            hits.add(normalize_posix_path(entry))
+            if len(hits) >= max_files:
+                break
+    return hits
+
+
 def locate_relevant_files(
     prd_text: str,
     real_files: set[str],
@@ -186,6 +245,11 @@ def locate_relevant_files(
     active_lower = active_prd.lower()
     guard_lower = guard_text.lower()
     identifiers = _extract_prd_identifiers(active_prd)
+    ident_regex = (
+        re.compile(r"\b(?:" + "|".join(re.escape(i) for i in sorted(identifiers, key=len, reverse=True)) + r")\b")
+        if identifiers
+        else None
+    )
 
     base_counts: dict[str, int] = {}
     for rel in norm_real:
@@ -196,42 +260,75 @@ def locate_relevant_files(
     for rel in norm_real:
         rel_lower = rel.lower()
         base_lower = rel_lower.rsplit("/", 1)[-1]
+        if base_lower not in guard_lower:
+            continue
         in_guard = _contains_path_token(guard_lower, rel_lower) or (
             base_lower != "__init__.py" and _contains_path_token(guard_lower, base_lower)
         )
-        in_active = _contains_path_token(active_lower, rel_lower) or (
-            base_lower != "__init__.py" and len(base_lower) >= 4 and _contains_path_token(active_lower, base_lower)
+        if not in_guard:
+            continue
+        in_active = (
+            base_lower in active_lower
+            and (
+                _contains_path_token(active_lower, rel_lower)
+                or (
+                    base_lower != "__init__.py"
+                    and len(base_lower) >= 4
+                    and _contains_path_token(active_lower, base_lower)
+                )
+            )
         )
-        if in_guard and not in_active:
+        if not in_active:
             guarded_paths.add(rel)
 
-    scored: list[tuple[int, str]] = []
-    file_texts: dict[str, str] = {}
+    path_scores: dict[str, int] = {}
+    candidate_pool: list[str] = []
     for rel in non_test_files:
         if rel in guarded_paths:
             continue
         rel_lower = rel.lower()
         base_lower = rel_lower.rsplit("/", 1)[-1]
-        if base_lower == "__init__.py" and not _contains_path_token(active_lower, rel_lower):
+        if base_lower == "__init__.py":
+            if rel_lower not in active_lower or not _contains_path_token(active_lower, rel_lower):
+                continue
+            path_scores[rel] = 100
+            candidate_pool.append(rel)
             continue
 
-        score = 0
-        if _contains_path_token(active_lower, rel_lower):
-            score += 100
-        elif base_lower != "__init__.py" and _contains_path_token(active_lower, base_lower):
-            # Unique basenames score full points; ambiguous basenames still get a strong boost.
-            score += 60 if base_counts.get(base_lower, 1) == 1 else 45
+        candidate_pool.append(rel)
+        if base_lower in active_lower:
+            if rel_lower in active_lower and _contains_path_token(active_lower, rel_lower):
+                path_scores[rel] = 100
+            elif _contains_path_token(active_lower, base_lower):
+                path_scores[rel] = 60 if base_counts.get(base_lower, 1) == 1 else 45
 
-        if repo_path is not None and identifiers:
+    content_scan_set: set[str] | None = None
+    if repo_path is not None and ident_regex is not None and len(candidate_pool) > 150:
+        grep_hits = _git_grep_candidate_files(repo_path, identifiers, max_files=120)
+        if grep_hits is not None:
+            content_scan_set = (grep_hits & norm_set) | set(path_scores.keys())
+        else:
+            content_scan_set = set(path_scores.keys()) | set(candidate_pool[:250])
+
+    scored: list[tuple[int, str]] = []
+    file_texts: dict[str, str] = {}
+    iter_files = (
+        sorted(content_scan_set - guarded_paths)
+        if content_scan_set is not None
+        else candidate_pool
+    )
+    for rel in iter_files:
+        if rel in guarded_paths or _is_test_path(rel):
+            continue
+        score = path_scores.get(rel, 0)
+        if repo_path is not None and ident_regex is not None:
             full_path = repo_path / rel
             if full_path.is_file() and full_path.stat().st_size <= 262_144:
                 text = full_path.read_text(encoding="utf-8", errors="replace")
                 file_texts[rel] = text
-                matched_ids = sum(
-                    1 for ident in identifiers if re.search(rf"\b{re.escape(ident)}\b", text)
-                )
-                score += min(40, matched_ids * 8)
-                if matched_ids >= 1 and _STUB_MARKER_RE.search(text):
+                matched_unique = len(set(ident_regex.findall(text)))
+                score += min(40, matched_unique * 8)
+                if matched_unique >= 1 and _STUB_MARKER_RE.search(text):
                     score += 20
 
         if score >= 20:
@@ -240,6 +337,7 @@ def locate_relevant_files(
     scored.sort(key=lambda item: (-item[0], item[1]))
     top = scored[:max_targets]
     target_files = [rel for _sc, rel in top]
+    candidate_files = [rel for _sc, rel in scored[:60]]
     top_score = top[0][0] if top else 0
     confident = bool(target_files) and (top_score >= 60 or top_score >= 36)
 
@@ -277,6 +375,7 @@ def locate_relevant_files(
         base_lower = rel_lower.rsplit("/", 1)[-1]
         explicitly_requested = (
             rel not in guarded_paths
+            and base_lower in active_lower
             and (
                 _contains_path_token(active_lower, rel_lower)
                 or _contains_path_token(active_lower, base_lower)
@@ -290,7 +389,187 @@ def locate_relevant_files(
         readonly_files=readonly_files,
         protected_tests=protected_tests,
         confident=confident,
+        candidate_files=candidate_files,
+        identifiers=identifiers,
     )
+
+
+def extract_fast_skeleton(
+    file_path: Path,
+    max_lines: int = 120,
+    *,
+    priority_identifiers: list[str] | None = None,
+) -> str:
+    """Fast 0-dependency AST/regex skeleton extractor with exact L<n> line numbers."""
+    if not file_path.is_file():
+        return ""
+    try:
+        raw_bytes = file_path.read_bytes()[:1_048_576]
+        text = raw_bytes.decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    lines = text.splitlines()
+    if not lines:
+        return ""
+
+    out: list[str] = []
+    suffix = file_path.suffix.lower()
+    if suffix == ".py":
+        try:
+            tree = ast.parse(text)
+            for node in tree.body:
+                if isinstance(node, (ast.Import, ast.ImportFrom)) and len(out) < 12:
+                    ln = lines[node.lineno - 1]
+                    out.append(f"L{node.lineno}: {ln}")
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    out.append(f"L{node.lineno}: {lines[node.lineno - 1]}")
+                elif isinstance(node, ast.ClassDef):
+                    out.append(f"L{node.lineno}: {lines[node.lineno - 1]}")
+                    for sub in node.body:
+                        if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            out.append(f"L{sub.lineno}: {lines[sub.lineno - 1]}")
+        except SyntaxError:
+            out.clear()
+
+    if not out:
+        for idx, line in enumerate(lines, start=1):
+            if _DECL_LINE_RE.match(line):
+                out.append(f"L{idx}: {line.rstrip()}")
+
+    if not out:
+        limit = min(len(lines), min(max_lines, 40))
+        out = [f"L{idx}: {lines[idx - 1].rstrip()}" for idx in range(1, limit + 1)]
+        if len(lines) > limit:
+            out.append("... [skeleton trimmed]")
+        return "\n".join(out)
+
+    if len(out) > max_lines:
+        keep_indices: set[int] = set()
+        if priority_identifiers:
+            filtered = [ident for ident in priority_identifiers if len(ident) >= 3][:25]
+            if filtered:
+                pat = re.compile(
+                    r"\b(?:" + "|".join(re.escape(i) for i in sorted(filtered, key=len, reverse=True)) + r")\b"
+                )
+                last_class_idx: int | None = None
+                for idx, entry in enumerate(out):
+                    if re.match(r"^L\d+:\s*(?:export\s+)?class\b", entry):
+                        last_class_idx = idx
+                    if pat.search(entry):
+                        keep_indices.add(idx)
+                        if last_class_idx is not None:
+                            keep_indices.add(last_class_idx)
+
+        rem = max(0, max_lines - len(keep_indices))
+        head_count = max(1, (rem * 2) // 3)
+        tail_count = max(0, rem - head_count)
+        for idx in range(min(head_count, len(out))):
+            keep_indices.add(idx)
+        for idx in range(max(0, len(out) - tail_count), len(out)):
+            keep_indices.add(idx)
+
+        selected_indices = sorted(keep_indices)[:max_lines]
+        trimmed: list[str] = []
+        prev_idx = -1
+        for idx in selected_indices:
+            if prev_idx != -1 and idx > prev_idx + 1:
+                trimmed.append("... [skeleton trimmed]")
+            trimmed.append(out[idx])
+            prev_idx = idx
+        return "\n".join(trimmed)
+    return "\n".join(out)
+
+
+def extract_symbol_windows(
+    file_path: Path,
+    identifiers: list[str],
+    *,
+    radius: int = 25,
+    max_total_lines: int = 180,
+) -> str:
+    """Extract focused line-numbered windows around PRD identifiers inside huge files."""
+    if not file_path.is_file():
+        return ""
+    try:
+        lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    if not lines:
+        return ""
+
+    filtered = [ident for ident in identifiers if len(ident) >= 3][:30]
+    hits: list[int] = []
+    if filtered:
+        pat = re.compile(r"\b(?:" + "|".join(re.escape(i) for i in sorted(filtered, key=len, reverse=True)) + r")\b")
+        hits = [idx for idx, line in enumerate(lines) if pat.search(line)]
+
+    if not hits:
+        head = [f"L{i + 1}: {lines[i]}" for i in range(min(40, len(lines)))]
+        if len(lines) > 60:
+            head.append("...")
+            head.extend(f"L{i + 1}: {lines[i]}" for i in range(max(40, len(lines) - 20), len(lines)))
+        return "\n".join(head)
+
+    intervals: list[list[int]] = []
+    for h in hits:
+        start = max(0, h - radius)
+        end = min(len(lines) - 1, h + radius)
+        if intervals and start <= intervals[-1][1] + 2:
+            intervals[-1][1] = max(intervals[-1][1], end)
+        else:
+            intervals.append([start, end])
+
+    emitted: list[str] = []
+    for w_idx, (start, end) in enumerate(intervals):
+        if w_idx > 0:
+            emitted.append("...")
+        for i in range(start, end + 1):
+            emitted.append(f"L{i + 1}: {lines[i]}")
+            if len(emitted) >= max_total_lines:
+                emitted.append("... [window limit reached]")
+                return "\n".join(emitted)
+    return "\n".join(emitted)
+
+
+def build_hierarchical_dir_summary(
+    real_files: set[str],
+    *,
+    priority_dirs: set[str] | None = None,
+    max_entries: int = 80,
+) -> str:
+    """Compress thousands of files across hundreds of folders into a compact summary."""
+    groups: dict[str, list[str]] = defaultdict(list)
+    for raw in real_files:
+        rel = normalize_posix_path(raw)
+        if not rel:
+            continue
+        parts = rel.split("/")
+        if len(parts) <= 1:
+            d = "."
+        else:
+            depth = min(len(parts) - 1, 3)
+            d = "/".join(parts[:depth])
+        groups[d].append(parts[-1])
+
+    norm_prio = {normalize_posix_path(d).strip("/") or "." for d in (priority_dirs or set())}
+    prio_keys = sorted(d for d in groups if d in norm_prio)
+    other_keys = sorted((d for d in groups if d not in norm_prio), key=lambda d: (-len(groups[d]), d))
+    ordered = prio_keys + other_keys
+
+    lines: list[str] = []
+    for d in ordered[:max_entries]:
+        files = sorted(groups[d])
+        samples = ", ".join(files[:3])
+        if len(files) > 3:
+            samples += f", +{len(files) - 3} more"
+        prefix = "./" if d == "." else f"{d}/"
+        lines.append(f"{prefix} ({len(files)} files: {samples})")
+
+    if len(ordered) > max_entries:
+        rem_dirs = ordered[max_entries:]
+        rem_files = sum(len(groups[d]) for d in rem_dirs)
+        lines.append(f"... (+{len(rem_dirs)} more folders, {rem_files} files)")
+    return "\n".join(lines)
 
 
 class IndexerError(RuntimeError):
@@ -331,21 +610,105 @@ class RepoIndexer:
         payload = f"{head}\n" + "\n".join(status_lines)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def build_repo_map(self, force: bool = False) -> Path:
-        """Run `npx repomix --compress` if repo state changed; return path to repo_map.xml."""
+    def _build_fast_repo_map(
+        self,
+        real_files: set[str],
+        state_hash: str,
+        *,
+        focus_files: list[str] | None = None,
+        priority_identifiers: list[str] | None = None,
+    ) -> Path:
+        """Build scoped XML repo map with hierarchical dir summary + fast skeletons (for mega-repos or repomix fallback)."""
+        norm_set = {normalize_posix_path(f) for f in real_files if f and f.strip()}
+        priority_dirs: set[str] = set()
+        selected: list[str] = []
+        seen: set[str] = set()
+
+        for raw in focus_files or []:
+            rel = normalize_posix_path(raw)
+            if rel in norm_set and rel not in seen:
+                seen.add(rel)
+                selected.append(rel)
+                parts = rel.split("/")
+                if len(parts) > 1:
+                    priority_dirs.add("/".join(parts[: min(len(parts) - 1, 3)]))
+
+        for rel in sorted(norm_set):
+            if len(selected) >= 80:
+                break
+            if rel not in seen and rel.rsplit("/", 1)[-1].lower() in _ROOT_MANIFEST_NAMES:
+                seen.add(rel)
+                selected.append(rel)
+
+        for rel in sorted(norm_set):
+            if len(selected) >= 80:
+                break
+            if rel not in seen and not _is_test_path(rel):
+                seen.add(rel)
+                selected.append(rel)
+
+        dir_summary = build_hierarchical_dir_summary(norm_set, priority_dirs=priority_dirs, max_entries=80)
+        blocks = [f"<directory_structure>\n{dir_summary}\n</directory_structure>", "<files>"]
+        for rel in selected:
+            skel = extract_fast_skeleton(
+                self.repo_path / rel,
+                max_lines=80,
+                priority_identifiers=priority_identifiers,
+            )
+            if skel:
+                blocks.append(f'<file path="{rel}">\n{skel}\n</file>')
+        blocks.append("</files>")
+
+        self.repo_map_path.write_text("<repomix>\n" + "\n".join(blocks) + "\n</repomix>\n", encoding="utf-8")
+        self.hash_path.write_text(state_hash, encoding="utf-8")
+        return self.repo_map_path
+
+    def build_repo_map(
+        self,
+        force: bool = False,
+        *,
+        focus_files: list[str] | None = None,
+        priority_identifiers: list[str] | None = None,
+    ) -> Path:
+        """Build cached Repo Skeleton Map (`repomix --compress` on <=250 files, scoped fast indexer on mega-repos)."""
         self.auto_dir.mkdir(parents=True, exist_ok=True)
-        state_hash = self.compute_repo_state_hash()
+        base_hash = self.compute_repo_state_hash()
+        focus_key = ""
+        if focus_files:
+            focus_key = ":" + hashlib.sha256("\n".join(sorted(focus_files)).encode("utf-8")).hexdigest()[:12]
+        state_hash = f"{base_hash}{focus_key}"
 
         if (
             not force
             and self.repo_map_path.is_file()
             and self.hash_path.is_file()
-            and self.hash_path.read_text(encoding="utf-8").strip() == state_hash
+            and self.hash_path.read_text(encoding="utf-8").strip() in {state_hash, base_hash}
         ):
-            return self.repo_map_path
+            if not focus_key or self.hash_path.read_text(encoding="utf-8").strip() == state_hash:
+                return self.repo_map_path
+
+        try:
+            real_files = list_real_files(self.repo_path)
+        except IndexerError:
+            real_files = set()
+
+        if len(real_files) > 250:
+            return self._build_fast_repo_map(
+                real_files,
+                state_hash,
+                focus_files=focus_files,
+                priority_identifiers=priority_identifiers,
+            )
 
         npx_bin = shutil.which("npx.cmd") or shutil.which("npx")
         if not npx_bin:
+            if real_files:
+                return self._build_fast_repo_map(
+                    real_files,
+                    state_hash,
+                    focus_files=focus_files,
+                    priority_identifiers=priority_identifiers,
+                )
             raise IndexerError("`npx` not found in PATH; Node.js is required to run repomix.")
 
         ignore_csv = ",".join([".auto-engine/**", *self.config.tools.repomix_ignore])
@@ -371,6 +734,13 @@ class RepoIndexer:
             shell=(os.name == "nt" and npx_bin.lower().endswith(".ps1")),
         )
         if proc.returncode != 0 or not self.repo_map_path.is_file():
+            if real_files:
+                return self._build_fast_repo_map(
+                    real_files,
+                    state_hash,
+                    focus_files=focus_files,
+                    priority_identifiers=priority_identifiers,
+                )
             raise IndexerError(
                 f"repomix failed (exit {proc.returncode}): {proc.stderr.strip() or proc.stdout.strip()}"
             )
@@ -425,7 +795,13 @@ def compact_repo_map_for_planner(
     sections: list[str] = []
     dir_match = DIR_STRUCT_RE.search(repo_map_text)
     if dir_match:
-        sections.append(f"<directory_structure>{dir_match.group(1)}</directory_structure>")
+        dir_body = dir_match.group(1)
+        dir_cap = min(8000, max(1000, max_chars // 4))
+        if len(dir_body) > dir_cap:
+            cut = dir_body.rfind("\n", 0, dir_cap)
+            cut = cut if cut > 0 else dir_cap
+            dir_body = dir_body[:cut] + "\n... [directory tree truncated]"
+        sections.append(f"<directory_structure>{dir_body}</directory_structure>")
 
     norm_priority = {normalize_posix_path(p) for p in priority_files} if priority_files else set()
     priority_blocks: list[str] = []
