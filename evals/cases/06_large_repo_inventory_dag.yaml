@@ -1,0 +1,202 @@
+id: eval-large-inventory-dag
+title: "Multi-Warehouse Inventory Reservation & Cancellation Engine (16-File Repo)"
+domain: backend_architecture
+blueprint: python_app
+prd_markdown: |
+  Extend the existing e-commerce backend (keep `billing_service.py`, `shipping_service.py`, and `tests/test_billing_and_shipping.py` passing without breaking them) to implement complete multi-warehouse inventory reservation & low-stock alerting across `src/repositories/stock_repo.py`, `src/repositories/order_repo.py`, and `src/services/inventory_service.py`:
+
+  ## 1. Repository & Model Support
+  - `StockRepository` (`src/repositories/stock_repo.py`) must support setting/updating `on_hand`, `reserved`, and `reorder_point` per `(sku, warehouse_id)` cleanly (rejecting negative stock via `src/utils/validators.py`).
+  - `OrderRepository` (`src/repositories/order_repo.py`) must persist `Reservation` records by `order_id` including allocated `(warehouse_id, sku, qty)` legs and status (`ACTIVE` or `CANCELLED`).
+
+  ## 2. Multi-Warehouse Allocation & Rollback (`InventoryService` in `src/services/inventory_service.py`)
+  - `add_stock(sku: str, warehouse_id: str, quantity: int, reorder_point: int = 5) -> None`: validate positive quantity and non-negative reorder_point, accumulate `on_hand`.
+  - `get_available(sku: str, warehouse_id: str | None = None) -> int`: available = `on_hand - reserved` for a warehouse or summed across all warehouses.
+  - `reserve_order(order_id: str, lines: list[tuple[str, int]], priority_warehouses: list[str] | None = None) -> list[dict]`:
+    + Idempotent on `order_id`: if an `ACTIVE` reservation already exists for `order_id`, return its stored allocations without double-reserving.
+    + For each `(sku, qty)` line, allocate from available stock across warehouses (respecting `priority_warehouses` order first, then deterministic sorted warehouse IDs) — splitting across warehouses when a single warehouse lacks full quantity.
+    + ATOMIC all-or-nothing: if ANY line in `lines` lacks sufficient total available stock across all warehouses, undo ALL partial reservations for that call cleanly and raise `ValueError`.
+    + Return list of allocation dicts `[{"sku": ..., "warehouse_id": ..., "qty": ...}]`.
+  - `cancel_reservation(order_id: str) -> bool`:
+    + Release all reserved quantities back to their respective warehouses and mark reservation `CANCELLED`. Return `False` if missing or already cancelled.
+  - `get_low_stock_alerts() -> list[dict]`:
+    + Return entries `[{"sku": ..., "warehouse_id": ..., "available": ..., "reorder_point": ...}]` sorted by `(sku, warehouse_id)` wherever `available <= reorder_point`.
+starter_files:
+  "src/__init__.py": ""
+  "src/models/__init__.py": ""
+  "src/models/item.py": |
+    from dataclasses import dataclass
+
+    @dataclass
+    class WarehouseStock:
+        sku: str
+        warehouse_id: str
+        on_hand: int = 0
+        reserved: int = 0
+        reorder_point: int = 5
+
+        @property
+        def available(self) -> int:
+            return self.on_hand - self.reserved
+  "src/models/order.py": |
+    from dataclasses import dataclass, field
+
+    @dataclass
+    class AllocationLeg:
+        sku: str
+        warehouse_id: str
+        qty: int
+
+    @dataclass
+    class Reservation:
+        order_id: str
+        legs: list[AllocationLeg] = field(default_factory=list)
+        status: str = "ACTIVE"
+  "src/utils/__init__.py": ""
+  "src/utils/validators.py": |
+    def require_positive_int(value: int, name: str) -> int:
+        if not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{name} must be a positive integer")
+        return value
+
+    def require_non_negative_int(value: int, name: str) -> int:
+        if not isinstance(value, int) or value < 0:
+            raise ValueError(f"{name} must be >= 0")
+        return value
+
+    def require_non_empty(value: str, name: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError(f"{name} must be non-empty")
+        return cleaned
+  "src/repositories/__init__.py": ""
+  "src/repositories/stock_repo.py": |
+    from src.models.item import WarehouseStock
+
+    class StockRepository:
+        def __init__(self) -> None:
+            self._rows: dict[tuple[str, str], WarehouseStock] = {}
+
+        def get(self, sku: str, warehouse_id: str) -> WarehouseStock | None:
+            return self._rows.get((sku, warehouse_id))
+
+        def save(self, row: WarehouseStock) -> None:
+            self._rows[(row.sku, row.warehouse_id)] = row
+
+        def list_all(self) -> list[WarehouseStock]:
+            return list(self._rows.values())
+  "src/repositories/order_repo.py": |
+    from src.models.order import Reservation
+
+    class OrderRepository:
+        def __init__(self) -> None:
+            self._reservations: dict[str, Reservation] = {}
+
+        def get(self, order_id: str) -> Reservation | None:
+            return self._reservations.get(order_id)
+
+        def save(self, reservation: Reservation) -> None:
+            self._reservations[reservation.order_id] = reservation
+  "src/services/__init__.py": ""
+  "src/services/billing_service.py": |
+    def compute_subtotal_cents(items: list[tuple[int, int]]) -> int:
+        return sum(price * qty for price, qty in items)
+
+    def apply_tax_cents(subtotal_cents: int, tax_bps: int) -> int:
+        return subtotal_cents + (subtotal_cents * tax_bps) // 10_000
+  "src/services/shipping_service.py": |
+    def estimate_shipping_cents(weight_grams: int, express: bool = False) -> int:
+        base = 500 + max(0, (weight_grams - 500) // 100) * 50
+        return base * 2 if express else base
+  "src/services/inventory_service.py": |
+    from src.repositories.order_repo import OrderRepository
+    from src.repositories.stock_repo import StockRepository
+
+    class InventoryService:
+        def __init__(
+            self,
+            stock_repo: StockRepository | None = None,
+            order_repo: OrderRepository | None = None,
+        ) -> None:
+            self.stock_repo = stock_repo or StockRepository()
+            self.order_repo = order_repo or OrderRepository()
+
+        def add_stock(self, sku: str, warehouse_id: str, quantity: int, reorder_point: int = 5) -> None:
+            raise NotImplementedError
+
+        def get_available(self, sku: str, warehouse_id: str | None = None) -> int:
+            raise NotImplementedError
+
+        def reserve_order(
+            self,
+            order_id: str,
+            lines: list[tuple[str, int]],
+            priority_warehouses: list[str] | None = None,
+        ) -> list[dict]:
+            raise NotImplementedError
+
+        def cancel_reservation(self, order_id: str) -> bool:
+            raise NotImplementedError
+
+        def get_low_stock_alerts(self) -> list[dict]:
+            raise NotImplementedError
+  "tests/__init__.py": ""
+  "tests/test_billing_and_shipping.py": |
+    from src.services.billing_service import apply_tax_cents, compute_subtotal_cents
+    from src.services.shipping_service import estimate_shipping_cents
+
+    def test_billing_and_shipping_regression() -> None:
+        sub = compute_subtotal_cents([(1000, 2), (500, 1)])
+        assert sub == 2500
+        assert apply_tax_cents(sub, 800) == 2700
+        assert estimate_shipping_cents(700, express=False) == 600
+        assert estimate_shipping_cents(700, express=True) == 1200
+  "tests/test_inventory_public.py": |
+    from src.services.inventory_service import InventoryService
+
+    def test_inventory_service_instantiates() -> None:
+        svc = InventoryService()
+        assert svc.stock_repo is not None
+public_verify_commands:
+  - "{python} -m pytest tests/test_billing_and_shipping.py tests/test_inventory_public.py -q"
+hidden_files:
+  "hidden_tests/test_hidden_inventory.py": |
+    import pytest
+    from src.services.inventory_service import InventoryService
+
+    def test_split_allocation_atomic_rollback_and_cancel() -> None:
+        svc = InventoryService()
+        svc.add_stock("JACKET-M", "WH-NORTH", 4, reorder_point=3)
+        svc.add_stock("JACKET-M", "WH-SOUTH", 6, reorder_point=2)
+        svc.add_stock("CAP-BLK", "WH-NORTH", 1, reorder_point=2)
+
+        # Atomic rollback when second SKU lacks stock
+        with pytest.raises(ValueError):
+            svc.reserve_order("ORD-FAIL", [("JACKET-M", 5), ("CAP-BLK", 3)])
+        assert svc.get_available("JACKET-M") == 10
+        assert svc.get_available("CAP-BLK") == 1
+
+        # Split allocation prioritizing WH-SOUTH first (6 from WH-SOUTH + 2 from WH-NORTH)
+        legs = svc.reserve_order("ORD-100", [("JACKET-M", 8)], priority_warehouses=["WH-SOUTH"])
+        assert sum(leg["qty"] for leg in legs) == 8
+        assert svc.get_available("JACKET-M", "WH-SOUTH") == 0
+        assert svc.get_available("JACKET-M", "WH-NORTH") == 2
+
+        # Idempotent replay must NOT double reserve
+        legs_again = svc.reserve_order("ORD-100", [("JACKET-M", 8)], priority_warehouses=["WH-SOUTH"])
+        assert legs_again == legs
+        assert svc.get_available("JACKET-M") == 2
+
+        # Low stock alerts (both WH-NORTH jacket=2<=3, WH-SOUTH jacket=0<=2, WH-NORTH cap=1<=2)
+        alerts = svc.get_low_stock_alerts()
+        assert len(alerts) == 3
+
+        # Cancel restores full stock
+        assert svc.cancel_reservation("ORD-100") is True
+        assert svc.cancel_reservation("ORD-100") is False
+        assert svc.get_available("JACKET-M", "WH-SOUTH") == 6
+        assert svc.get_available("JACKET-M", "WH-NORTH") == 4
+hidden_pass_to_pass_commands:
+  - "{python} -m pytest tests/test_billing_and_shipping.py tests/test_inventory_public.py -q"
+hidden_fail_to_pass_commands:
+  - "{python} -m pytest hidden_tests/test_hidden_inventory.py -q"

@@ -125,6 +125,7 @@ class GuardsConfig(BaseModel):
 
     forbid_test_assertion_deletion: bool = True
     enforce_production_only: bool = True
+    scope_mode: Literal["strict", "soft", "flexible"] = "soft"
     forbid_demo_patterns: list[str] = Field(
         default_factory=lambda: [
             r"@[a-z0-9-]*demo\.(vn|com|local|io)\b",
@@ -162,6 +163,8 @@ class SprintConfig(BaseModel):
     """Sprint-level plan approval and final integration verification."""
 
     require_plan_approval: bool = True
+    planning_mode: Literal["auto", "single", "dag"] = "auto"
+    max_parallel_tasks: int = Field(default=2, ge=1, le=4)
     final_verify_commands: list[str] = Field(default_factory=list)
     runtime_verify_commands: list[str] = Field(default_factory=list)
 

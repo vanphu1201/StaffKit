@@ -19,7 +19,7 @@ from engine.models import EngineConfig, TokenUsage
 
 def test_load_builtin_eval_cases_and_filter() -> None:
     cases = load_eval_cases()
-    assert len(cases) >= 5
+    assert len(cases) >= 7
     ids = {c.id for c in cases}
     assert {
         "eval-sqlite-ledger",
@@ -27,6 +27,8 @@ def test_load_builtin_eval_cases_and_filter() -> None:
         "eval-node-rest-api",
         "eval-cli-log-analyzer",
         "eval-multi-file-pricing",
+        "eval-large-inventory-dag",
+        "eval-large-pipeline-dag",
     } <= ids
 
     filtered = load_eval_cases(case_ids=["eval-sqlite-ledger"])
@@ -153,3 +155,81 @@ def test_all_builtin_cases_pass_public_and_fail_hidden_on_starter(tmp_path: Path
         resolved, reg_ok, err = grade_with_hidden_tests(case, repo, timeout_sec=30)
         assert reg_ok is True, f"{case.id} public PASS_TO_PASS failed on starter: {err}"
         assert resolved is False, f"{case.id} hidden FAIL_TO_PASS unexpectedly passed on starter!"
+
+
+def test_ab_evaluator_multi_run_computes_stddev(tmp_path: Path) -> None:
+    case = EvalCase(
+        id="multi-run-check",
+        title="Double input",
+        prd_markdown="Return x * 2",
+        starter_files={"calc.py": "def fn(x):\n    return x\n"},
+        hidden_files={"hidden_test.py": "from calc import fn\ndef test_h():\n    assert fn(5) == 10\n"},
+        hidden_fail_to_pass_commands=["{python} -m pytest hidden_test.py -q"],
+    )
+    seq = {"base": 0, "eng": 0}
+
+    def _base(_c: EvalCase, repo: Path, _cfg: EngineConfig) -> tuple[TokenUsage, float, str]:
+        seq["base"] += 1
+        (repo / "calc.py").write_text("def fn(x):\n    return x * 2\n", encoding="utf-8")
+        return TokenUsage(prompt_tokens=800 + seq["base"] * 100, completion_tokens=100), 1.0, ""
+
+    def _eng(_c: EvalCase, repo: Path, _cfg: EngineConfig) -> tuple[TokenUsage, float, str]:
+        seq["eng"] += 1
+        (repo / "calc.py").write_text("def fn(x):\n    return x * 2\n", encoding="utf-8")
+        return TokenUsage(prompt_tokens=300 + seq["eng"] * 50, completion_tokens=100), 0.5, ""
+
+    report = Evaluator(EngineConfig(), baseline_runner=_base, engine_runner=_eng).run_suite(
+        [case],
+        arms=("baseline", "engine"),
+        runs=2,
+        work_dir=tmp_path / "w",
+    )
+    assert report.summaries["baseline"].runs_per_case == 2
+    assert report.summaries["baseline"].total_cases == 2
+    assert report.summaries["baseline"].token_stddev > 0
+    assert report.summaries["engine"].token_stddev > 0
+    md = report.to_markdown()
+    assert "Token StdDev" in md
+
+
+def test_smoke_http_health_script_validates_live_endpoint() -> None:
+    import http.server
+    import subprocess
+    import sys
+    import threading
+    import json
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # type: ignore[override]
+            body = json.dumps({"ok": True}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):  # type: ignore[override]
+            return
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    port = server.server_address[1]
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        script = Path(__file__).resolve().parents[1] / "scripts" / "smoke_http_health.py"
+        ok_proc = subprocess.run(
+            [sys.executable, str(script), "--url", f"http://127.0.0.1:{port}/health", "--expect-json-key", "ok", "--timeout", "5"],
+            capture_output=True,
+            text=True,
+        )
+        assert ok_proc.returncode == 0, ok_proc.stderr
+        assert "HTTP_SMOKE_OK" in ok_proc.stdout
+
+        bad_proc = subprocess.run(
+            [sys.executable, str(script), "--url", f"http://127.0.0.1:{port}/health", "--expect-json-key", "missing_key", "--timeout", "1"],
+            capture_output=True,
+            text=True,
+        )
+        assert bad_proc.returncode != 0
+    finally:
+        server.shutdown()
+        server.server_close()

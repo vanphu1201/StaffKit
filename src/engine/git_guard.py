@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import re
+import shutil
 import subprocess
 from pathlib import Path, PurePosixPath
 
@@ -205,12 +206,13 @@ class GitGuard:
         create_new_files: list[str],
         protected_test_files: list[str] | None = None,
         strict_scope: bool = True,
+        scope_mode: str = "strict",
     ) -> tuple[bool, list[str]]:
-        """Ensure changed/created files belong to allowed scope (when strict) and are never protected."""
+        """Ensure changed/created files honor protected tests and configured strict/soft/flexible scope."""
         tracked, untracked = self.get_changed_files()
         changed = tracked + untracked
         protected_set = {normalize_posix_path(p) for p in (protected_test_files or [])}
-        if not strict_scope:
+        if not strict_scope or scope_mode == "flexible":
             violations = [p for p in changed if p in protected_set]
             return len(violations) == 0, violations
 
@@ -218,6 +220,37 @@ class GitGuard:
             normalize_posix_path(p) for p in create_new_files
         }
         permitted_set = self._expand_manifest_lockfiles(base_permitted) - protected_set
+
+        if scope_mode == "soft":
+            untracked_set = set(untracked)
+            allowed_dirs = {
+                PurePosixPath(p).parent.as_posix()
+                for p in (set(allowed_files) | set(create_new_files))
+                if PurePosixPath(p).parent.as_posix() != "."
+            }
+            root_manifests = {
+                "package.json",
+                "package-lock.json",
+                "pyproject.toml",
+                "uv.lock",
+                "tsconfig.json",
+                "requirements.txt",
+            }
+            violations = []
+            for p in changed:
+                if p in protected_set:
+                    violations.append(p)
+                elif p in permitted_set or p in root_manifests:
+                    continue
+                elif is_test_file(p):
+                    # Existing tracked test files remain strictly protected unless explicitly listed.
+                    if p not in untracked_set:
+                        violations.append(p)
+                elif PurePosixPath(p).parent.as_posix() in allowed_dirs:
+                    continue
+                else:
+                    violations.append(p)
+            return len(violations) == 0, violations
 
         violations = [p for p in changed if p not in permitted_set]
         return len(violations) == 0, violations
@@ -361,3 +394,28 @@ class GitGuard:
         """Restore repository strictly to checkpoint_sha and clean untracked files outside .auto-engine."""
         self._run_git("reset", "--hard", checkpoint_sha)
         self._run_git("clean", "-fd", "-e", ".auto-engine")
+
+    def create_worktree(self, worktree_path: Path, branch_name: str, base_ref: str = "HEAD") -> Path:
+        """Create an isolated git worktree on `branch_name` for parallel DAG execution."""
+        self.remove_worktree(worktree_path, branch_name)
+        worktree_path.parent.mkdir(parents=True, exist_ok=True)
+        self._run_git("worktree", "add", "-b", branch_name, str(worktree_path), base_ref)
+        return worktree_path
+
+    def remove_worktree(self, worktree_path: Path, branch_name: str | None = None) -> None:
+        """Force-remove a git worktree and delete its temporary branch cleanly."""
+        self._run_git("worktree", "remove", "--force", str(worktree_path), check=False)
+        if worktree_path.exists():
+            shutil.rmtree(worktree_path, ignore_errors=True)
+        self._run_git("worktree", "prune", check=False)
+        if branch_name:
+            self._run_git("branch", "-D", branch_name, check=False)
+
+    def merge_branch_into_current(self, branch_name: str) -> tuple[bool, str]:
+        """Merge a completed worktree branch into the active sprint branch; abort cleanly on conflict."""
+        proc = self._run_git("merge", "--no-ff", "--no-edit", branch_name, check=False)
+        if proc.returncode == 0:
+            return True, ""
+        err = (proc.stderr or proc.stdout or "Merge conflict").strip()
+        self._run_git("merge", "--abort", check=False)
+        return False, err

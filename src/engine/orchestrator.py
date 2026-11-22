@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -99,6 +101,7 @@ class Orchestrator:
         stop_event: threading.Event | None = None,
         on_trace: Callable[[dict[str, Any]], None] | None = None,
         ask_user: Callable[[str, str, list[str]], dict[str, str] | None] | None = None,
+        executor_factory: Callable[[EngineConfig], ExecutorProtocol] | None = None,
     ) -> None:
         self.config = config
         self.db = db
@@ -107,9 +110,14 @@ class Orchestrator:
         self.compiler = compiler
         self.on_trace = on_trace
         self.ask_user = ask_user
-        self.executor = executor or build_executor(config, on_trace=on_trace)
+        self.executor_factory = executor_factory
+        self._executor_injected = executor is not None
+        self.executor = executor or (
+            executor_factory(config) if executor_factory is not None else build_executor(config, on_trace=on_trace)
+        )
         self.on_event = on_event
         self.stop_event = stop_event
+        self._db_lock = threading.Lock()
 
     @property
     def _user_answers_path(self) -> Path:
@@ -137,9 +145,18 @@ class Orchestrator:
             encoding="utf-8",
         )
 
-    def _prompt_user_for_task(self, task: TaskSpec, unanswered: list[str], *, checkpoint: str, retry_count: int = 0) -> bool:
+    def _prompt_user_for_task(
+        self,
+        task: TaskSpec,
+        unanswered: list[str],
+        *,
+        checkpoint: str,
+        retry_count: int = 0,
+        guard: GitGuard | None = None,
+    ) -> bool:
         """Pause and collect real user input; returns False if stopped during waiting."""
         assert self.ask_user is not None
+        active_guard = guard or self.guard
         emit_trace(
             self.on_trace,
             phase="orchestrator",
@@ -152,13 +169,15 @@ class Orchestrator:
         self._emit("warn", f"[{task.task_id}] Tạm dừng chờ người dùng trả lời {len(unanswered)} câu hỏi...")
         answers = self.ask_user(task.task_id, task.title, unanswered)
         if self.stop_event is not None and self.stop_event.is_set():
-            self.guard.hard_rollback(checkpoint)
-            self.db.update_task_status(task.task_id, "PENDING", retry_count=retry_count)
+            active_guard.hard_rollback(checkpoint)
+            with self._db_lock:
+                self.db.update_task_status(task.task_id, "PENDING", retry_count=retry_count)
             return False
         if answers:
             clean_answers = {k: str(v).strip() for k, v in answers.items() if str(v).strip()}
             if clean_answers:
-                self._save_user_answers(clean_answers)
+                with self._db_lock:
+                    self._save_user_answers(clean_answers)
                 emit_trace(
                     self.on_trace,
                     phase="orchestrator",
@@ -226,9 +245,31 @@ class Orchestrator:
         return recovered
 
     def _run_single_task(self, task: TaskSpec) -> tuple[bool, bool]:
-        """Run a single task through retries. Returns (passed, budget_halted)."""
-        checkpoint = self.guard.create_checkpoint()
-        self.db.update_task_status(task.task_id, "RUNNING", checkpoint_sha=checkpoint)
+        """Run a single task in the primary workspace. Returns (passed, stopped_mid_task)."""
+        passed, stopped, _sha = self._run_single_task_with(
+            task,
+            guard=self.guard,
+            verifier=self.verifier,
+            compiler=self.compiler,
+            executor=self.executor,
+            defer_done=False,
+        )
+        return passed, stopped
+
+    def _run_single_task_with(
+        self,
+        task: TaskSpec,
+        *,
+        guard: GitGuard,
+        verifier: Verifier,
+        compiler: PromptCompiler,
+        executor: ExecutorProtocol,
+        defer_done: bool = False,
+    ) -> tuple[bool, bool, str | None]:
+        """Run a single task through retries inside `guard`'s repo/worktree."""
+        checkpoint = guard.create_checkpoint()
+        with self._db_lock:
+            self.db.update_task_status(task.task_id, "RUNNING", checkpoint_sha=checkpoint)
 
         prev_error_hash: str | None = None
         last_error = ""
@@ -238,29 +279,34 @@ class Orchestrator:
         dynamic_asks = 0
 
         if task.user_questions and self.ask_user is not None:
-            saved_answers = self._load_user_answers()
+            with self._db_lock:
+                saved_answers = self._load_user_answers()
             unanswered = [q.strip() for q in task.user_questions if q.strip() and q.strip() not in saved_answers]
-            if unanswered and not self._prompt_user_for_task(task, unanswered, checkpoint=checkpoint, retry_count=0):
-                return False, True
+            if unanswered and not self._prompt_user_for_task(
+                task, unanswered, checkpoint=checkpoint, retry_count=0, guard=guard
+            ):
+                return False, True, None
 
         for attempt in range(self.config.limits.max_retries_per_task + 1):
             if self.stop_event is not None and self.stop_event.is_set():
                 self._emit("warn", f"[{task.task_id}] Stopped by user before attempt {attempt}.")
-                self.guard.hard_rollback(checkpoint)
-                self.db.update_task_status(task.task_id, "PENDING", retry_count=attempt)
-                return False, True
+                guard.hard_rollback(checkpoint)
+                with self._db_lock:
+                    self.db.update_task_status(task.task_id, "PENDING", retry_count=attempt)
+                return False, True, None
 
             if task_tokens >= self.config.limits.max_tokens_per_task:
-                self.db.record_run(
-                    task.task_id,
-                    attempt,
-                    "budget-guard",
-                    "none",
-                    TokenUsage(),
-                    0.0,
-                    "BUDGET_EXCEEDED",
-                    trimmed_error_log=f"Task token budget exhausted ({task_tokens}).",
-                )
+                with self._db_lock:
+                    self.db.record_run(
+                        task.task_id,
+                        attempt,
+                        "budget-guard",
+                        "none",
+                        TokenUsage(),
+                        0.0,
+                        "BUDGET_EXCEEDED",
+                        trimmed_error_log=f"Task token budget exhausted ({task_tokens}).",
+                    )
                 break
 
             tier_name, model, effort = self._select_tier(task, attempt, force_escalation)
@@ -268,10 +314,10 @@ class Orchestrator:
 
             exec_res: ExecutionResult | None = None
             for _dyn in range(3):
-                compact_diff = self.guard.get_compact_diff(task.allowed_write_files) if attempt > 0 else ""
+                compact_diff = guard.get_compact_diff(task.allowed_write_files) if attempt > 0 else ""
 
                 try:
-                    prompt, est_tok = self.compiler.compile(
+                    prompt, est_tok = compiler.compile(
                         task,
                         attempt=attempt,
                         last_error=last_error,
@@ -281,22 +327,26 @@ class Orchestrator:
                 except PromptTooLargeError as exc:
                     last_error = str(exc)
                     self._emit("error", f"[{task.task_id}] {last_error}")
-                    self.db.update_task_status(task.task_id, "BLOCKED", retry_count=attempt, last_error=last_error)
-                    return False, False
+                    with self._db_lock:
+                        self.db.update_task_status(task.task_id, "BLOCKED", retry_count=attempt, last_error=last_error)
+                    return False, False, None
 
                 self._emit("info", f"[{task.task_id}] Executing prompt (~{est_tok} tokens)...")
-                exec_res = self.executor.execute(prompt, task, model, effort)
+                exec_res = executor.execute(prompt, task, model, effort)
                 task_tokens += exec_res.usage.total_tokens
 
                 dyn_questions = _extract_need_user_input(exec_res.raw_output)
                 if dyn_questions and self.ask_user is not None and dynamic_asks < 2:
-                    saved_answers = self._load_user_answers()
+                    with self._db_lock:
+                        saved_answers = self._load_user_answers()
                     unanswered_dyn = [q for q in dyn_questions if q not in saved_answers]
                     if unanswered_dyn:
                         dynamic_asks += 1
-                        self.guard.hard_rollback(checkpoint)
-                        if not self._prompt_user_for_task(task, unanswered_dyn, checkpoint=checkpoint, retry_count=attempt):
-                            return False, True
+                        guard.hard_rollback(checkpoint)
+                        if not self._prompt_user_for_task(
+                            task, unanswered_dyn, checkpoint=checkpoint, retry_count=attempt, guard=guard
+                        ):
+                            return False, True, None
                         continue
                 break
             assert exec_res is not None
@@ -312,28 +362,31 @@ class Orchestrator:
                 last_verdict = exec_res.verdict_override
                 last_error = exec_res.error_message or f"Executor failed ({exec_res.verdict_override})"
                 self._emit("warn", f"[{task.task_id}] {last_verdict}: {last_error[:240]}")
-                self.db.record_run(
-                    task.task_id,
-                    attempt,
-                    exec_res.model_used,
-                    exec_res.effort_used,
-                    exec_res.usage,
-                    exec_res.duration_sec,
-                    exec_res.verdict_override,
-                    trimmed_error_log=last_error,
-                )
+                with self._db_lock:
+                    self.db.record_run(
+                        task.task_id,
+                        attempt,
+                        exec_res.model_used,
+                        exec_res.effort_used,
+                        exec_res.usage,
+                        exec_res.duration_sec,
+                        exec_res.verdict_override,
+                        trimmed_error_log=last_error,
+                    )
                 if exec_res.verdict_override in ("SCOPE_VIOLATION", "BUDGET_EXCEEDED", "MAX_TURNS_EXCEEDED", "TIMEOUT"):
-                    self.guard.hard_rollback(checkpoint)
+                    guard.hard_rollback(checkpoint)
                 if exec_res.verdict_override == "BUDGET_EXCEEDED":
                     break
                 if exec_res.verdict_override == "MAX_TURNS_EXCEEDED" and tier_name == "escalation":
                     break
                 force_escalation = True
-                self.db.update_task_status(task.task_id, "RUNNING", retry_count=attempt + 1, last_error=last_error)
+                with self._db_lock:
+                    self.db.update_task_status(task.task_id, "RUNNING", retry_count=attempt + 1, last_error=last_error)
                 continue
 
-            self.db.update_task_status(task.task_id, "VERIFYING")
-            verify_res = self.verifier.verify(task)
+            with self._db_lock:
+                self.db.update_task_status(task.task_id, "VERIFYING")
+            verify_res = verifier.verify(task)
             emit_trace(
                 self.on_trace,
                 phase="verifier",
@@ -346,24 +399,27 @@ class Orchestrator:
             )
 
             if verify_res.passed:
-                self.db.record_run(
-                    task.task_id,
-                    attempt,
-                    exec_res.model_used,
-                    exec_res.effort_used,
-                    exec_res.usage,
-                    exec_res.duration_sec,
-                    "PASS",
-                )
-                commit_sha = self.guard.commit_task(
+                commit_sha = guard.commit_task(
                     task.task_id,
                     task.title,
                     task.allowed_write_files + task.create_new_files,
-                    stage_all_changed=not task.strict_scope,
+                    stage_all_changed=(not task.strict_scope or self.config.guards.scope_mode in ("soft", "flexible")),
                 )
-                self.db.update_task_status(task.task_id, "DONE", commit_sha=commit_sha, retry_count=attempt)
-                self._emit("success", f"[{task.task_id}] PASS -> Committed {commit_sha[:8]}")
-                return True, False
+                with self._db_lock:
+                    self.db.record_run(
+                        task.task_id,
+                        attempt,
+                        exec_res.model_used,
+                        exec_res.effort_used,
+                        exec_res.usage,
+                        exec_res.duration_sec,
+                        "PASS",
+                    )
+                    if not defer_done:
+                        self.db.update_task_status(task.task_id, "DONE", commit_sha=commit_sha, retry_count=attempt)
+                if not defer_done:
+                    self._emit("success", f"[{task.task_id}] PASS -> Committed {commit_sha[:8]}")
+                return True, False, commit_sha
 
             self._emit("warn", f"[{task.task_id}] Attempt {attempt} failed: {verify_res.verdict}")
 
@@ -372,6 +428,84 @@ class Orchestrator:
                 # Persist violation summary BEFORE rolling back dirty files.
                 last_error = verify_res.trimmed_error_log
                 last_verdict = verify_res.verdict
+                with self._db_lock:
+                    self.db.record_run(
+                        task.task_id,
+                        attempt,
+                        exec_res.model_used,
+                        exec_res.effort_used,
+                        exec_res.usage,
+                        exec_res.duration_sec,
+                        verify_res.verdict,
+                        error_hash=verify_res.error_hash,
+                        trimmed_error_log=last_error,
+                    )
+                guard.hard_rollback(checkpoint)
+                with self._db_lock:
+                    self.db.update_task_status(
+                        task.task_id,
+                        "RUNNING",
+                        retry_count=attempt + 1,
+                        last_error=last_error,
+                        last_error_hash=verify_res.error_hash,
+                    )
+                continue
+
+            if verify_res.verdict == "EMPTY_DIFF":
+                last_error = verify_res.trimmed_error_log
+                last_verdict = "EMPTY_DIFF"
+                with self._db_lock:
+                    self.db.record_run(
+                        task.task_id,
+                        attempt,
+                        exec_res.model_used,
+                        exec_res.effort_used,
+                        exec_res.usage,
+                        exec_res.duration_sec,
+                        "EMPTY_DIFF",
+                        error_hash=verify_res.error_hash,
+                        trimmed_error_log=last_error,
+                    )
+                if tier_name == "escalation":
+                    break
+                force_escalation = True
+                with self._db_lock:
+                    self.db.update_task_status(task.task_id, "RUNNING", retry_count=attempt + 1, last_error=last_error)
+                continue
+
+            # VERIFY_FAIL or TIMEOUT: detect identical error loop
+            if prev_error_hash and verify_res.error_hash == prev_error_hash:
+                last_error = verify_res.trimmed_error_log
+                last_verdict = "IDENTICAL_ERROR"
+                with self._db_lock:
+                    self.db.record_run(
+                        task.task_id,
+                        attempt,
+                        exec_res.model_used,
+                        exec_res.effort_used,
+                        exec_res.usage,
+                        exec_res.duration_sec,
+                        "IDENTICAL_ERROR",
+                        error_hash=verify_res.error_hash,
+                        trimmed_error_log=last_error,
+                    )
+                if tier_name == "escalation":
+                    break
+                force_escalation = True
+                with self._db_lock:
+                    self.db.update_task_status(
+                        task.task_id,
+                        "RUNNING",
+                        retry_count=attempt + 1,
+                        last_error=last_error,
+                        last_error_hash=verify_res.error_hash,
+                    )
+                continue
+
+            prev_error_hash = verify_res.error_hash
+            last_error = verify_res.trimmed_error_log
+            last_verdict = verify_res.verdict
+            with self._db_lock:
                 self.db.record_run(
                     task.task_id,
                     attempt,
@@ -383,7 +517,6 @@ class Orchestrator:
                     error_hash=verify_res.error_hash,
                     trimmed_error_log=last_error,
                 )
-                self.guard.hard_rollback(checkpoint)
                 self.db.update_task_status(
                     task.task_id,
                     "RUNNING",
@@ -391,80 +524,99 @@ class Orchestrator:
                     last_error=last_error,
                     last_error_hash=verify_res.error_hash,
                 )
-                continue
 
-            if verify_res.verdict == "EMPTY_DIFF":
-                last_error = verify_res.trimmed_error_log
-                last_verdict = "EMPTY_DIFF"
-                self.db.record_run(
-                    task.task_id,
-                    attempt,
-                    exec_res.model_used,
-                    exec_res.effort_used,
-                    exec_res.usage,
-                    exec_res.duration_sec,
-                    "EMPTY_DIFF",
-                    error_hash=verify_res.error_hash,
-                    trimmed_error_log=last_error,
-                )
-                if tier_name == "escalation":
-                    break
-                force_escalation = True
-                self.db.update_task_status(task.task_id, "RUNNING", retry_count=attempt + 1, last_error=last_error)
-                continue
+        guard.hard_rollback(checkpoint)
+        with self._db_lock:
+            self.db.update_task_status(task.task_id, "BLOCKED", last_error=last_error)
+        return False, False, None
 
-            # VERIFY_FAIL or TIMEOUT: detect identical error loop
-            if prev_error_hash and verify_res.error_hash == prev_error_hash:
-                last_error = verify_res.trimmed_error_log
-                last_verdict = "IDENTICAL_ERROR"
-                self.db.record_run(
-                    task.task_id,
-                    attempt,
-                    exec_res.model_used,
-                    exec_res.effort_used,
-                    exec_res.usage,
-                    exec_res.duration_sec,
-                    "IDENTICAL_ERROR",
-                    error_hash=verify_res.error_hash,
-                    trimmed_error_log=last_error,
-                )
-                if tier_name == "escalation":
-                    break
-                force_escalation = True
-                self.db.update_task_status(
-                    task.task_id,
-                    "RUNNING",
-                    retry_count=attempt + 1,
-                    last_error=last_error,
-                    last_error_hash=verify_res.error_hash,
-                )
-                continue
+    def _run_parallel_batch(self, tasks: list[TaskSpec]) -> tuple[int, int, bool]:
+        """Execute independent file-disjoint tasks concurrently in isolated git worktrees, then merge."""
+        self._emit("info", f"Chạy song song {len(tasks)} task độc lập trong git worktree: {[t.task_id for t in tasks]}")
+        work_items: list[tuple[TaskSpec, Path, str, EngineConfig, GitGuard, Verifier, PromptCompiler, ExecutorProtocol]] = []
 
-            prev_error_hash = verify_res.error_hash
-            last_error = verify_res.trimmed_error_log
-            last_verdict = verify_res.verdict
-            self.db.record_run(
-                task.task_id,
-                attempt,
-                exec_res.model_used,
-                exec_res.effort_used,
-                exec_res.usage,
-                exec_res.duration_sec,
-                verify_res.verdict,
-                error_hash=verify_res.error_hash,
-                trimmed_error_log=last_error,
+        for task in tasks:
+            safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", task.task_id)
+            wt_dir = self.config.auto_engine_dir / "worktrees" / safe_id
+            wt_branch = f"auto-wt-{safe_id}"
+            self.guard.create_worktree(wt_dir, wt_branch)
+
+            wt_cfg = self.config.model_copy(deep=True)
+            wt_cfg.project.target_repo = str(wt_dir)
+            wt_cfg.agy.dynamic_mcp_gating = False
+            wt_auto = wt_dir / ".auto-engine"
+            wt_auto.mkdir(parents=True, exist_ok=True)
+            if self._user_answers_path.is_file():
+                shutil.copyfile(self._user_answers_path, wt_auto / "user_answers.json")
+
+            wt_guard = GitGuard(
+                wt_dir,
+                ignore_artifacts=wt_cfg.guards.ignore_artifacts,
+                forbid_demo_patterns=wt_cfg.guards.forbid_demo_patterns,
+                enforce_production_only=wt_cfg.guards.enforce_production_only,
             )
-            self.db.update_task_status(
-                task.task_id,
-                "RUNNING",
-                retry_count=attempt + 1,
-                last_error=last_error,
-                last_error_hash=verify_res.error_hash,
+            wt_verifier = Verifier(wt_cfg, wt_guard)
+            wt_compiler = PromptCompiler(wt_cfg)
+            wt_exec = (
+                self.executor_factory(wt_cfg)
+                if self.executor_factory is not None
+                else build_executor(wt_cfg, on_trace=self.on_trace)
             )
+            work_items.append((task, wt_dir, wt_branch, wt_cfg, wt_guard, wt_verifier, wt_compiler, wt_exec))
 
-        self.guard.hard_rollback(checkpoint)
-        self.db.update_task_status(task.task_id, "BLOCKED", last_error=last_error)
-        return False, False
+        passed_cnt = 0
+        blocked_cnt = 0
+        stopped_any = False
+
+        try:
+            outcomes: list[tuple[TaskSpec, str, bool, bool, str | None]] = []
+            with ThreadPoolExecutor(max_workers=len(work_items)) as pool:
+                futures = [
+                    (
+                        item[0],
+                        item[2],
+                        pool.submit(
+                            self._run_single_task_with,
+                            item[0],
+                            guard=item[4],
+                            verifier=item[5],
+                            compiler=item[6],
+                            executor=item[7],
+                            defer_done=True,
+                        ),
+                    )
+                    for item in work_items
+                ]
+                for task, wt_branch, fut in futures:
+                    passed, stopped, sha = fut.result()
+                    outcomes.append((task, wt_branch, passed, stopped, sha))
+
+            for task, wt_branch, passed, stopped, _sha in outcomes:
+                if stopped:
+                    stopped_any = True
+                    continue
+                if not passed:
+                    blocked_cnt += 1
+                    continue
+                ok, merge_err = self.guard.merge_branch_into_current(wt_branch)
+                if ok:
+                    merged_sha = self.guard.create_checkpoint()
+                    with self._db_lock:
+                        self.db.update_task_status(task.task_id, "DONE", commit_sha=merged_sha)
+                    self._emit("success", f"[{task.task_id}] Parallel PASS -> Merged {merged_sha[:8]}")
+                    passed_cnt += 1
+                else:
+                    self._emit("warn", f"[{task.task_id}] Merge conflict ({merge_err[:120]}); retrying sequentially.")
+                    with self._db_lock:
+                        self.db.update_task_status(task.task_id, "PENDING", retry_count=0)
+        finally:
+            for _task, wt_dir, wt_branch, *_rest in work_items:
+                self.guard.remove_worktree(wt_dir, wt_branch)
+            wt_root = self.config.auto_engine_dir / "worktrees"
+            if wt_root.is_dir() and not any(wt_root.iterdir()):
+                shutil.rmtree(wt_root, ignore_errors=True)
+
+        return passed_cnt, blocked_cnt, stopped_any
 
     def run_sprint(self, *, auto_approve: bool = False, sprint_name: str = "sprint-1") -> dict:
         """Execute ready tasks in DAG order until completion, budget cap, or Global Circuit Breaker."""
@@ -492,10 +644,34 @@ class Orchestrator:
                 halted_reason = "GLOBAL_CIRCUIT_BREAKER"
                 break
 
-            task = self.db.get_next_ready_task()
-            if task is None:
+            allow_parallel = (
+                self.config.sprint.max_parallel_tasks > 1
+                and (not self._executor_injected or self.executor_factory is not None)
+            )
+            limit = self.config.sprint.max_parallel_tasks if allow_parallel else 1
+            ready_batch = self.db.get_ready_tasks(limit=limit)
+            if not ready_batch:
                 break
 
+            if len(ready_batch) >= 2:
+                passed_cnt, blocked_cnt, stopped_mid_task = self._run_parallel_batch(ready_batch)
+                if stopped_mid_task:
+                    halted_reason = "STOPPED_BY_USER"
+                    break
+                if passed_cnt > 0:
+                    consecutive_blocked = blocked_cnt
+                else:
+                    consecutive_blocked += blocked_cnt
+                self.db.set_meta("consecutive_blocked", str(consecutive_blocked))
+                if consecutive_blocked >= self.config.limits.max_consecutive_blocked_tasks:
+                    halted_reason = "GLOBAL_CIRCUIT_BREAKER"
+                    self._notify_webhook(
+                        {"event": "SPRINT_HALTED", "reason": halted_reason, "consecutive_blocked": consecutive_blocked}
+                    )
+                    break
+                continue
+
+            task = ready_batch[0]
             passed, stopped_mid_task = self._run_single_task(task)
             if stopped_mid_task:
                 halted_reason = "STOPPED_BY_USER"

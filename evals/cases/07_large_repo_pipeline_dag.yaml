@@ -1,0 +1,196 @@
+id: eval-large-pipeline-dag
+title: "Event Ingestion Pipeline with Schema Validation, Retries & Persistent DLQ (15-File Repo)"
+domain: data_pipeline
+blueprint: python_app
+prd_markdown: |
+  Upgrade the existing ETL event pipeline without breaking `csv_reader.py`, `json_writer.py`, `normalize.py`, or `state_store.py`:
+
+  ## 1. Schema Validator (`src/core/schema.py`)
+  - Implement `SchemaValidator(required_fields: dict[str, type], ranges: dict[str, tuple[float, float]] | None = None)`:
+    + `validate(payload: dict) -> tuple[bool, list[str]]`: verify every required key exists (treat `bool` cleanly so `isinstance(True, int)` does not sneak past `int` fields!), check types (`str`, `int`, `float`), and validate inclusive numeric `ranges` when specified.
+
+  ## 2. Persistent Dead-Letter Queue (`src/storage/dlq.py`)
+  - Implement `DeadLetterQueue(file_path: str)` storing failed event entries as newline-delimited JSON on disk (`{"event_id": ..., "payload": ..., "error": ..., "attempts": ...}`).
+  - Methods: `push(event_id: str, payload: dict, error: str, attempts: int) -> None`, `list_entries() -> list[dict]` (reads from disk cleanly even across fresh `DeadLetterQueue(file_path)` instances!), and `clear() -> int`.
+
+  ## 3. Retry & DLQ Routing (`src/core/pipeline.py`)
+  - Implement `Pipeline(validator: SchemaValidator, handler: Callable[[dict], None], dlq: DeadLetterQueue, state_store: StateStore | None = None, max_retries: int = 2)`:
+    + `process_batch(records: list[EventRecord]) -> dict`:
+      - Validate each `record.payload`; invalid records skip retries immediately and go straight to `dlq` with `attempts=1`.
+      - Valid records invoke `handler(payload)`; retry on raised exceptions up to `max_retries` extra attempts (`max_retries + 1` total calls). If all attempts fail, push to `dlq` with actual `attempts`.
+      - Advance `state_store` cursor after processed events and return `{"succeeded": int, "failed_validation": int, "failed_execution": int}`.
+starter_files:
+  "src/__init__.py": ""
+  "src/core/__init__.py": ""
+  "src/core/record.py": |
+    from dataclasses import dataclass
+
+    @dataclass
+    class EventRecord:
+        event_id: str
+        payload: dict
+        offset: int = 0
+  "src/core/schema.py": |
+    class SchemaValidator:
+        def __init__(
+            self,
+            required_fields: dict[str, type],
+            ranges: dict[str, tuple[float, float]] | None = None,
+        ) -> None:
+            self.required_fields = required_fields
+            self.ranges = ranges or {}
+
+        def validate(self, payload: dict) -> tuple[bool, list[str]]:
+            raise NotImplementedError
+  "src/core/pipeline.py": |
+    from typing import Callable
+    from src.core.record import EventRecord
+    from src.core.schema import SchemaValidator
+    from src.storage.dlq import DeadLetterQueue
+    from src.storage.state_store import StateStore
+
+    class Pipeline:
+        def __init__(
+            self,
+            validator: SchemaValidator,
+            handler: Callable[[dict], None],
+            dlq: DeadLetterQueue,
+            state_store: StateStore | None = None,
+            max_retries: int = 2,
+        ) -> None:
+            self.validator = validator
+            self.handler = handler
+            self.dlq = dlq
+            self.state_store = state_store or StateStore()
+            self.max_retries = max_retries
+
+        def process_batch(self, records: list[EventRecord]) -> dict:
+            raise NotImplementedError
+  "src/plugins/__init__.py": ""
+  "src/plugins/csv_reader.py": |
+    import csv
+    import io
+
+    def parse_csv_rows(text: str) -> list[dict[str, str]]:
+        return list(csv.DictReader(io.StringIO(text.strip())))
+  "src/plugins/json_writer.py": |
+    import json
+    from pathlib import Path
+
+    def append_jsonl(path: Path, obj: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+  "src/plugins/normalize.py": |
+    def clean_tag(value: str) -> str:
+        return "_".join(value.strip().lower().split())
+  "src/storage/__init__.py": ""
+  "src/storage/state_store.py": |
+    class StateStore:
+        def __init__(self) -> None:
+            self.last_offset: int = -1
+
+        def commit_offset(self, offset: int) -> None:
+            if offset > self.last_offset:
+                self.last_offset = offset
+  "src/storage/dlq.py": |
+    class DeadLetterQueue:
+        def __init__(self, file_path: str) -> None:
+            self.file_path = file_path
+
+        def push(self, event_id: str, payload: dict, error: str, attempts: int) -> None:
+            raise NotImplementedError
+
+        def list_entries(self) -> list[dict]:
+            raise NotImplementedError
+
+        def clear(self) -> int:
+            raise NotImplementedError
+  "tests/__init__.py": ""
+  "tests/test_existing_plugins.py": |
+    from pathlib import Path
+    from src.plugins.csv_reader import parse_csv_rows
+    from src.plugins.json_writer import append_jsonl
+    from src.plugins.normalize import clean_tag
+    from src.storage.state_store import StateStore
+
+    def test_plugins_and_state_store(tmp_path: Path) -> None:
+        rows = parse_csv_rows("name,role\nAlice, Admin ")
+        assert rows[0]["name"] == "Alice"
+        assert clean_tag("  High   Priority ") == "high_priority"
+        out = tmp_path / "events.jsonl"
+        append_jsonl(out, {"ok": True})
+        assert out.is_file()
+        st = StateStore()
+        st.commit_offset(5)
+        assert st.last_offset == 5
+  "tests/test_pipeline_public.py": |
+    from src.core.schema import SchemaValidator
+
+    def test_validator_initializes() -> None:
+        v = SchemaValidator({"user_id": str})
+        assert "user_id" in v.required_fields
+public_verify_commands:
+  - "{python} -m pytest tests/test_existing_plugins.py tests/test_pipeline_public.py -q"
+hidden_files:
+  "hidden_tests/test_hidden_pipeline.py": |
+    from pathlib import Path
+    from src.core.pipeline import Pipeline
+    from src.core.record import EventRecord
+    from src.core.schema import SchemaValidator
+    from src.storage.dlq import DeadLetterQueue
+    from src.storage.state_store import StateStore
+
+    def test_schema_retry_and_persistent_dlq(tmp_path: Path) -> None:
+        dlq_path = str(tmp_path / "dlq" / "failed.jsonl")
+        validator = SchemaValidator(
+            required_fields={"user_id": str, "amount": int},
+            ranges={"amount": (1, 1000)},
+        )
+
+        # Reject bool masquerading as int and out-of-range ints
+        ok_bool, _ = validator.validate({"user_id": "u1", "amount": True})
+        assert ok_bool is False
+        ok_range, _ = validator.validate({"user_id": "u1", "amount": 5000})
+        assert ok_range is False
+
+        call_counts: dict[str, int] = {}
+        processed: list[str] = []
+
+        def flaky_handler(payload: dict) -> None:
+            uid = payload["user_id"]
+            call_counts[uid] = call_counts.get(uid, 0) + 1
+            if uid == "flaky" and call_counts[uid] < 2:
+                raise RuntimeError("transient network error")
+            if uid == "poison":
+                raise RuntimeError("permanent downstream rejection")
+            processed.append(uid)
+
+        dlq = DeadLetterQueue(dlq_path)
+        state = StateStore()
+        pipeline = Pipeline(validator, flaky_handler, dlq, state_store=state, max_retries=2)
+
+        stats = pipeline.process_batch(
+            [
+                EventRecord("e1", {"user_id": "bad", "amount": -5}, offset=1),
+                EventRecord("e2", {"user_id": "flaky", "amount": 50}, offset=2),
+                EventRecord("e3", {"user_id": "poison", "amount": 90}, offset=3),
+            ]
+        )
+        assert stats == {"succeeded": 1, "failed_validation": 1, "failed_execution": 1}
+        assert processed == ["flaky"]
+        assert state.last_offset == 3
+
+        # Fresh DLQ instance verifies real disk persistence
+        dlq_reopened = DeadLetterQueue(dlq_path)
+        entries = dlq_reopened.list_entries()
+        assert len(entries) == 2
+        by_id = {e["event_id"]: e for e in entries}
+        assert by_id["e1"]["attempts"] == 1
+        assert by_id["e3"]["attempts"] == 3
+        assert dlq_reopened.clear() == 2
+        assert DeadLetterQueue(dlq_path).list_entries() == []
+hidden_pass_to_pass_commands:
+  - "{python} -m pytest tests/test_existing_plugins.py tests/test_pipeline_public.py -q"
+hidden_fail_to_pass_commands:
+  - "{python} -m pytest hidden_tests/test_hidden_pipeline.py -q"

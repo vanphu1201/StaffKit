@@ -170,3 +170,27 @@ def test_flexible_scope_allows_new_files_while_blocking_protected_tests(temp_rep
     ok2, viols2 = guard.check_scope(["src/app.py"], [], ["tests/test_core.py"], strict_scope=False)
     assert not ok2 and "tests/test_core.py" in viols2
     guard.hard_rollback(chk)
+
+
+def test_soft_scope_allows_same_module_and_new_tests_but_blocks_unrelated_and_protected(temp_repo: Path) -> None:
+    guard = GitGuard(temp_repo)
+    guard.ensure_work_branch("main", "auto-engine/sprint-soft")
+    chk = guard.create_checkpoint()
+
+    # Create same-module helper + brand new test file -> ALLOWED in soft scope
+    (temp_repo / "src" / "helper.py").write_text("H = 1\n", encoding="utf-8")
+    (temp_repo / "tests" / "test_new_feature.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    ok, viols = guard.check_scope(["src/app.py"], [], ["tests/test_core.py"], strict_scope=True, scope_mode="soft")
+    assert ok and viols == []
+
+    # Modifying unrelated directory or existing unlisted test file -> BLOCKED even in soft scope
+    (temp_repo / "other").mkdir()
+    (temp_repo / "other" / "unrelated.py").write_text("X = 9\n", encoding="utf-8")
+    ok2, viols2 = guard.check_scope(["src/app.py"], [], ["tests/test_core.py"], strict_scope=True, scope_mode="soft")
+    assert not ok2 and "other/unrelated.py" in viols2
+    guard.hard_rollback(chk)
+
+    (temp_repo / "tests" / "test_app.py").write_text("def test_add():\n    assert False\n", encoding="utf-8")
+    ok3, viols3 = guard.check_scope(["src/app.py"], [], [], strict_scope=True, scope_mode="soft")
+    assert not ok3 and "tests/test_app.py" in viols3
+    guard.hard_rollback(chk)

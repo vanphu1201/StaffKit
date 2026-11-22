@@ -191,17 +191,37 @@ class StateDB:
             rows = conn.execute("SELECT * FROM tasks ORDER BY rowid ASC").fetchall()
             return [dict(r) for r in rows]
 
-    def get_next_ready_task(self) -> TaskSpec | None:
-        """Return the first PENDING task whose dependencies are all DONE."""
+    def get_ready_tasks(self, limit: int = 1) -> list[TaskSpec]:
+        """Return up to `limit` file-disjoint PENDING tasks whose dependencies are all DONE."""
         rows = self.list_tasks()
         done_ids = {r["task_id"] for r in rows if r["status"] == "DONE"}
+        ready: list[TaskSpec] = []
+        claimed_files: set[str] = set()
+
         for row in rows:
             if row["status"] != "PENDING":
                 continue
             deps: list[str] = json.loads(row["depends_on_json"])
-            if all(dep in done_ids for dep in deps):
-                return TaskSpec.model_validate_json(row["spec_json"])
-        return None
+            if not all(dep in done_ids for dep in deps):
+                continue
+            spec = TaskSpec.model_validate_json(row["spec_json"])
+            if limit <= 1:
+                return [spec]
+            if spec.user_questions and ready:
+                continue
+            task_files = set(spec.allowed_write_files) | set(spec.create_new_files)
+            if ready and (task_files & claimed_files):
+                continue
+            ready.append(spec)
+            claimed_files.update(task_files)
+            if spec.user_questions or len(ready) >= limit:
+                break
+        return ready
+
+    def get_next_ready_task(self) -> TaskSpec | None:
+        """Return the first PENDING task whose dependencies are all DONE."""
+        batch = self.get_ready_tasks(limit=1)
+        return batch[0] if batch else None
 
     def update_task_status(
         self,

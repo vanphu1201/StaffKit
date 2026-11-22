@@ -31,6 +31,23 @@ from engine.indexer import RepoIndexer, compact_repo_map_for_planner, list_real_
 from engine.models import EngineConfig, PlanOutput, TaskSpec, TokenUsage, inline_json_schema, normalize_posix_path
 
 JSON_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
+_MD_HEADING_RE = re.compile(r"^\s*#{2,3}\s+\S")
+_MD_BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\S")
+
+
+def should_use_fast_path(prd_text: str, real_files: set[str], planning_mode: str = "auto") -> bool:
+    """Decide whether a task should skip the LLM Planner and execute directly in 1 surgical turn."""
+    mode = (planning_mode or "auto").strip().lower()
+    if mode == "dag":
+        return False
+    if mode == "single":
+        return True
+    cleaned = prd_text.strip()
+    if not cleaned or len(real_files) == 0 or len(real_files) > 8 or len(cleaned) > 1800:
+        return False
+    headings = sum(1 for ln in cleaned.splitlines() if _MD_HEADING_RE.match(ln))
+    bullets = sum(1 for ln in cleaned.splitlines() if _MD_BULLET_RE.match(ln))
+    return headings <= 2 and bullets <= 10
 
 
 class PlannerError(RuntimeError):
@@ -407,7 +424,7 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
 1. Nếu PRD mơ hồ, thiếu thông số API/DB/UX cốt lõi hoặc mâu thuẫn không thể suy đoán an toàn:
    - Đặt `status = "NEEDS_CLARIFICATION"`, liệt kê tối đa 5 câu hỏi ngắn gọn trong `clarifying_questions`, để `tasks = []`.
 2. Nếu PRD đủ rõ:
-   - Đặt `status = "READY"`, chia thành các Atomic Task nhỏ gọn (`len(allowed_write_files) <= {self.config.limits.max_files_per_task}`).
+   - Đặt `status = "READY"`, chia theo **Vertical Slice** vừa tầm (gộp các file liên quan chặt chẽ thành task 2–{self.config.limits.max_files_per_task} file thay vì tách vụn quá nhiều task 1 file gây tốn lượt khởi động; vẫn giữ `len(allowed_write_files) <= {self.config.limits.max_files_per_task}`).
    - Gán đúng `complexity` (`low` | `medium` | `high`), `protected_test_files` (không trùng `allowed_write_files`), `needs_lsp_mcp`, `needs_docs_mcp`, và mảng `verify_commands: list[str]` (từng lệnh đơn, KHÔNG ghép `&&`).
    - Tuyệt đối KHÔNG bịa đường dẫn file không có trong repo (trừ file khai báo trong `create_new_files`).
    - QUY TẮC SẢN PHẨM THẬT: Không thiết kế task tạo dữ liệu giả lập, tài khoản demo hay stub giữ chỗ. Hãy chọn công nghệ/kiến trúc phù hợp nhất với yêu cầu trong PRD (không tự thu hẹp nếu là Mobile/CLI/Backend/Desktop/AI).
@@ -449,8 +466,10 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
         prd_text = prd_path.read_text(encoding="utf-8", errors="replace")
         real_files = list_real_files(self.config.target_repo_path)
 
-        # 0-token fast-path for small focused repositories/tasks (avoids LLM Planner & repomix overhead)
-        if self._llm_caller is None and len(real_files) <= 8 and len(prd_text.strip()) <= 2500:
+        # 0-token fast-path for focused small tasks (avoids LLM Planner & repomix overhead without under-planning complex PRDs)
+        if self._llm_caller is None and should_use_fast_path(
+            prd_text, real_files, self.config.sprint.planning_mode
+        ):
             title = next(
                 (ln.lstrip("# ").strip() for ln in prd_text.splitlines() if ln.strip()),
                 prd_path.stem,

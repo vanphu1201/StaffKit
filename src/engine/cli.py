@@ -291,6 +291,7 @@ def eval_suite(
     cases_dir: Optional[Path] = typer.Option(None, "--cases-dir", help="Directory containing YAML eval cases"),
     case_ids: Optional[list[str]] = typer.Option(None, "--case", help="Filter by specific case ID (repeatable)"),
     arm: str = typer.Option("both", "--arm", help="Which arm to evaluate: both | baseline | engine"),
+    runs: int = typer.Option(1, "--runs", min=1, help="Repeated runs per case for statistical stability"),
     output: Path = typer.Option(Path(".auto-engine/eval_report.md"), "--output", help="Markdown report path"),
 ) -> None:
     """Run isolated A/B hidden-test benchmark (Baseline `agy` vs Auto-Prompt Engine)."""
@@ -305,9 +306,11 @@ def eval_suite(
         raise typer.Exit(code=1)
 
     selected_arms: tuple[ArmName, ...] = ("baseline", "engine") if arm == "both" else (arm,)  # type: ignore[assignment]
-    console.print(f"[cyan]Running A/B Hidden-Test Eval across {len(cases)} case(s), arms={selected_arms}...[/cyan]")
+    console.print(
+        f"[cyan]Running A/B Hidden-Test Eval across {len(cases)} case(s) x {runs} run(s), arms={selected_arms}...[/cyan]"
+    )
     evaluator = Evaluator(cfg)
-    report_obj = evaluator.run_suite(cases, arms=selected_arms)
+    report_obj = evaluator.run_suite(cases, arms=selected_arms, runs=runs)
 
     json_out = output.with_suffix(".json")
     Evaluator.write_report(report_obj, output, json_path=json_out)

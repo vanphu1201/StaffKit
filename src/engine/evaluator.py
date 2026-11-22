@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -65,10 +66,11 @@ class EvalCase(BaseModel):
 
 
 class ArmCaseResult(BaseModel):
-    """Execution and hidden-test grading outcome for one (case, arm) run."""
+    """Execution and hidden-test grading outcome for one (case, arm, run_index) execution."""
 
     case_id: str
     arm: ArmName
+    run_index: int = 1
     resolved: bool
     regression_passed: bool
     prompt_tokens: int = 0
@@ -83,10 +85,11 @@ class ArmCaseResult(BaseModel):
 
 
 class ArmSummary(BaseModel):
-    """Aggregated benchmark metrics across all evaluated cases for one arm."""
+    """Aggregated benchmark metrics across all evaluated cases and runs for one arm."""
 
     arm: ArmName
     total_cases: int = 0
+    runs_per_case: int = 1
     resolved_cases: int = 0
     regression_passed_cases: int = 0
     resolve_rate: float = 0.0
@@ -95,6 +98,7 @@ class ArmSummary(BaseModel):
     completion_tokens: int = 0
     total_tokens: int = 0
     tokens_per_resolved: float | None = None
+    token_stddev: float = 0.0
     avg_duration_sec: float = 0.0
 
 
@@ -115,8 +119,8 @@ class EvalReport(BaseModel):
             f"- Cases ({len(self.cases_evaluated)}): {', '.join(self.cases_evaluated)}",
             "",
             "## Arm Summary",
-            "| Arm | Resolved | Resolve Rate | Regression PASS | Total Tokens | Tokens / Resolved | Avg Duration |",
-            "|---|---:|---:|---:|---:|---:|---:|",
+            "| Arm | Runs/Case | Resolved | Resolve Rate | Regression PASS | Total Tokens | Tokens / Resolved | Token StdDev | Avg Duration |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
         for arm_key in ("baseline", "engine"):
             s = self.summaries.get(arm_key)
@@ -124,8 +128,8 @@ class EvalReport(BaseModel):
                 continue
             tpr = f"{s.tokens_per_resolved:,.0f}" if s.tokens_per_resolved is not None else "N/A"
             lines.append(
-                f"| `{s.arm}` | {s.resolved_cases}/{s.total_cases} | {s.resolve_rate * 100:.1f}% | "
-                f"{s.regression_pass_rate * 100:.1f}% | {s.total_tokens:,} | {tpr} | {s.avg_duration_sec:.2f}s |"
+                f"| `{s.arm}` | {s.runs_per_case} | {s.resolved_cases}/{s.total_cases} | {s.resolve_rate * 100:.1f}% | "
+                f"{s.regression_pass_rate * 100:.1f}% | {s.total_tokens:,} | {tpr} | {s.token_stddev:,.1f} | {s.avg_duration_sec:.2f}s |"
             )
 
         if self.resolve_rate_delta is not None or self.token_savings_pct is not None:
@@ -139,14 +143,14 @@ class EvalReport(BaseModel):
             [
                 "",
                 "## Per-Case Breakdown",
-                "| Case | Arm | Resolved | Regression | Prompt Tok | Completion Tok | Time | Changed Files | Notes |",
-                "|---|---|---:|---:|---:|---:|---:|---:|---|",
+                "| Case | Arm | Run | Resolved | Regression | Prompt Tok | Completion Tok | Time | Changed Files | Notes |",
+                "|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
             ]
         )
         for r in self.results:
             note = r.error_summary.replace("\n", " ").strip()[:120] or "-"
             lines.append(
-                f"| `{r.case_id}` | `{r.arm}` | {'PASS' if r.resolved else 'FAIL'} | "
+                f"| `{r.case_id}` | `{r.arm}` | {r.run_index} | {'PASS' if r.resolved else 'FAIL'} | "
                 f"{'PASS' if r.regression_passed else 'FAIL'} | {r.prompt_tokens:,} | "
                 f"{r.completion_tokens:,} | {r.duration_sec:.2f}s | {r.files_changed} | {note} |"
             )
@@ -371,20 +375,23 @@ def run_engine_arm(case: EvalCase, repo_dir: Path, config: EngineConfig) -> tupl
     return usage, duration, str(err)
 
 
-def _summarize_arm(arm: ArmName, rows: list[ArmCaseResult]) -> ArmSummary:
+def _summarize_arm(arm: ArmName, rows: list[ArmCaseResult], runs: int = 1) -> ArmSummary:
     n = len(rows)
     if n == 0:
-        return ArmSummary(arm=arm)
+        return ArmSummary(arm=arm, runs_per_case=runs)
     resolved_cnt = sum(1 for r in rows if r.resolved)
     reg_cnt = sum(1 for r in rows if r.regression_passed)
     p_tok = sum(r.prompt_tokens for r in rows)
     c_tok = sum(r.completion_tokens for r in rows)
     tot_tok = p_tok + c_tok
+    tok_series = [r.total_tokens for r in rows]
+    stddev = round(statistics.pstdev(tok_series), 2) if len(tok_series) > 1 else 0.0
     avg_dur = round(sum(r.duration_sec for r in rows) / n, 3)
     tpr = round(tot_tok / resolved_cnt, 2) if resolved_cnt > 0 else None
     return ArmSummary(
         arm=arm,
         total_cases=n,
+        runs_per_case=runs,
         resolved_cases=resolved_cnt,
         regression_passed_cases=reg_cnt,
         resolve_rate=round(resolved_cnt / n, 4),
@@ -393,6 +400,7 @@ def _summarize_arm(arm: ArmName, rows: list[ArmCaseResult]) -> ArmSummary:
         completion_tokens=c_tok,
         total_tokens=tot_tok,
         tokens_per_resolved=tpr,
+        token_stddev=stddev,
         avg_duration_sec=avg_dur,
     )
 
@@ -418,9 +426,11 @@ class Evaluator:
         case: EvalCase,
         arm: ArmName,
         work_root: Path,
+        *,
+        run_index: int = 1,
     ) -> ArmCaseResult:
-        """Set up fresh sandbox for one (case, arm), execute agent, then grade with hidden tests."""
-        repo_dir = setup_isolated_case_repo(case, work_root / f"{case.id}__{arm}")
+        """Set up fresh sandbox for one (case, arm, run_index), execute agent, then grade with hidden tests."""
+        repo_dir = setup_isolated_case_repo(case, work_root / f"{case.id}__{arm}__r{run_index}")
         initial_sha = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=str(repo_dir),
@@ -448,6 +458,7 @@ class Evaluator:
         return ArmCaseResult(
             case_id=case.id,
             arm=arm,
+            run_index=run_index,
             resolved=resolved,
             regression_passed=reg_ok,
             prompt_tokens=usage.prompt_tokens,
@@ -462,26 +473,30 @@ class Evaluator:
         cases: list[EvalCase],
         *,
         arms: tuple[ArmName, ...] = ("baseline", "engine"),
+        runs: int = 1,
         work_dir: Path | None = None,
     ) -> EvalReport:
-        """Run all cases across requested arms and return comparative EvalReport."""
+        """Run all cases x runs across requested arms and return comparative EvalReport."""
+        repeat_runs = max(1, runs)
         results: list[ArmCaseResult] = []
+
+        def _execute_all(base_work: Path) -> None:
+            for case in cases:
+                for run_idx in range(1, repeat_runs + 1):
+                    for arm in arms:
+                        results.append(self.evaluate_case(case, arm, base_work, run_index=run_idx))
+
         if work_dir is None:
             with tempfile.TemporaryDirectory(prefix="auto_engine_eval_") as tmp:
-                base_work = Path(tmp)
-                for case in cases:
-                    for arm in arms:
-                        results.append(self.evaluate_case(case, arm, base_work))
+                _execute_all(Path(tmp))
         else:
             work_dir.mkdir(parents=True, exist_ok=True)
-            for case in cases:
-                for arm in arms:
-                    results.append(self.evaluate_case(case, arm, work_dir))
+            _execute_all(work_dir)
 
         summaries: dict[str, ArmSummary] = {}
         for arm in arms:
             arm_rows = [r for r in results if r.arm == arm]
-            summaries[arm] = _summarize_arm(arm, arm_rows)
+            summaries[arm] = _summarize_arm(arm, arm_rows, runs=repeat_runs)
 
         resolve_delta: float | None = None
         token_savings_pct: float | None = None

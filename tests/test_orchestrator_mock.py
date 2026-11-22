@@ -22,7 +22,7 @@ from engine.models import (
     ToolsConfig,
 )
 from engine.orchestrator import Orchestrator
-from engine.planner import Planner
+from engine.planner import Planner, should_use_fast_path
 from engine.verifier import Verifier
 
 
@@ -438,3 +438,104 @@ def test_orchestrator_dynamic_need_user_input_and_runtime_gate(tmp_path: Path) -
     assert res["final_verify_passed"] is True
     assert calls["n"] == 2
     assert "SECRET-PROD-42" in seen_prompts[1]
+
+
+def test_should_use_fast_path_distinguishes_small_vs_complex_or_large_repos() -> None:
+    small_files = {"src/a.py", "tests/test_a.py"}
+    short_prd = "Fix rounding bug in calculate_total()\n- Handle negative inputs\n"
+    assert should_use_fast_path(short_prd, small_files, "auto") is True
+
+    # Empty greenfield repo with zero tracked files should use DAG Planner, not fast-path
+    assert should_use_fast_path(short_prd, set(), "auto") is False
+
+    # Complex multi-section PRD in a small repo must still trigger DAG Planner
+    complex_prd = "## Module A\n- Step 1\n## Module B\n- Step 2\n## Module C\n- Step 3\n"
+    assert should_use_fast_path(complex_prd, small_files, "auto") is False
+
+    # Large repo (>8 files) triggers full DAG Planner even with concise PRD
+    large_files = {f"src/m{i}.py" for i in range(12)}
+    assert should_use_fast_path(short_prd, large_files, "auto") is False
+
+    # Explicit overrides always take precedence
+    assert should_use_fast_path(short_prd, small_files, "dag") is False
+    assert should_use_fast_path(complex_prd, large_files, "single") is True
+
+
+def test_parallel_dag_execution_with_git_worktrees(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    (repo / "src" / "mod_a.py").write_text("VAL_A = 0\n", encoding="utf-8")
+    (repo / "src" / "mod_b.py").write_text("VAL_B = 0\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=str(repo), check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "add mod_a and mod_b"], cwd=str(repo), check=True, capture_output=True)
+
+    cfg = _make_config(repo)
+    cfg.sprint = SprintConfig(
+        require_plan_approval=True,
+        max_parallel_tasks=2,
+        final_verify_commands=["python -m pytest -q"],
+    )
+    db = StateDB(cfg.state_db_path)
+    guard = GitGuard(repo, ignore_artifacts=cfg.guards.ignore_artifacts)
+    verifier = Verifier(cfg, guard)
+    compiler = PromptCompiler(cfg)
+
+    t1 = TaskSpec(
+        task_id="T-A",
+        title="Set mod_a",
+        complexity="low",
+        depends_on=[],
+        allowed_write_files=["src/mod_a.py"],
+        objective="Set VAL_A = 10",
+        verify_commands=["python -c \"import src.mod_a; assert src.mod_a.VAL_A == 10\""],
+    )
+    t2 = TaskSpec(
+        task_id="T-B",
+        title="Set mod_b",
+        complexity="low",
+        depends_on=[],
+        allowed_write_files=["src/mod_b.py"],
+        objective="Set VAL_B = 20",
+        verify_commands=["python -c \"import src.mod_b; assert src.mod_b.VAL_B == 20\""],
+    )
+    t3 = TaskSpec(
+        task_id="T-C",
+        title="Combine mod_a + mod_b",
+        complexity="low",
+        depends_on=["T-A", "T-B"],
+        allowed_write_files=["src/combined.py"],
+        create_new_files=["src/combined.py"],
+        objective="Combine VAL_A + VAL_B == 30",
+        verify_commands=["python -c \"import src.combined; assert src.combined.TOTAL == 30\""],
+    )
+    db.replace_plan([t1, t2, t3], plan_hash="p-par", approved=True)
+
+    seen_workdirs: list[Path] = []
+
+    def _make_exec(wt_cfg: EngineConfig):
+        wt_repo = wt_cfg.target_repo_path
+
+        class _WtExec:
+            def execute(self, prompt: str, task: TaskSpec, model: str, effort: str) -> ExecutionResult:
+                seen_workdirs.append(wt_repo)
+                if task.task_id == "T-A":
+                    (wt_repo / "src" / "mod_a.py").write_text("VAL_A = 10\n", encoding="utf-8")
+                elif task.task_id == "T-B":
+                    (wt_repo / "src" / "mod_b.py").write_text("VAL_B = 20\n", encoding="utf-8")
+                elif task.task_id == "T-C":
+                    (wt_repo / "src" / "combined.py").write_text(
+                        "from src.mod_a import VAL_A\nfrom src.mod_b import VAL_B\nTOTAL = VAL_A + VAL_B\n",
+                        encoding="utf-8",
+                    )
+                return ExecutionResult(success=True, model_used=model, effort_used=effort)
+
+        return _WtExec()
+
+    orch = Orchestrator(cfg, db, guard, verifier, compiler, executor_factory=_make_exec)
+    res = orch.run_sprint(auto_approve=True)
+    assert res["halted_reason"] is None
+    assert res["summary"]["counts"]["DONE"] == 3
+    assert res["final_verify_passed"] is True
+    # T-A and T-B ran inside separate .auto-engine/worktrees/... sandboxes, then cleaned up!
+    assert any("worktrees" in str(p) for p in seen_workdirs)
+    assert not (repo / ".auto-engine" / "worktrees").exists()
