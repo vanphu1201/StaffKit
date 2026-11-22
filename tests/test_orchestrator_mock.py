@@ -7,7 +7,7 @@ from pathlib import Path
 from engine.compiler import PromptCompiler
 from engine.database import StateDB
 from engine.git_guard import GitGuard
-from engine.indexer import RepoIndexer
+from engine.indexer import RepoIndexer, compact_repo_map_for_planner, locate_relevant_files
 from engine.models import (
     AgyConfig,
     AgyTierConfig,
@@ -539,3 +539,84 @@ def test_parallel_dag_execution_with_git_worktrees(tmp_path: Path) -> None:
     # T-A and T-B ran inside separate .auto-engine/worktrees/... sandboxes, then cleaned up!
     assert any("worktrees" in str(p) for p in seen_workdirs)
     assert not (repo / ".auto-engine" / "worktrees").exists()
+
+
+def test_locate_relevant_files_finds_targets_imports_and_respects_guards(tmp_path: Path) -> None:
+    repo = tmp_path / "large_repo"
+    for d in ("src/models", "src/utils", "src/repositories", "src/services", "tests"):
+        (repo / d).mkdir(parents=True, exist_ok=True)
+
+    (repo / "src/models/item.py").write_text("class WarehouseStock:\n    pass\n", encoding="utf-8")
+    (repo / "src/utils/validators.py").write_text("def check(x):\n    return x > 0\n", encoding="utf-8")
+    (repo / "src/repositories/stock_repo.py").write_text(
+        "from src.models.item import WarehouseStock\n\nclass StockRepository:\n    pass\n",
+        encoding="utf-8",
+    )
+    (repo / "src/services/inventory_service.py").write_text(
+        "from src.repositories.stock_repo import StockRepository\n\n"
+        "class InventoryService:\n    def reserve_order(self):\n        raise NotImplementedError\n",
+        encoding="utf-8",
+    )
+    (repo / "src/services/billing_service.py").write_text("def bill():\n    return 1\n", encoding="utf-8")
+    for idx in range(8):
+        (repo / f"src/utils/extra_{idx}.py").write_text(f"X = {idx}\n", encoding="utf-8")
+    (repo / "tests/test_billing.py").write_text("def test_b(): assert True\n", encoding="utf-8")
+    (repo / "tests/test_inventory_public.py").write_text("def test_i(): assert True\n", encoding="utf-8")
+
+    real_files = {
+        p.relative_to(repo).as_posix()
+        for p in repo.rglob("*.py")
+    }
+    prd = (
+        "Extend backend (keep billing_service.py and tests/test_billing.py passing without breaking them) "
+        "to implement `InventoryService.reserve_order` in src/repositories/stock_repo.py and src/services/inventory_service.py."
+    )
+    located = locate_relevant_files(prd, real_files, repo)
+    assert located.confident is True
+    assert "src/repositories/stock_repo.py" in located.target_files
+    assert "src/services/inventory_service.py" in located.target_files
+    assert "src/services/billing_service.py" not in located.target_files
+    assert "src/models/item.py" in located.readonly_files
+    assert "src/services/billing_service.py" in located.readonly_files
+    assert "tests/test_billing.py" in located.protected_tests
+    assert "tests/test_inventory_public.py" in located.protected_tests
+
+
+def test_should_use_fast_path_large_repo_with_located_targets() -> None:
+    large_files = {f"src/mod_{i}.py" for i in range(16)}
+    short_prd = "## Stock\n- Update `stock_repo.py`\n## Service\n- Update `inventory_service.py`\n"
+    assert (
+        should_use_fast_path(
+            short_prd,
+            large_files,
+            "auto",
+            located_targets=["src/mod_1.py", "src/mod_2.py"],
+        )
+        is True
+    )
+    assert should_use_fast_path(short_prd, large_files, "auto", located_targets=None) is False
+    huge_prd = "\n".join(f"## Section {i}\n- Step {i}" for i in range(6))
+    assert (
+        should_use_fast_path(
+            huge_prd,
+            large_files,
+            "auto",
+            located_targets=["src/mod_1.py"],
+        )
+        is False
+    )
+
+
+def test_compact_repo_map_prioritizes_relevant_files() -> None:
+    xml_blocks = "\n".join(
+        f'<file path="src/f{i}.py">\ndef func_{i}(): pass\n# ' + ("x" * 200) + "\n</file>"
+        for i in range(12)
+    )
+    compacted = compact_repo_map_for_planner(
+        f"<directory_structure>src/</directory_structure>\n{xml_blocks}",
+        max_chars=900,
+        priority_files={"src/f10.py", "src/f11.py"},
+    )
+    assert "src/f10.py" in compacted
+    assert "src/f11.py" in compacted
+    assert compacted.index("src/f10.py") < compacted.index("src/f0.py")

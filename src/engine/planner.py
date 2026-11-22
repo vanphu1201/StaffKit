@@ -27,7 +27,7 @@ from engine.bridges.agy_cli_executor import (
     kill_process_tree,
 )
 from engine.database import StateDB
-from engine.indexer import RepoIndexer, compact_repo_map_for_planner, list_real_files
+from engine.indexer import RepoIndexer, compact_repo_map_for_planner, list_real_files, locate_relevant_files
 from engine.models import EngineConfig, PlanOutput, TaskSpec, TokenUsage, inline_json_schema, normalize_posix_path
 
 JSON_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
@@ -35,7 +35,14 @@ _MD_HEADING_RE = re.compile(r"^\s*#{2,3}\s+\S")
 _MD_BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\S")
 
 
-def should_use_fast_path(prd_text: str, real_files: set[str], planning_mode: str = "auto") -> bool:
+def should_use_fast_path(
+    prd_text: str,
+    real_files: set[str],
+    planning_mode: str = "auto",
+    *,
+    located_targets: list[str] | None = None,
+    max_fast_path_targets: int = 6,
+) -> bool:
     """Decide whether a task should skip the LLM Planner and execute directly in 1 surgical turn."""
     mode = (planning_mode or "auto").strip().lower()
     if mode == "dag":
@@ -43,11 +50,15 @@ def should_use_fast_path(prd_text: str, real_files: set[str], planning_mode: str
     if mode == "single":
         return True
     cleaned = prd_text.strip()
-    if not cleaned or len(real_files) == 0 or len(real_files) > 8 or len(cleaned) > 1800:
+    if not cleaned or len(real_files) == 0:
         return False
     headings = sum(1 for ln in cleaned.splitlines() if _MD_HEADING_RE.match(ln))
     bullets = sum(1 for ln in cleaned.splitlines() if _MD_BULLET_RE.match(ln))
-    return headings <= 2 and bullets <= 10
+    if len(real_files) <= 8:
+        return len(cleaned) <= 2200 and headings <= 2 and bullets <= 10
+    if located_targets and 1 <= len(located_targets) <= max_fast_path_targets:
+        return len(cleaned) <= 3500 and headings <= 4 and bullets <= 20
+    return False
 
 
 class PlannerError(RuntimeError):
@@ -415,8 +426,15 @@ class Planner:
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
 
-    def _build_planner_prompt(self, prd_text: str, repo_map_xml: str, repair_errors: list[str] | None = None) -> str:
-        compact_map = compact_repo_map_for_planner(repo_map_xml)
+    def _build_planner_prompt(
+        self,
+        prd_text: str,
+        repo_map_xml: str,
+        repair_errors: list[str] | None = None,
+        priority_files: set[str] | None = None,
+    ) -> str:
+        compact_map = compact_repo_map_for_planner(repo_map_xml, priority_files=priority_files)
+        max_files = self.config.limits.max_files_per_task
         base = f"""Bạn là Software Architect lập kế hoạch DAG cho Auto-Prompt Engine.
 QUY TẮC TỐI QUAN TRỌNG: TUYỆT ĐỐI KHÔNG gọi bất kỳ tool nào (`view_file`, `list_dir`, `grep_search`, `run_command`...). Toàn bộ danh sách file và chữ ký code cần thiết đã có sẵn trong `# REPO SKELETON MAP` bên dưới — hãy phân tích và trả về JSON ngay trong 1 lượt duy nhất.
 
@@ -424,7 +442,7 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
 1. Nếu PRD mơ hồ, thiếu thông số API/DB/UX cốt lõi hoặc mâu thuẫn không thể suy đoán an toàn:
    - Đặt `status = "NEEDS_CLARIFICATION"`, liệt kê tối đa 5 câu hỏi ngắn gọn trong `clarifying_questions`, để `tasks = []`.
 2. Nếu PRD đủ rõ:
-   - Đặt `status = "READY"`, chia theo **Vertical Slice** vừa tầm (gộp các file liên quan chặt chẽ thành task 2–{self.config.limits.max_files_per_task} file thay vì tách vụn quá nhiều task 1 file gây tốn lượt khởi động; vẫn giữ `len(allowed_write_files) <= {self.config.limits.max_files_per_task}`).
+   - Đặt `status = "READY"`. Lưu ý: mỗi task riêng đều phải khởi động 1 phiên `agy` mới (~15k input tokens). Vì vậy nếu tổng số file cần sửa `<= {max_files}`, TUYỆT ĐỐI KHÔNG tách nhiều task — hãy gom thành **1 task duy nhất (`T-01`)**. Nếu sprint lớn hơn, hãy gom thành **ít task nhất có thể** theo Vertical Slice (3–{max_files} file/task, giữ `len(allowed_write_files) <= {max_files}`), điền đầy đủ `readonly_context_files` (models/types/interfaces liên quan) và `create_new_files` để coder không phải dò file.
    - Gán đúng `complexity` (`low` | `medium` | `high`), `protected_test_files` (không trùng `allowed_write_files`), `needs_lsp_mcp`, `needs_docs_mcp`, và mảng `verify_commands: list[str]` (từng lệnh đơn, KHÔNG ghép `&&`).
    - Tuyệt đối KHÔNG bịa đường dẫn file không có trong repo (trừ file khai báo trong `create_new_files`).
    - QUY TẮC SẢN PHẨM THẬT: Không thiết kế task tạo dữ liệu giả lập, tài khoản demo hay stub giữ chỗ. Hãy chọn công nghệ/kiến trúc phù hợp nhất với yêu cầu trong PRD (không tự thu hẹp nếu là Mobile/CLI/Backend/Desktop/AI).
@@ -465,26 +483,49 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
 
         prd_text = prd_path.read_text(encoding="utf-8", errors="replace")
         real_files = list_real_files(self.config.target_repo_path)
+        max_fp_targets = max(6, self.config.limits.max_files_per_task)
+        located = locate_relevant_files(
+            prd_text,
+            real_files,
+            self.config.target_repo_path,
+            max_targets=max_fp_targets,
+        )
 
-        # 0-token fast-path for focused small tasks (avoids LLM Planner & repomix overhead without under-planning complex PRDs)
+        # 0-token fast-path for focused tasks (avoids LLM Planner & repomix overhead without under-planning complex PRDs)
         if self._llm_caller is None and should_use_fast_path(
-            prd_text, real_files, self.config.sprint.planning_mode
+            prd_text,
+            real_files,
+            self.config.sprint.planning_mode,
+            located_targets=(located.target_files if located.confident else None),
+            max_fast_path_targets=max_fp_targets,
         ):
             title = next(
                 (ln.lstrip("# ").strip() for ln in prd_text.splitlines() if ln.strip()),
                 prd_path.stem,
             )[:100]
+            if len(real_files) > 8 and located.target_files:
+                allowed_targets = located.target_files
+                readonly_ctx = located.readonly_files
+                protected_tests = located.protected_tests
+                detail = f"{len(allowed_targets)} target / {len(readonly_ctx)} readonly / {len(real_files)} repo files"
+            else:
+                allowed_targets = sorted(real_files)
+                readonly_ctx = []
+                protected_tests = []
+                detail = f"{len(real_files)} files"
             direct_task = TaskSpec(
                 task_id="T-01",
                 title=title or "Direct implementation",
                 complexity="medium",
                 objective=prd_text.strip(),
-                allowed_write_files=sorted(real_files),
+                allowed_write_files=allowed_targets,
+                readonly_context_files=readonly_ctx,
+                protected_test_files=protected_tests,
                 strict_scope=False,
                 verify_commands=list(self.config.executor.default_verify_commands),
             )
             self._persist_plan([direct_task], auto_approve=auto_approve)
-            self._emit("info", f"Fast-Path (0 Planner tokens): thực thi trực tiếp `{direct_task.task_id}` trên repo gọn ({len(real_files)} files).")
+            self._emit("info", f"Fast-Path (0 Planner tokens): thực thi trực tiếp `{direct_task.task_id}` ({detail}).")
             return PlanOutput(status="READY", tasks=[direct_task])
 
         repo_map_path = self.indexer.build_repo_map(force=force_reindex)
@@ -496,7 +537,8 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
             encoding="utf-8",
         )
 
-        prompt = self._build_planner_prompt(prd_text, repo_map_xml)
+        priority_files = set(located.target_files) | set(located.readonly_files)
+        prompt = self._build_planner_prompt(prd_text, repo_map_xml, priority_files=priority_files)
         raw_resp = self._call_llm(prompt, schema_path)
         plan = PlanOutput.model_validate_json(_extract_plan_json_payload(raw_resp))
 
@@ -511,7 +553,12 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
         )
         if errors:
             # Allow strictly one deterministic repair round.
-            repair_prompt = self._build_planner_prompt(prd_text, repo_map_xml, repair_errors=errors)
+            repair_prompt = self._build_planner_prompt(
+                prd_text,
+                repo_map_xml,
+                repair_errors=errors,
+                priority_files=priority_files,
+            )
             raw_repair = self._call_llm(repair_prompt, schema_path)
             plan = PlanOutput.model_validate_json(_extract_plan_json_payload(raw_repair))
             if plan.status == "NEEDS_CLARIFICATION":

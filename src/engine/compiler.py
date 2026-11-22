@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from engine.blueprints import get_blueprint
-from engine.indexer import extract_file_skeletons
+from engine.indexer import IndexerError, extract_file_skeletons, list_real_files
 from engine.models import EngineConfig, TaskSpec, normalize_posix_path
 
 
@@ -33,7 +33,7 @@ class PromptCompiler:
         verify_rule = (
             "- CHỈ sửa code theo đặc tả rồi kết thúc ngay. TUYỆT ĐỐI KHÔNG tự chạy lệnh test, build, typecheck hay lint bên trong phiên (hệ thống bên ngoài sẽ tự chạy verify và trả log rút gọn nếu cần)."
             if self.config.agy.forbid_shell_verify_commands
-            else "- Sau khi sửa xong, hãy kiểm tra nhanh bằng lệnh verify mục tiêu nếu cần rồi kết thúc ngay (tránh chạy lặp lại dư thừa)."
+            else "- Toàn bộ file mục tiêu và ngữ cảnh liên quan đã được đính kèm bên dưới và Engine sẽ TỰ ĐỘNG chạy verify sau khi bạn xong — vì vậy hãy sửa thẳng và kết thúc ngay, tránh gọi `list_dir`/`view_file` hoặc chạy verify lặp lại trừ khi thực sự cần debug."
         )
         lines = [
             "[STATIC PREFIX]",
@@ -178,6 +178,19 @@ class PromptCompiler:
         lines = [f"- {k}: {v}" for k, v in data.items() if str(v).strip()]
         return "\n".join(lines)
 
+    def _format_repo_file_tree(self, task: TaskSpec) -> str:
+        """Build a compact paths-only file tree on larger repos so the coder skips list_dir exploration."""
+        try:
+            real_files = sorted(list_real_files(self.repo_path))
+        except (IndexerError, OSError):
+            return ""
+        known = len(task.allowed_write_files) + len(task.readonly_context_files)
+        if len(real_files) <= 8 or len(real_files) <= known:
+            return ""
+        shown = real_files[:120]
+        extra = f"\n... (+{len(real_files) - 120} more files)" if len(real_files) > 120 else ""
+        return "\n".join(shown) + extra
+
     def _assemble_prompt(
         self,
         static_prefix: str,
@@ -186,6 +199,7 @@ class PromptCompiler:
         targets_text: str,
         feedback_text: str,
         user_answers_text: str = "",
+        repo_tree_text: str = "",
     ) -> str:
         verify_cmds = task.verify_commands or self.config.executor.default_verify_commands
         payload_lines = [
@@ -207,6 +221,8 @@ class PromptCompiler:
             "# TARGET FILES TO MODIFY",
             targets_text,
         ]
+        if repo_tree_text:
+            payload_lines.extend(["", "# REPO FILE TREE (paths only)", repo_tree_text])
         if user_answers_text:
             payload_lines.extend(["", "# USER ANSWERS & REAL ASSETS", user_answers_text])
         if feedback_text:
@@ -231,6 +247,7 @@ class PromptCompiler:
         static_prefix = self.build_static_prefix()
         targets_text, all_inlined = self._format_target_files(task, skeletons)
         user_answers_text = self._load_user_answers_text()
+        repo_tree_text = self._format_repo_file_tree(task)
         feedback_text = self._format_retry_feedback(
             attempt=attempt,
             last_error=last_error,
@@ -251,6 +268,7 @@ class PromptCompiler:
             targets_text,
             feedback_text,
             user_answers_text=user_answers_text,
+            repo_tree_text=repo_tree_text,
         )
         tokens = estimate_tokens(prompt)
 
@@ -268,6 +286,7 @@ class PromptCompiler:
                 targets_text,
                 feedback_text,
                 user_answers_text=user_answers_text,
+                repo_tree_text="",
             )
             tokens = estimate_tokens(prompt)
 
