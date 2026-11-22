@@ -1,0 +1,20 @@
+model_list:
+  - model_name: tier-planner
+    litellm_params:
+      model: "openai/gpt-5"
+      api_key: os.environ/PLANNER_API_KEY
+
+  - model_name: tier-coder-fast
+    litellm_params:
+      model: "openai/qwen2.5-coder-32b"
+      api_base: os.environ/CODER_API_BASE
+      api_key: os.environ/CODER_API_KEY
+
+  - model_name: tier-coder-strong
+    litellm_params:
+      model: "anthropic/claude-sonnet-4-5"
+      api_key: os.environ/ESCALATION_API_KEY
+
+general_settings:
+  max_budget: 5.0
+  budget_duration: "1d"

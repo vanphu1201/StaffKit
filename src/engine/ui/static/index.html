@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Auto-Prompt Engine — Desktop Control</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --panel-2: #1f2630;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --green: #22c55e;
+      --yellow: #eab308;
+      --red: #ef4444;
+      --cyan: #06b6d4;
+      --radius: 10px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 20px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      gap: 12px;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; }
+    .brand-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+    .header-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .pill {
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .pill.ok { color: var(--green); border-color: rgba(34,197,94,.4); }
+    .pill.warn { color: var(--yellow); border-color: rgba(234,179,8,.4); }
+    .pill.err { color: var(--red); border-color: rgba(239,68,68,.4); }
+    .pill.busy { color: var(--cyan); border-color: rgba(6,182,212,.5); animation: pulse 1.4s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+
+    .layout { display: flex; flex: 1; min-height: 0; }
+    nav {
+      width: 220px;
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+      padding: 14px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .nav-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--muted);
+      text-align: left;
+      padding: 10px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: .15s;
+    }
+    .nav-btn:hover { background: var(--panel-2); color: var(--text); }
+    .nav-btn.active { background: rgba(59,130,246,.14); color: #93c5fd; border-color: rgba(59,130,246,.35); }
+
+    main { flex: 1; padding: 20px; overflow-y: auto; min-width: 0; }
+    .view { display: none; flex-direction: column; gap: 16px; }
+    .view.active { display: flex; }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+    }
+    .card h3 { margin: 0 0 12px; font-size: 15px; color: var(--text); }
+    .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    @media (max-width: 980px) { .grid-4, .grid-2 { grid-template-columns: 1fr 1fr; } }
+    .kpi { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+    .kpi-label { font-size: 12px; color: var(--muted); }
+    .kpi-value { font-size: 22px; font-weight: 700; margin-top: 4px; }
+
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .btn {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      transition: .15s;
+    }
+    .btn:hover:not(:disabled) { border-color: #6e7681; background: #27303d; }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
+    .btn.success { background: #16a34a; border-color: #16a34a; color: #fff; }
+    .btn.danger { background: #dc2626; border-color: #dc2626; color: #fff; }
+    .btn.sm { padding: 4px 9px; font-size: 12px; }
+
+    input[type="text"], input[type="number"], select, textarea {
+      width: 100%;
+      background: #0b0f14;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 8px 10px;
+      font-family: inherit;
+      font-size: 13px;
+    }
+    textarea { font-family: Consolas, "Cascadia Code", monospace; resize: vertical; }
+    label.field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
+    .check-label { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+
+    .log-box {
+      background: #080b10;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      height: 300px;
+      overflow-y: auto;
+      font-family: Consolas, "Cascadia Code", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .log-line { white-space: pre-wrap; word-break: break-word; }
+    .log-info { color: #c9d1d9; }
+    .log-success { color: #4ade80; }
+    .log-warn { color: #facc15; }
+    .log-error { color: #f87171; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; font-size: 12px; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+    }
+    .b-DONE, .b-PASS, .b-low { color: var(--green); border-color: rgba(34,197,94,.4); }
+    .b-PENDING, .b-medium { color: #93c5fd; border-color: rgba(59,130,246,.4); }
+    .b-RUNNING, .b-VERIFYING { color: var(--cyan); border-color: rgba(6,182,212,.5); }
+    .b-BLOCKED, .b-SCOPE_VIOLATION, .b-TEST_GAMING, .b-VERIFY_FAIL, .b-high { color: var(--red); border-color: rgba(239,68,68,.45); }
+    .b-EMPTY_DIFF, .b-IDENTICAL_ERROR, .b-MAX_TURNS_EXCEEDED, .b-TIMEOUT, .b-CRASH_RECOVERED { color: var(--yellow); border-color: rgba(234,179,8,.45); }
+
+    .banner-warn {
+      background: rgba(234,179,8,.1);
+      border: 1px solid rgba(234,179,8,.4);
+      color: #fde047;
+      padding: 10px 14px;
+      border-radius: 8px;
+      display: none;
+    }
+    .toast {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      background: #1e293b;
+      border: 1px solid var(--accent);
+      color: #fff;
+      padding: 10px 16px;
+      border-radius: 8px;
+      display: none;
+      z-index: 99;
+    }
+    code { background: #0b0f14; padding: 1px 5px; border-radius: 4px; font-family: Consolas, monospace; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span>Auto-Prompt Engine</span>
+      <span class="pill" id="repoPill">Chưa kiểm tra repo</span>
+    </div>
+    <div class="header-meta">
+      <span class="pill" id="workerPill">idle</span>
+      <button class="btn sm" onclick="smokeAgy()">Smoke Test agy</button>
+      <button class="btn sm" onclick="refreshState()">Làm mới</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav>
+      <button class="nav-btn active" onclick="switchTab('dashboard', this)">Điều khiển (Dashboard)</button>
+      <button class="nav-btn" onclick="switchTab('planner', this)">PRD &amp; Kế hoạch (Plan)</button>
+      <button class="nav-btn" onclick="switchTab('config', this)">Cấu hình (Settings)</button>
+      <button class="nav-btn" onclick="switchTab('runs', this)">Lịch sử chạy (Runs)</button>
+    </nav>
+
+    <main>
+      <div id="repoWarnBanner" class="banner-warn">
+        Thư mục <b>target_repo</b> chưa trỏ tới một Git repo tồn tại trên đĩa. Hãy vào tab <b>Cấu hình (Settings)</b> và bấm <b>Chọn thư mục...</b> để chọn dự án của bạn.
+      </div>
+
+      <!-- VIEW 1: DASHBOARD -->
+      <section id="view-dashboard" class="view active">
+        <div class="card">
+          <h3>Công cụ hệ thống &amp; Trạng thái</h3>
+          <div id="toolsRow" class="row"></div>
+        </div>
+
+        <div class="grid-4">
+          <div class="kpi"><div class="kpi-label">Tasks Hoàn thành</div><div class="kpi-value" id="kpiDone">0 / 0</div></div>
+          <div class="kpi"><div class="kpi-label">Tổng Token (In + Out)</div><div class="kpi-value" id="kpiTokens">0</div></div>
+          <div class="kpi"><div class="kpi-label">Chi phí ước tính</div><div class="kpi-value" id="kpiCost">$0.0000</div></div>
+          <div class="kpi"><div class="kpi-label">Trạng thái Plan</div><div class="kpi-value" id="kpiApproval">Chưa duyệt</div></div>
+        </div>
+
+        <div class="card">
+          <h3>Thao tác điều phối Sprint</h3>
+          <div class="row">
+            <button class="btn primary" id="btnApprove" onclick="approvePlan()">1. Phê duyệt Plan</button>
+            <button class="btn success" id="btnRun" onclick="runSprint(false)">2. Chạy Sprint Tự động</button>
+            <button class="btn" id="btnResume" onclick="resumeSprint()">Khôi phục &amp; Chạy tiếp (Resume)</button>
+            <button class="btn danger" id="btnStop" onclick="stopSprint()">Dừng an toàn</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="row" style="justify-content:space-between; margin-bottom:10px;">
+            <h3 style="margin:0;">Nhật ký thời gian thực (Live Stream)</h3>
+            <button class="btn sm" onclick="clearLogs()">Xóa màn hình log</button>
+          </div>
+          <div id="logBox" class="log-box"></div>
+        </div>
+      </section>
+
+      <!-- VIEW 2: PLANNER & TASKS -->
+      <section id="view-planner" class="view">
+        <div class="card">
+          <h3>Nhập PRD / Yêu cầu hoặc Import tasks.json</h3>
+          <div class="row" style="margin-bottom:10px;">
+            <button class="btn" onclick="pickPrdFile()">Mở file PRD / tasks.json...</button>
+            <span id="pickedFileLabel" style="color:var(--muted); font-size:12px;"></span>
+          </div>
+          <textarea id="prdInput" rows="8" placeholder="Dán mô tả PRD (Markdown) hoặc nội dung tasks.json vào đây..."></textarea>
+          <div class="row" style="margin-top:10px; justify-content:space-between;">
+            <div class="row">
+              <label class="check-label"><input type="checkbox" id="chkImportTasks" /> Import định dạng tasks.json</label>
+              <label class="check-label"><input type="checkbox" id="chkPlanAutoApprove" /> Tự động duyệt ngay sau khi Plan</label>
+            </div>
+            <button class="btn primary" id="btnPlan" onclick="submitPlan()">Lập kế hoạch DAG (Plan)</button>
+          </div>
+        </div>
+
+        <div id="clarifyCard" class="card" style="display:none; border-color:rgba(234,179,8,.5);">
+          <h3 style="color:#fde047;">PRD cần làm rõ trước khi chia Task (Tránh AI đoán mò)</h3>
+          <ol id="clarifyList" style="margin:0 0 12px 18px; line-height:1.6;"></ol>
+          <textarea id="clarifyAnswers" rows="3" placeholder="Nhập câu trả lời bổ sung cho các câu hỏi trên..."></textarea>
+          <div class="row" style="margin-top:10px;">
+            <button class="btn primary" onclick="appendClarificationsAndReplan()">Bổ sung vào PRD &amp; Plan lại</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Danh sách Atomic Tasks trong `state.db`</h3>
+          <div style="overflow-x:auto;">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Mức độ</th>
+                  <th>Phụ thuộc</th>
+                  <th>Files được sửa / tạo mới</th>
+                  <th>Trạng thái</th>
+                  <th>Tokens</th>
+                  <th>Thao tác</th>
+                </tr>
+              </thead>
+              <tbody id="tasksTbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 3: SETTINGS -->
+      <section id="view-config" class="view">
+        <div class="card">
+          <h3>Thiết lập Dự án &amp; Antigravity (`config.yaml`)</h3>
+          <div class="grid-2">
+            <label class="field">
+              <span>Thư mục Git repo đích (`target_repo`)</span>
+              <div class="row" style="flex-wrap:nowrap;">
+                <input type="text" id="cfgTargetRepo" />
+                <button class="btn" onclick="pickRepoFolder()">Chọn thư mục...</button>
+              </div>
+            </label>
+            <label class="field">
+              <span>Nhánh gốc (`base_branch`)</span>
+              <input type="text" id="cfgBaseBranch" />
+            </label>
+            <label class="field">
+              <span>Chế độ thực thi (`executor.mode`)</span>
+              <select id="cfgMode">
+                <option value="agy_cli">agy_cli (Antigravity CLI - Khuyên dùng)</option>
+                <option value="agy_sdk">agy_sdk (Antigravity Python SDK)</option>
+                <option value="mcp_only">mcp_only (FastMCP cho IDE)</option>
+                <option value="aider">aider (Fallback Mode C)</option>
+                <option value="opencode">opencode (Fallback Mode C)</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>File quy ước cố định (`shared_rules_file`, tùy chọn)</span>
+              <input type="text" id="cfgSharedRules" placeholder="vd: AGENTS.md" />
+            </label>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Định tuyến Model &amp; Effort (`agy.tiers`)</h3>
+          <div class="grid-4">
+            <div class="kpi">
+              <div class="kpi-label">Planner</div>
+              <input type="text" id="tierPlannerModel" placeholder="Mặc định agy" style="margin:6px 0;" />
+              <select id="tierPlannerEffort"><option>high</option><option>medium</option><option>low</option></select>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">Coder Low</div>
+              <input type="text" id="tierLowModel" placeholder="Mặc định agy" style="margin:6px 0;" />
+              <select id="tierLowEffort"><option>low</option><option>medium</option><option>high</option></select>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">Coder Medium</div>
+              <input type="text" id="tierMedModel" placeholder="Mặc định agy" style="margin:6px 0;" />
+              <select id="tierMedEffort"><option>medium</option><option>low</option><option>high</option></select>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">Escalation (Retry cuối)</div>
+              <input type="text" id="tierEscModel" placeholder="Mặc định agy" style="margin:6px 0;" />
+              <select id="tierEscEffort"><option>high</option><option>medium</option><option>low</option></select>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Giới hạn Token, Chống Lặp &amp; Lệnh Kiểm thử</h3>
+          <div class="grid-4" style="margin-bottom:12px;">
+            <label class="field"><span>Max Retries / Task</span><input type="number" id="limRetries" /></label>
+            <label class="field"><span>Max Tokens / Task</span><input type="number" id="limTokensTask" /></label>
+            <label class="field"><span>Max Tool Calls / Lượt</span><input type="number" id="limToolCalls" /></label>
+            <label class="field"><span>Max Blocked Liên tiếp</span><input type="number" id="limConsecBlocked" /></label>
+          </div>
+          <div class="grid-2" style="margin-bottom:12px;">
+            <label class="field">
+              <span>Lệnh verify mặc định (mỗi dòng 1 lệnh đơn, KHÔNG dùng `&amp;&amp;`)</span>
+              <textarea id="cfgDefaultVerify" rows="3"></textarea>
+            </label>
+            <label class="field">
+              <span>Lệnh verify cuối Sprint (mỗi dòng 1 lệnh đơn)</span>
+              <textarea id="cfgFinalVerify" rows="3"></textarea>
+            </label>
+          </div>
+          <div class="row" style="justify-content:space-between;">
+            <div class="row" style="gap:16px;">
+              <label class="check-label"><input type="checkbox" id="chkDynamicMcp" /> Dynamic MCP Gating</label>
+              <label class="check-label"><input type="checkbox" id="chkUseRtk" /> Dùng `rtk` nén log</label>
+              <label class="check-label"><input type="checkbox" id="chkRequireApprove" /> Bắt buộc duyệt Plan</label>
+              <label class="check-label"><input type="checkbox" id="chkForbidDelAssert" /> Chặn xóa assertion test</label>
+            </div>
+            <button class="btn primary" onclick="saveConfig()">Lưu cấu hình</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 4: RUNS LEDGER -->
+      <section id="view-runs" class="view">
+        <div class="card">
+          <h3>Nhật ký các lần thực thi (`runs` trong `state.db`)</h3>
+          <div style="overflow-x:auto;">
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Task</th>
+                  <th>Lần</th>
+                  <th>Model / Effort</th>
+                  <th>Tokens (In / Out)</th>
+                  <th>Thời gian</th>
+                  <th>Kết quả</th>
+                  <th>Chi tiết lỗi rút gọn</th>
+                </tr>
+              </thead>
+              <tbody id="runsTbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    let latestState = null;
+
+    function showToast(msg) {
+      const el = document.getElementById("toast");
+      el.textContent = msg;
+      el.style.display = "block";
+      setTimeout(() => { el.style.display = "none"; }, 3200);
+    }
+
+    function switchTab(name, btn) {
+      document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+      document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
+      document.getElementById("view-" + name).classList.add("active");
+      btn.classList.add("active");
+    }
+
+    function esc(str) {
+      return String(str ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    function appendLogEntry(entry) {
+      const box = document.getElementById("logBox");
+      const div = document.createElement("div");
+      div.className = "log-line log-" + (entry.level || "info");
+      div.textContent = `[${entry.time}] [${(entry.level || "info").toUpperCase()}] ${entry.message}`;
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function clearLogs() {
+      document.getElementById("logBox").innerHTML = "";
+    }
+
+    function renderState(s) {
+      latestState = s;
+      const repoPill = document.getElementById("repoPill");
+      repoPill.textContent = s.config.project.target_repo;
+      repoPill.className = "pill " + (s.is_git_repo ? "ok" : "warn");
+      document.getElementById("repoWarnBanner").style.display = s.is_git_repo ? "none" : "block";
+
+      const wp = document.getElementById("workerPill");
+      const busy = s.worker.status !== "idle";
+      wp.textContent = busy ? `${s.worker.status}: ${s.worker.message}` : "idle (Sẵn sàng)";
+      wp.className = "pill " + (busy ? "busy" : "ok");
+
+      ["btnPlan", "btnRun", "btnResume"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = busy;
+      });
+      document.getElementById("btnStop").disabled = !busy;
+
+      // Tools row
+      const toolsRow = document.getElementById("toolsRow");
+      toolsRow.innerHTML = Object.entries(s.tools).map(([name, info]) => {
+        const cls = info.ready ? "ok" : (info.optional ? "warn" : "err");
+        const st = info.ready ? "READY" : (info.optional ? "OPTIONAL" : "MISSING");
+        return `<span class="pill ${cls}" title="${esc(info.path)}">${esc(name)}: ${st}</span>`;
+      }).join("");
+
+      // KPIs
+      const cnt = s.summary.counts || {};
+      document.getElementById("kpiDone").textContent = `${cnt.DONE || 0} / ${s.summary.total_tasks || 0}`;
+      const totTok = (s.summary.prompt_tokens || 0) + (s.summary.completion_tokens || 0);
+      document.getElementById("kpiTokens").textContent = totTok.toLocaleString();
+      document.getElementById("kpiCost").textContent = "$" + Number(s.summary.cost_usd || 0).toFixed(4);
+      document.getElementById("kpiApproval").textContent = s.plan_approved ? "Đã duyệt" : "Chưa duyệt";
+
+      // Clarifying questions
+      const clarifyCard = document.getElementById("clarifyCard");
+      if (s.clarifying_questions && s.clarifying_questions.length > 0) {
+        clarifyCard.style.display = "block";
+        document.getElementById("clarifyList").innerHTML = s.clarifying_questions.map(q => `<li>${esc(q)}</li>`).join("");
+      } else {
+        clarifyCard.style.display = "none";
+      }
+
+      // Tasks table
+      const tb = document.getElementById("tasksTbody");
+      tb.innerHTML = (s.tasks || []).map(t => {
+        const files = [...(t.spec.allowed_write_files || []), ...(t.spec.create_new_files || [])].join(", ");
+        const deps = (t.spec.depends_on || []).join(", ") || "-";
+        const tok = (t.prompt_tokens || 0) + (t.completion_tokens || 0);
+        return `<tr>
+          <td><b>${esc(t.task_id)}</b><div style="color:var(--muted); font-size:12px;">${esc(t.title)}</div></td>
+          <td><span class="badge b-${esc(t.complexity)}">${esc(t.complexity)}</span></td>
+          <td>${esc(deps)}</td>
+          <td><code>${esc(files)}</code></td>
+          <td><span class="badge b-${esc(t.status)}">${esc(t.status)}</span></td>
+          <td>${tok.toLocaleString()}</td>
+          <td><button class="btn sm" onclick="rollbackTask('${esc(t.task_id)}')">Rollback</button></td>
+        </tr>`;
+      }).join("") || `<tr><td colspan="7" style="color:var(--muted);">Chưa có task nào trong state.db.</td></tr>`;
+
+      // Runs table
+      const rb = document.getElementById("runsTbody");
+      rb.innerHTML = (s.runs || []).map(r => {
+        const errBlock = r.trimmed_error_log
+          ? `<details><summary style="cursor:pointer;color:var(--muted);">Xem log</summary><pre style="white-space:pre-wrap;margin:4px 0 0;">${esc(r.trimmed_error_log)}</pre></details>`
+          : "-";
+        return `<tr>
+          <td>${r.id}</td>
+          <td><b>${esc(r.task_id)}</b></td>
+          <td>${r.attempt}</td>
+          <td>${esc(r.model_used)} / ${esc(r.effort_used)}</td>
+          <td>${r.prompt_tokens} / ${r.completion_tokens}</td>
+          <td>${Number(r.duration_sec || 0).toFixed(2)}s</td>
+          <td><span class="badge b-${esc(r.verdict)}">${esc(r.verdict)}</span></td>
+          <td>${errBlock}</td>
+        </tr>`;
+      }).join("") || `<tr><td colspan="8" style="color:var(--muted);">Chưa có lịch sử chạy.</td></tr>`;
+
+      // Fill settings only if user is not currently editing them
+      if (!document.getElementById("view-config").classList.contains("active")) {
+        populateConfigForm(s.config);
+      }
+    }
+
+    function populateConfigForm(c) {
+      document.getElementById("cfgTargetRepo").value = c.project.target_repo || "";
+      document.getElementById("cfgBaseBranch").value = c.project.base_branch || "main";
+      document.getElementById("cfgSharedRules").value = c.project.shared_rules_file || "";
+      document.getElementById("cfgMode").value = c.executor.mode || "agy_cli";
+
+      const tiers = c.agy.tiers || {};
+      document.getElementById("tierPlannerModel").value = (tiers.planner && tiers.planner.model) || "";
+      document.getElementById("tierPlannerEffort").value = (tiers.planner && tiers.planner.effort) || "high";
+      document.getElementById("tierLowModel").value = (tiers.coder_low && tiers.coder_low.model) || "";
+      document.getElementById("tierLowEffort").value = (tiers.coder_low && tiers.coder_low.effort) || "low";
+      document.getElementById("tierMedModel").value = (tiers.coder_medium && tiers.coder_medium.model) || "";
+      document.getElementById("tierMedEffort").value = (tiers.coder_medium && tiers.coder_medium.effort) || "medium";
+      document.getElementById("tierEscModel").value = (tiers.escalation && tiers.escalation.model) || "";
+      document.getElementById("tierEscEffort").value = (tiers.escalation && tiers.escalation.effort) || "high";
+
+      document.getElementById("limRetries").value = c.limits.max_retries_per_task;
+      document.getElementById("limTokensTask").value = c.limits.max_tokens_per_task;
+      document.getElementById("limToolCalls").value = c.limits.max_tool_calls_per_attempt;
+      document.getElementById("limConsecBlocked").value = c.limits.max_consecutive_blocked_tasks;
+
+      document.getElementById("cfgDefaultVerify").value = (c.executor.default_verify_commands || []).join("\n");
+      document.getElementById("cfgFinalVerify").value = (c.sprint.final_verify_commands || []).join("\n");
+
+      document.getElementById("chkDynamicMcp").checked = !!c.agy.dynamic_mcp_gating;
+      document.getElementById("chkUseRtk").checked = !!c.tools.use_rtk;
+      document.getElementById("chkRequireApprove").checked = !!c.sprint.require_plan_approval;
+      document.getElementById("chkForbidDelAssert").checked = !!c.guards.forbid_test_assertion_deletion;
+    }
+
+    async function api(path, method = "GET", body = null) {
+      const opts = { method, headers: {} };
+      if (body !== null) {
+        opts.headers["Content-Type"] = "application/json";
+        opts.body = JSON.stringify(body);
+      }
+      const res = await fetch(path, opts);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Request failed");
+      return data;
+    }
+
+    async function refreshState() {
+      const data = await api("/api/state");
+      renderState(data);
+    }
+
+    async function pickRepoFolder() {
+      const res = await api("/api/pick-folder", "POST");
+      if (res.path) {
+        document.getElementById("cfgTargetRepo").value = res.path;
+      }
+    }
+
+    async function pickPrdFile() {
+      const res = await api("/api/pick-file", "POST");
+      if (res.path) {
+        document.getElementById("pickedFileLabel").textContent = res.path;
+        document.getElementById("prdInput").value = res.content || "";
+        if (res.path.toLowerCase().endsWith(".json")) {
+          document.getElementById("chkImportTasks").checked = true;
+        }
+      }
+    }
+
+    async function saveConfig() {
+      const cfg = structuredClone(latestState.config);
+      cfg.project.target_repo = document.getElementById("cfgTargetRepo").value.trim();
+      cfg.project.base_branch = document.getElementById("cfgBaseBranch").value.trim() || "main";
+      cfg.project.shared_rules_file = document.getElementById("cfgSharedRules").value.trim();
+      cfg.executor.mode = document.getElementById("cfgMode").value;
+      cfg.executor.default_verify_commands = document.getElementById("cfgDefaultVerify").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      cfg.sprint.final_verify_commands = document.getElementById("cfgFinalVerify").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+
+      cfg.agy.tiers = {
+        planner: { model: document.getElementById("tierPlannerModel").value.trim(), effort: document.getElementById("tierPlannerEffort").value },
+        coder_low: { model: document.getElementById("tierLowModel").value.trim(), effort: document.getElementById("tierLowEffort").value },
+        coder_medium: { model: document.getElementById("tierMedModel").value.trim(), effort: document.getElementById("tierMedEffort").value },
+        escalation: { model: document.getElementById("tierEscModel").value.trim(), effort: document.getElementById("tierEscEffort").value },
+      };
+      cfg.limits.max_retries_per_task = Number(document.getElementById("limRetries").value);
+      cfg.limits.max_tokens_per_task = Number(document.getElementById("limTokensTask").value);
+      cfg.limits.max_tool_calls_per_attempt = Number(document.getElementById("limToolCalls").value);
+      cfg.limits.max_consecutive_blocked_tasks = Number(document.getElementById("limConsecBlocked").value);
+
+      cfg.agy.dynamic_mcp_gating = document.getElementById("chkDynamicMcp").checked;
+      cfg.tools.use_rtk = document.getElementById("chkUseRtk").checked;
+      cfg.sprint.require_plan_approval = document.getElementById("chkRequireApprove").checked;
+      cfg.guards.forbid_test_assertion_deletion = document.getElementById("chkForbidDelAssert").checked;
+
+      try {
+        const next = await api("/api/config", "POST", cfg);
+        renderState(next);
+        showToast("Đã lưu config.yaml thành công!");
+      } catch (e) { showToast("Lỗi: " + e.message); }
+    }
+
+    async function smokeAgy() {
+      try { await api("/api/smoke-agy", "POST"); await refreshState(); }
+      catch (e) { showToast(e.message); }
+    }
+
+    async function submitPlan() {
+      const prdText = document.getElementById("prdInput").value;
+      const prdPath = document.getElementById("pickedFileLabel").textContent;
+      const fromTasks = document.getElementById("chkImportTasks").checked;
+      const autoApprove = document.getElementById("chkPlanAutoApprove").checked;
+      try {
+        await api("/api/plan", "POST", { prd_text: prdText, prd_path: prdPath, from_tasks_json: fromTasks, auto_approve: autoApprove });
+        showToast("Đang lập kế hoạch...");
+        await refreshState();
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function appendClarificationsAndReplan() {
+      const ans = document.getElementById("clarifyAnswers").value.trim();
+      if (!ans) return;
+      const box = document.getElementById("prdInput");
+      box.value += "\n\n## Bổ sung làm rõ từ người dùng:\n" + ans;
+      document.getElementById("clarifyAnswers").value = "";
+      await submitPlan();
+    }
+
+    async function approvePlan() {
+      try {
+        const next = await api("/api/approve", "POST");
+        renderState(next);
+        showToast("Đã phê duyệt kế hoạch!");
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function runSprint(autoApprove) {
+      try {
+        await api("/api/run", "POST", { auto_approve: autoApprove });
+        await refreshState();
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function resumeSprint() {
+      try {
+        await api("/api/resume", "POST");
+        await refreshState();
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function stopSprint() {
+      await api("/api/stop", "POST");
+      showToast("Đã gửi yêu cầu dừng an toàn.");
+    }
+
+    async function rollbackTask(taskId) {
+      try {
+        const next = await api(`/api/tasks/${encodeURIComponent(taskId)}/rollback`, "POST");
+        renderState(next);
+        showToast(`Đã rollback ${taskId}`);
+      } catch (e) { showToast(e.message); }
+    }
+
+    // Boot: load state + subscribe SSE logs + poll state while worker active
+    (async () => {
+      await refreshState();
+      if (latestState && latestState.config) populateConfigForm(latestState.config);
+
+      const es = new EventSource("/api/logs/stream");
+      es.onmessage = (ev) => {
+        try {
+          const entry = JSON.parse(ev.data);
+          appendLogEntry(entry);
+          refreshState();
+        } catch (_) {}
+      };
+      setInterval(() => {
+        if (latestState && latestState.worker && latestState.worker.status !== "idle") {
+          refreshState();
+        }
+      }, 2000);
+    })();
+  </script>
+</body>
+</html>
