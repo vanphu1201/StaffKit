@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, field_validator
 
 Complexity = Literal["low", "medium", "high"]
 Effort = Literal["low", "medium", "high"]
-StackType = Literal["auto", "fullstack_web", "web_react", "python_app", "existing"]
+StackType = str
 ExecutorMode = Literal["agy_cli", "agy_sdk", "mcp_only", "aider", "opencode"]
 TaskStatus = Literal["PENDING", "RUNNING", "VERIFYING", "DONE", "BLOCKED"]
 Verdict = Literal[
@@ -69,6 +69,7 @@ class ProjectConfig(BaseModel):
     work_branch_prefix: str = "auto-engine/"
     state_db: str = ".auto-engine/state.db"
     shared_rules_file: str = ""
+    blueprint: str = "auto"
 
 
 class ExecutorConfig(BaseModel):
@@ -93,7 +94,7 @@ class AgyConfig(BaseModel):
     permission_mode: Literal["accept-edits", "plan"] = "accept-edits"
     disable_slash_commands: bool = True
     auto_approve_tools: bool = True
-    dynamic_mcp_gating: bool = True
+    dynamic_mcp_gating: bool = False
     tiers: dict[str, AgyTierConfig] = Field(
         default_factory=lambda: {
             "planner": AgyTierConfig(model="", effort="high"),
@@ -109,7 +110,7 @@ class LimitsConfig(BaseModel):
 
     max_retries_per_task: int = Field(default=2, ge=0)
     max_tokens_per_task: int = Field(default=150000, ge=500)
-    max_tool_calls_per_attempt: int = Field(default=25, ge=1)
+    max_tool_calls_per_attempt: int = Field(default=30, ge=1)
     max_prompt_tokens_per_call: int = Field(default=12000, ge=500)
     inline_file_max_lines: int = Field(default=300, ge=20)
     max_budget_usd_per_sprint: float = Field(default=2.0, ge=0.0)
@@ -125,12 +126,8 @@ class GuardsConfig(BaseModel):
     enforce_production_only: bool = True
     forbid_demo_patterns: list[str] = Field(
         default_factory=lambda: [
-            r"khachhang@demo\.vn",
-            r"admin@demo\.vn",
-            r"Đăng nhập nhanh.*Demo",
-            r"Chuyển nhanh bản demo",
-            r"Kênh liên hệ Demo",
-            r"Messenger Demo",
+            r"@[a-z0-9-]*demo\.(vn|com|local|io)\b",
+            r"\b(TODO|FIXME):\s*(mock|fake|placeholder)\b",
         ]
     )
     forbid_diff_patterns: list[str] = Field(
@@ -165,6 +162,7 @@ class SprintConfig(BaseModel):
 
     require_plan_approval: bool = True
     final_verify_commands: list[str] = Field(default_factory=list)
+    runtime_verify_commands: list[str] = Field(default_factory=list)
 
 
 class ToolsConfig(BaseModel):
@@ -331,7 +329,7 @@ class InterviewQuestion(BaseModel):
 class InterviewOutput(BaseModel):
     """Structured output of Layer 0A ProductInterviewer."""
 
-    recommended_stack: Literal["fullstack_web", "web_react", "python_app"] = "fullstack_web"
+    recommended_stack: str = "generic"
     suggested_project_name: str = "my-ai-app"
     product_summary_vi: str = ""
     questions: list[InterviewQuestion] = Field(default_factory=list)

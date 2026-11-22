@@ -19,6 +19,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, StreamingResponse
 from starlette.routing import Route
 
+from engine.blueprints import get_blueprint, load_blueprints
 from engine.bootstrapper import bootstrap_project, ensure_git_repo_ready
 from engine.bridges.agy_cli_executor import list_agy_models, smoke_test_agy
 from engine.compiler import PromptCompiler
@@ -324,6 +325,7 @@ class DesktopAppController:
             "wizard": wizard,
             "logs": logs,
             "traces": traces,
+            "blueprints": [b.model_dump() for b in load_blueprints(repo_dir if repo_exists else None)],
         }
 
     def save_config(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -612,10 +614,14 @@ class DesktopAppController:
             # Update config.yaml cleanly to point at target_dir with auto-detected verify commands
             cfg = self.load_config()
             cfg.project.target_repo = target_dir.resolve().as_posix()
+            cfg.project.blueprint = boot.stack
             if boot.verify_commands:
                 cfg.executor.default_verify_commands = boot.verify_commands
             if boot.final_verify_commands:
                 cfg.sprint.final_verify_commands = boot.final_verify_commands
+            bp = get_blueprint(boot.stack, target_dir)
+            if bp is not None and bp.runtime_verify_commands:
+                cfg.sprint.runtime_verify_commands = list(bp.runtime_verify_commands)
             self.save_config(cfg.model_dump())
 
             with self._lock:

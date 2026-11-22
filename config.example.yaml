@@ -4,6 +4,7 @@ project:
   work_branch_prefix: "auto-engine/"
   state_db: ".auto-engine/state.db"
   shared_rules_file: ""                # Tùy chọn: file quy ước cố định (vd: AGENTS.md) cho sprint lớn
+  blueprint: "auto"                    # auto | generic | fullstack_web | web_react | python_app | custom YAML
 
 executor:
   mode: "agy_cli"                      # Hợp lệ: "agy_cli" | "agy_sdk" | "mcp_only" | "aider" | "opencode"
@@ -17,7 +18,7 @@ agy:
   permission_mode: "accept-edits"      # Khớp flag `--mode accept-edits` của `agy`
   disable_slash_commands: true         # Khớp `--disable-slash-commands` (giảm noise trong print mode)
   auto_approve_tools: true             # Bắt buộc `true` (`--dangerously-skip-permissions`) khi chạy headless không có người bấm duyệt
-  dynamic_mcp_gating: true             # Dùng `try...finally` khôi phục MCP + `run.lock` (tắt nếu mở song song nhiều IDE)
+  dynamic_mcp_gating: false            # Mặc định giữ nguyên toàn bộ MCP của Antigravity (bật true nếu muốn tự tắt/bật serena/context7)
   tiers:
     planner:
       model: ""                        # Để rỗng "" nếu muốn dùng model mặc định đang cấu hình trong `agy`
@@ -35,7 +36,7 @@ agy:
 limits:
   max_retries_per_task: 2              # Tổng tối đa 3 lần chạy (1 lần đầu + 2 retry)
   max_tokens_per_task: 150000          # Ngắt mạch real-time (tính cả ~14k context nền/turn của `agy`)
-  max_tool_calls_per_attempt: 25       # Real-time watchdog: kill `agy` ngay nếu gọi quá 25 tool trong 1 lượt
+  max_tool_calls_per_attempt: 30       # Real-time watchdog: kill `agy` ngay nếu gọi quá 30 tool trong 1 lượt
   max_prompt_tokens_per_call: 12000    # Chặn pre-flight nếu Surgical Prompt biên dịch ra quá dài
   inline_file_max_lines: 300           # File > 300 dòng không nhồi nguyên văn, lấy symbol từ repo_map.xml
   max_budget_usd_per_sprint: 2.00      # Trần chi phí cứng (áp dụng khi gateway/executor trả về cost)
@@ -72,6 +73,7 @@ sprint:
     - "npm run typecheck"
     - "npm run build"
     - "npm test"
+  runtime_verify_commands: []          # Tùy chọn: lệnh kiểm thử runtime/smoke E2E sau Final Gate (vd: npx playwright test)
 
 tools:
   use_rtk: true                        # Bọc lệnh verify qua `rtk` nếu tìm thấy binary

@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from engine.blueprints import get_blueprint, load_blueprints
 from engine.git_guard import GitGuard
 from engine.models import BootstrapResult, StackType
 
@@ -55,7 +56,19 @@ def detect_existing_stack(project_dir: Path) -> tuple[str, list[str], list[str],
             py = _default_python_cmd()
         return "python_app", [f"{py} -m pytest -q"], [f"{py} -m pytest -v"], f"{py} -m src.app"
 
-    return "existing", [], [], ""
+    # Match any custom/external YAML blueprint by detect_markers
+    for bp in load_blueprints(project_dir):
+        if bp.detect_markers and all(
+            (project_dir / m.rstrip("/")).exists() for m in bp.detect_markers
+        ):
+            return (
+                bp.id,
+                list(bp.verify_commands),
+                list(bp.verify_commands),
+                bp.preview_command,
+            )
+
+    return "generic", [], [], ""
 
 
 def _run_git(project_dir: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -439,6 +452,17 @@ def _scaffold_python_app(project_dir: Path) -> tuple[list[str], list[str], str]:
     return [f"{py} -m pytest -q"], [f"{py} -m pytest -v"], f"{py} -m src.app"
 
 
+def _scaffold_generic(project_dir: Path, blueprint_id: str) -> tuple[list[str], list[str], str]:
+    """Initialize an open, tech-agnostic workspace letting Antigravity pick any language/framework."""
+    bp = get_blueprint(blueprint_id, project_dir)
+    if bp is not None and bp.scaffold_commands:
+        for raw_cmd in bp.scaffold_commands:
+            subprocess.run(raw_cmd, cwd=str(project_dir), shell=True, check=False, capture_output=True)
+    if bp is not None:
+        return list(bp.verify_commands), list(bp.verify_commands), bp.preview_command
+    return [], [], ""
+
+
 def bootstrap_project(
     project_dir: Path,
     stack: StackType = "auto",
@@ -469,13 +493,23 @@ def bootstrap_project(
             is_new_repo=is_new,
         )
 
-    chosen = "web_react" if stack in ("auto", "existing") else stack
-    if chosen == "fullstack_web":
+    bp = get_blueprint(stack, target)
+    template = bp.fallback_template if bp is not None else stack
+    if stack in ("auto", "existing"):
+        chosen = "generic"
+        cmds, final_cmds, preview = _scaffold_generic(target, "generic")
+    elif template == "fullstack_web" or stack == "fullstack_web":
+        chosen = stack
         cmds, final_cmds, preview = _scaffold_fullstack_web(target, install_deps=install_deps)
-    elif chosen == "web_react":
+    elif template == "web_react" or stack == "web_react":
+        chosen = stack
         cmds, final_cmds, preview = _scaffold_web_react(target, install_deps=install_deps)
-    else:
+    elif template == "python_app" or stack == "python_app":
+        chosen = stack
         cmds, final_cmds, preview = _scaffold_python_app(target)
+    else:
+        chosen = stack or "generic"
+        cmds, final_cmds, preview = _scaffold_generic(target, chosen)
 
     is_new = ensure_git_repo_ready(target, base_branch=base_branch)
     return BootstrapResult(

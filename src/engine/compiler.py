@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from engine.blueprints import get_blueprint
 from engine.indexer import extract_file_skeletons
 from engine.models import EngineConfig, TaskSpec, normalize_posix_path
 
@@ -37,12 +38,15 @@ class PromptCompiler:
             "- CHỈ sửa code theo đặc tả rồi kết thúc ngay. TUYỆT ĐỐI KHÔNG tự chạy lệnh test, build, typecheck hay lint bên trong phiên (hệ thống bên ngoài sẽ tự chạy verify và trả log rút gọn nếu cần).",
             "- KHÔNG lách luật bằng `@ts-ignore`, `eslint-disable`, `# type: ignore`, `# noqa`, `.skip()`, `.only()`, hoặc xóa bỏ assertion trong test.",
             "- Ưu tiên sửa gọn trực tiếp (targeted edit), không viết lại phần code không liên quan.",
-            "",
-            "# PRODUCTION & UI QUALITY RULES",
-            "- KHÔNG tạo dữ liệu, tài khoản hay nút chuyển nhanh giả lập (`demo.vn`, \"Đăng nhập nhanh Demo\", \"Chuyển nhanh bản demo\", \"Kênh liên hệ Demo\"). Mọi chức năng lưu trữ phải dùng Backend API + Database thật khi dự án có server/Prisma.",
-            "- Giao diện chuyên nghiệp, tiết chế: KHÔNG dùng icon lấp lánh AI hay gradient tím-xanh đại trà; dùng bố cục editorial gọn gàng, tương phản rõ, các khung 3D/canvas phải đặt chiều cao viewport rõ ràng (vd `min-h-[600px]` / `h-[calc(100vh-4rem)]`).",
-            "- Tài nguyên thật: TUYỆT ĐỐI KHÔNG tự ghép hình người hoặc quần áo kiểu hoạt hình từ khối hộp/hình trụ; hãy hỗ trợ ảnh chụp thực tế hoặc nạp file model `.glb`/`.gltf` thật (kèm hỗ trợ upload/đường dẫn file từ người dùng).",
+            "- Thực thi sản phẩm thật, sạch sẽ theo đặc tả TASK; KHÔNG tạo tài khoản/dữ liệu demo, stub giữ chỗ hay bỏ qua chức năng thật.",
+            "- Nếu thiếu thông tin hoặc tài nguyên thật từ người dùng (API key, cấu hình DB, tài khoản, file media/dữ liệu, hoặc quyết định nghiệp vụ) mà không thể suy ra an toàn, hãy dừng và xuất dòng `NEED_USER_INPUT: <câu hỏi cụ thể bằng tiếng Việt>` — hệ thống sẽ hỏi người dùng và truyền câu trả lời thật cho bạn ngay.",
         ]
+
+        bp = get_blueprint(self.config.project.blueprint, self.repo_path)
+        if bp is not None and bp.quality_rules:
+            lines.append(f"\n# STACK QUALITY RULES ({bp.id})")
+            for rule in bp.quality_rules:
+                lines.append(f"- {rule}")
 
         shared_rel = self.config.project.shared_rules_file.strip()
         if shared_rel:

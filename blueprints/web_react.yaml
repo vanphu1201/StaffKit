@@ -1,0 +1,17 @@
+id: web_react
+label: "Website / Ứng dụng Web Frontend (React + Vite + TypeScript)"
+description: "Ứng dụng web hiện đại phía trình duyệt với Vite, React và TypeScript."
+detect_markers:
+  - "package.json"
+  - "tsconfig.json"
+scaffold_commands: []
+verify_commands:
+  - "npx tsc --noEmit"
+  - "npm run build"
+runtime_verify_commands: []
+preview_command: "npm run dev"
+quality_rules:
+  - "Giao diện chuyên nghiệp, tương phản rõ, responsive tốt trên desktop và mobile."
+  - "Các luồng tương tác hoạt động thực sự từ đầu đến cuối, không để nút chết hay màn hình giữ chỗ."
+forbid_patterns: []
+fallback_template: web_react

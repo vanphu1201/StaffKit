@@ -93,6 +93,7 @@ def test_ui_index_state_config_approve_and_rollback(tmp_path: Path) -> None:
     assert len(st2["traces"]) == 1
     assert st2["traces"][0]["title"] == "P1"
     assert st2["pending_interaction"] is None
+    assert len(st2["blueprints"]) >= 4
 
     import threading
 

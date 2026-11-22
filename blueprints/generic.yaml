@@ -1,0 +1,13 @@
+id: generic
+label: "Mọi sản phẩm công nghệ (Mobile, Backend, CLI, Bot, Desktop, AI...)"
+description: "Không ép stack; để Antigravity tự thiết kế công nghệ, cấu trúc và kiểm thử phù hợp nhất."
+detect_markers: []
+scaffold_commands: []
+verify_commands: []
+runtime_verify_commands: []
+preview_command: ""
+quality_rules:
+  - "Xây dựng sản phẩm chạy thật theo đúng yêu cầu; tránh tạo dữ liệu/nút giả lập khi sản phẩm cần lưu trữ hoặc tích hợp thật."
+  - "Tự thiết lập lệnh kiểm thử/build sạch sẽ cho công nghệ bạn chọn."
+forbid_patterns: []
+fallback_template: generic

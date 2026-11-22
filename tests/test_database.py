@@ -80,3 +80,12 @@ def test_new_verdicts_and_crash_recovery(tmp_path: Path) -> None:
 
     runs = db.list_runs("T-01")
     assert [r["verdict"] for r in runs] == ["MAX_TURNS_EXCEEDED", "TEST_GAMING", "CRASH_RECOVERED"]
+
+
+def test_record_phase_usage_tracks_planning_tokens(tmp_path: Path) -> None:
+    db = StateDB(tmp_path / "phase.db")
+    db.record_phase_usage("planner", TokenUsage(prompt_tokens=1200, completion_tokens=300))
+    db.record_phase_usage("planner", TokenUsage(prompt_tokens=400, completion_tokens=100))
+    summary = db.get_sprint_summary()
+    assert summary["planning_prompt_tokens"] == 1600
+    assert summary["planning_completion_tokens"] == 400

@@ -8,6 +8,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from engine.blueprints import get_blueprint
 from engine.git_guard import GitGuard
 from engine.models import EngineConfig, TaskSpec, VerifyResult, normalize_posix_path
 
@@ -215,11 +216,16 @@ class Verifier:
                 violating_files=violations,
             )
 
+        bp = get_blueprint(self.config.project.blueprint, self.git_guard.repo_path)
+        demo_patterns = list(self.config.guards.forbid_demo_patterns)
+        if bp is not None and bp.forbid_patterns:
+            demo_patterns.extend(bp.forbid_patterns)
+
         sanity_ok, gaming_hits = self.git_guard.check_diff_sanity(
             task.create_new_files,
             self.config.guards.forbid_diff_patterns,
             forbid_assertion_deletion=self.config.guards.forbid_test_assertion_deletion,
-            forbid_demo_patterns=self.config.guards.forbid_demo_patterns,
+            forbid_demo_patterns=demo_patterns,
             enforce_production_only=self.config.guards.enforce_production_only,
         )
         if not sanity_ok:

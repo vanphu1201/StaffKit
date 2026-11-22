@@ -314,6 +314,30 @@ class StateDB:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def record_phase_usage(self, phase: str, usage: TokenUsage) -> None:
+        """Accumulate non-task phase token usage (interviewer/planner) in sprint_meta."""
+        if usage.total_tokens <= 0 and usage.cost_usd <= 0.0:
+            return
+        prefix = f"phase_{phase.strip().lower()}"
+        with self._connect() as conn:
+            for suffix, delta in (
+                ("prompt_tokens", usage.prompt_tokens),
+                ("completion_tokens", usage.completion_tokens),
+            ):
+                key = f"{prefix}_{suffix}"
+                row = conn.execute("SELECT value FROM sprint_meta WHERE key = ?", (key,)).fetchone()
+                cur_val = int(row["value"]) if row else 0
+                conn.execute(
+                    """
+                    INSERT INTO sprint_meta (key, value, updated_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value = excluded.value,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (key, str(cur_val + int(delta))),
+                )
+
     def get_total_cost_usd(self) -> float:
         """Sum cost across all tasks in the current sprint."""
         with self._connect() as conn:
@@ -345,11 +369,19 @@ class StateDB:
             ).fetchall()
             verdicts = {r["verdict"]: int(r["cnt"]) for r in verdict_rows}
 
+            meta_rows = conn.execute(
+                "SELECT key, value FROM sprint_meta WHERE key LIKE 'phase_%'"
+            ).fetchall()
+            phase_prompt = sum(int(r["value"]) for r in meta_rows if r["key"].endswith("_prompt_tokens"))
+            phase_completion = sum(int(r["value"]) for r in meta_rows if r["key"].endswith("_completion_tokens"))
+
         return {
             "counts": counts,
             "total_tasks": sum(counts.values()),
             "prompt_tokens": int(totals["prompt_tokens"]) if totals else 0,
             "completion_tokens": int(totals["completion_tokens"]) if totals else 0,
+            "planning_prompt_tokens": phase_prompt,
+            "planning_completion_tokens": phase_completion,
             "cost_usd": float(totals["cost_usd"]) if totals else 0.0,
             "verdicts": verdicts,
         }

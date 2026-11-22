@@ -383,3 +383,58 @@ def test_orchestrator_mid_sprint_hitl_saves_answers_and_injects_into_prompt(tmp_
     assert "user_question" in trace_kinds
     assert "user_answer" in trace_kinds
     assert "verify_result" in trace_kinds
+
+
+def test_orchestrator_dynamic_need_user_input_and_runtime_gate(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    cfg = _make_config(repo, max_retries_per_task=0)
+    cfg.sprint.runtime_verify_commands = ["python -c \"import src.runtime_cfg; assert src.runtime_cfg.VALUE == 42\""]
+    db = StateDB(cfg.state_db_path)
+    guard = GitGuard(repo, ignore_artifacts=cfg.guards.ignore_artifacts)
+    verifier = Verifier(cfg, guard)
+    compiler = PromptCompiler(cfg)
+
+    t1 = TaskSpec(
+        task_id="T-DYN",
+        title="Dynamic escalation",
+        complexity="low",
+        objective="Produce real runtime_cfg VALUE",
+        allowed_write_files=["src/runtime_cfg.py"],
+        create_new_files=["src/runtime_cfg.py"],
+        verify_commands=["python -c \"import src.runtime_cfg; assert src.runtime_cfg.VALUE == 42\""],
+    )
+    db.replace_plan([t1], plan_hash="p-dyn", approved=True)
+
+    seen_prompts: list[str] = []
+    calls = {"n": 0}
+
+    class DynExec:
+        def execute(self, prompt: str, task: TaskSpec, model: str, effort: str) -> ExecutionResult:
+            seen_prompts.append(prompt)
+            calls["n"] += 1
+            if calls["n"] == 1:
+                stream = "\n".join(
+                    [
+                        json.dumps({"event": "step_update", "step_update": {"text_delta": "NEED_USER_INPUT: Nhap "}}),
+                        json.dumps({"event": "step_update", "step_update": {"text_delta": "ma bi mat thuc te?"}}),
+                    ]
+                )
+                return ExecutionResult(success=True, model_used=model, effort_used=effort, raw_output=stream)
+            (repo / "src" / "runtime_cfg.py").write_text("VALUE = 42\n", encoding="utf-8")
+            return ExecutionResult(success=True, model_used=model, effort_used=effort)
+
+    orch = Orchestrator(
+        cfg,
+        db,
+        guard,
+        verifier,
+        compiler,
+        executor=DynExec(),
+        ask_user=lambda _tid, _t, qs: {qs[0]: "SECRET-PROD-42"},
+    )
+    res = orch.run_sprint()
+    assert res["summary"]["counts"]["DONE"] == 1
+    assert res["final_verify_passed"] is True
+    assert calls["n"] == 2
+    assert "SECRET-PROD-42" in seen_prompts[1]

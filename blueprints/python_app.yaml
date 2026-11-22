@@ -1,0 +1,16 @@
+id: python_app
+label: "Ứng dụng Python / CLI / Automation / AI Tool"
+description: "Công cụ dòng lệnh, tự động hóa, xử lý dữ liệu hoặc pipeline AI kiểm thử bằng pytest."
+detect_markers:
+  - "pyproject.toml"
+  - "requirements.txt"
+scaffold_commands: []
+verify_commands:
+  - "python -m pytest -q"
+runtime_verify_commands: []
+preview_command: "python -m src.app"
+quality_rules:
+  - "Xử lý lỗi đầu vào rõ ràng; đọc API key và cấu hình thật từ biến môi trường hoặc file cấu hình."
+  - "Viết test tự động thực chất bằng pytest cho các luồng xử lý chính."
+forbid_patterns: []
+fallback_template: python_app

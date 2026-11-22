@@ -364,6 +364,9 @@ class Planner:
             )
             raise PlannerError(f"Planner agy invocation failed (exit {proc.returncode}): {err}")
 
+        if latest_usage.total_tokens > 0:
+            self.db.record_phase_usage("planner", latest_usage)
+
         emit_trace(
             self.on_trace,
             phase="planner",
@@ -407,8 +410,8 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
    - Đặt `status = "READY"`, chia thành các Atomic Task nhỏ gọn (`len(allowed_write_files) <= {self.config.limits.max_files_per_task}`).
    - Gán đúng `complexity` (`low` | `medium` | `high`), `protected_test_files` (không trùng `allowed_write_files`), `needs_lsp_mcp`, `needs_docs_mcp`, và mảng `verify_commands: list[str]` (từng lệnh đơn, KHÔNG ghép `&&`).
    - Tuyệt đối KHÔNG bịa đường dẫn file không có trong repo (trừ file khai báo trong `create_new_files`).
-   - QUY TẮC SẢN PHẨM THẬT (KHÔNG DEMO): Không thiết kế task tạo dữ liệu/tài khoản giả lập (`@demo.vn`, "Đăng nhập nhanh Demo"). Với web có người dùng/sản phẩm/đơn hàng, ưu tiên Backend API + Database thật (Prisma/SQLite trong `prisma/schema.prisma`, `server/...`) và tài nguyên thật.
-   - NẾU 1 TASK CẦN THÔNG TIN/TÀI NGUYÊN THẬT TỪ NGƯỜI DÙNG (tên shop, SĐT/Zalo, API key, đường dẫn ảnh thực tế hoặc model 3D `.glb`/`.gltf`), hãy ghi 1–3 câu hỏi cụ thể vào `user_questions` của task đó để hệ thống hỏi lại người dùng trước khi code task.
+   - QUY TẮC SẢN PHẨM THẬT: Không thiết kế task tạo dữ liệu giả lập, tài khoản demo hay stub giữ chỗ. Hãy chọn công nghệ/kiến trúc phù hợp nhất với yêu cầu trong PRD (không tự thu hẹp nếu là Mobile/CLI/Backend/Desktop/AI).
+   - NẾU 1 TASK CẦN THÔNG TIN/TÀI NGUYÊN THẬT TỪ NGƯỜI DÙNG (cấu hình, API key, thông số nghiệp vụ, file dữ liệu/media thật trên máy...), hãy ghi 1–3 câu hỏi cụ thể vào `user_questions` của task đó để hệ thống hỏi lại người dùng trước khi code task.
 
 # PRD
 {prd_text}

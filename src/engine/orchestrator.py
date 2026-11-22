@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -43,6 +44,44 @@ def build_executor(
     if mode in ("aider", "opencode"):
         return CliFallbackExecutor(config)
     raise ValueError(f"Executor mode `{mode}` cannot run headless orchestrator; use `engine serve-mcp`.")
+
+
+_NEED_INPUT_LINE_RE = re.compile(r"(?im)^NEED_USER_INPUT:\s*(.+)$")
+
+
+def _extract_need_user_input(raw_output: str) -> list[str]:
+    """Extract unique `NEED_USER_INPUT: <question>` lines from plain or NDJSON stream-json output."""
+    if not raw_output or "NEED_USER_INPUT:" not in raw_output:
+        return []
+
+    stream_deltas: list[str] = []
+    result_text = ""
+    plain_lines: list[str] = []
+    for raw_line in raw_output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            plain_lines.append(raw_line)
+            continue
+        if not isinstance(ev, dict):
+            continue
+        step = ev.get("step_update")
+        if isinstance(step, dict) and isinstance(step.get("text_delta"), str):
+            stream_deltas.append(step["text_delta"])
+        res_obj = ev.get("result")
+        if isinstance(res_obj, dict) and isinstance(res_obj.get("response"), str):
+            result_text = res_obj["response"]
+
+    candidate = result_text or "".join(stream_deltas) or "\n".join(plain_lines) or raw_output
+    seen: list[str] = []
+    for m in _NEED_INPUT_LINE_RE.finditer(candidate):
+        q = m.group(1).strip()
+        if q and q not in seen:
+            seen.append(q)
+    return seen
 
 
 class Orchestrator:
@@ -97,6 +136,38 @@ class Orchestrator:
             json.dumps(merged, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+
+    def _prompt_user_for_task(self, task: TaskSpec, unanswered: list[str], *, checkpoint: str, retry_count: int = 0) -> bool:
+        """Pause and collect real user input; returns False if stopped during waiting."""
+        assert self.ask_user is not None
+        emit_trace(
+            self.on_trace,
+            phase="orchestrator",
+            kind="user_question",
+            title=f"[{task.task_id}] Cần bạn cung cấp thông tin thật trước khi code",
+            content="\n".join(f"- {q}" for q in unanswered),
+            task_id=task.task_id,
+            meta={"questions": unanswered},
+        )
+        self._emit("warn", f"[{task.task_id}] Tạm dừng chờ người dùng trả lời {len(unanswered)} câu hỏi...")
+        answers = self.ask_user(task.task_id, task.title, unanswered)
+        if self.stop_event is not None and self.stop_event.is_set():
+            self.guard.hard_rollback(checkpoint)
+            self.db.update_task_status(task.task_id, "PENDING", retry_count=retry_count)
+            return False
+        if answers:
+            clean_answers = {k: str(v).strip() for k, v in answers.items() if str(v).strip()}
+            if clean_answers:
+                self._save_user_answers(clean_answers)
+                emit_trace(
+                    self.on_trace,
+                    phase="orchestrator",
+                    kind="user_answer",
+                    title=f"[{task.task_id}] Đã nhận câu trả lời từ người dùng",
+                    content=json.dumps(clean_answers, ensure_ascii=False),
+                    task_id=task.task_id,
+                )
+        return True
 
     def _emit(self, level: str, message: str) -> None:
         if self.on_event is not None:
@@ -164,38 +235,13 @@ class Orchestrator:
         last_verdict: str | None = None
         force_escalation = False
         task_tokens = 0
+        dynamic_asks = 0
 
         if task.user_questions and self.ask_user is not None:
             saved_answers = self._load_user_answers()
             unanswered = [q.strip() for q in task.user_questions if q.strip() and q.strip() not in saved_answers]
-            if unanswered:
-                emit_trace(
-                    self.on_trace,
-                    phase="orchestrator",
-                    kind="user_question",
-                    title=f"[{task.task_id}] Cần bạn cung cấp thông tin thật trước khi code",
-                    content="\n".join(f"- {q}" for q in unanswered),
-                    task_id=task.task_id,
-                    meta={"questions": unanswered},
-                )
-                self._emit("warn", f"[{task.task_id}] Tạm dừng chờ người dùng trả lời {len(unanswered)} câu hỏi...")
-                answers = self.ask_user(task.task_id, task.title, unanswered)
-                if self.stop_event is not None and self.stop_event.is_set():
-                    self.guard.hard_rollback(checkpoint)
-                    self.db.update_task_status(task.task_id, "PENDING", retry_count=0)
-                    return False, True
-                if answers:
-                    clean_answers = {k: str(v).strip() for k, v in answers.items() if str(v).strip()}
-                    if clean_answers:
-                        self._save_user_answers(clean_answers)
-                        emit_trace(
-                            self.on_trace,
-                            phase="orchestrator",
-                            kind="user_answer",
-                            title=f"[{task.task_id}] Đã nhận câu trả lời từ người dùng",
-                            content=json.dumps(clean_answers, ensure_ascii=False),
-                            task_id=task.task_id,
-                        )
+            if unanswered and not self._prompt_user_for_task(task, unanswered, checkpoint=checkpoint, retry_count=0):
+                return False, True
 
         for attempt in range(self.config.limits.max_retries_per_task + 1):
             if self.stop_event is not None and self.stop_event.is_set():
@@ -219,25 +265,41 @@ class Orchestrator:
 
             tier_name, model, effort = self._select_tier(task, attempt, force_escalation)
             self._emit("info", f"[{task.task_id}] Attempt {attempt} | tier={tier_name} effort={effort}")
-            compact_diff = self.guard.get_compact_diff(task.allowed_write_files) if attempt > 0 else ""
 
-            try:
-                prompt, est_tok = self.compiler.compile(
-                    task,
-                    attempt=attempt,
-                    last_error=last_error,
-                    last_verdict=last_verdict,
-                    compact_diff=compact_diff,
-                )
-            except PromptTooLargeError as exc:
-                last_error = str(exc)
-                self._emit("error", f"[{task.task_id}] {last_error}")
-                self.db.update_task_status(task.task_id, "BLOCKED", retry_count=attempt, last_error=last_error)
-                return False, False
+            exec_res: ExecutionResult | None = None
+            for _dyn in range(3):
+                compact_diff = self.guard.get_compact_diff(task.allowed_write_files) if attempt > 0 else ""
 
-            self._emit("info", f"[{task.task_id}] Executing prompt (~{est_tok} tokens)...")
-            exec_res = self.executor.execute(prompt, task, model, effort)
-            task_tokens += exec_res.usage.total_tokens
+                try:
+                    prompt, est_tok = self.compiler.compile(
+                        task,
+                        attempt=attempt,
+                        last_error=last_error,
+                        last_verdict=last_verdict,
+                        compact_diff=compact_diff,
+                    )
+                except PromptTooLargeError as exc:
+                    last_error = str(exc)
+                    self._emit("error", f"[{task.task_id}] {last_error}")
+                    self.db.update_task_status(task.task_id, "BLOCKED", retry_count=attempt, last_error=last_error)
+                    return False, False
+
+                self._emit("info", f"[{task.task_id}] Executing prompt (~{est_tok} tokens)...")
+                exec_res = self.executor.execute(prompt, task, model, effort)
+                task_tokens += exec_res.usage.total_tokens
+
+                dyn_questions = _extract_need_user_input(exec_res.raw_output)
+                if dyn_questions and self.ask_user is not None and dynamic_asks < 2:
+                    saved_answers = self._load_user_answers()
+                    unanswered_dyn = [q for q in dyn_questions if q not in saved_answers]
+                    if unanswered_dyn:
+                        dynamic_asks += 1
+                        self.guard.hard_rollback(checkpoint)
+                        if not self._prompt_user_for_task(task, unanswered_dyn, checkpoint=checkpoint, retry_count=attempt):
+                            return False, True
+                        continue
+                break
+            assert exec_res is not None
 
             # Short-circuit if stream watchdog, CLI error, or SDK aborted execution early.
             if not exec_res.success and exec_res.verdict_override in (
@@ -472,6 +534,25 @@ class Orchestrator:
                 title=f"[FINAL_GATE] {gate_res.verdict}",
                 content=final_verify_error or "Final Sprint Gate PASS.",
                 meta={"passed": gate_res.passed, "verdict": gate_res.verdict},
+            )
+
+        if (
+            halted_reason is None
+            and final_verify_passed
+            and summary["counts"]["DONE"] > 0
+            and self.config.sprint.runtime_verify_commands
+        ):
+            rt_res = self.verifier.run_commands(self.config.sprint.runtime_verify_commands)
+            final_verify_passed = rt_res.passed
+            if not rt_res.passed:
+                final_verify_error = rt_res.trimmed_error_log
+            emit_trace(
+                self.on_trace,
+                phase="verifier",
+                kind="verify_result",
+                title=f"[RUNTIME_GATE] {rt_res.verdict}",
+                content=rt_res.trimmed_error_log or "Runtime Smoke Gate PASS.",
+                meta={"passed": rt_res.passed, "verdict": rt_res.verdict},
             )
 
         if halted_reason is None and final_verify_passed:

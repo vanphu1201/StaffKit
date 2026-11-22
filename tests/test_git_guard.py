@@ -138,15 +138,15 @@ def test_package_json_permits_and_commits_package_lock(temp_repo: Path) -> None:
     assert not guard.has_changes()
 
 
-def test_production_guard_blocks_demo_accounts_and_demo_buttons(temp_repo: Path) -> None:
+def test_production_guard_blocks_demo_accounts_and_placeholders(temp_repo: Path) -> None:
     guard = GitGuard(temp_repo, enforce_production_only=True)
     guard.ensure_work_branch("main", "auto-engine/sprint-prod")
 
-    (temp_repo / "src" / "AuthDemo.tsx").write_text(
-        'const EMAIL = "khachhang@demo.vn";\nexport const Btn = () => <button>Đăng nhập nhanh Chủ shop Demo</button>;\n',
+    (temp_repo / "src" / "AuthStub.ts").write_text(
+        'const EMAIL = "user@demo.com";\n// TODO: placeholder auth token\n',
         encoding="utf-8",
     )
-    ok, hits = guard.check_diff_sanity(["src/AuthDemo.tsx"], [])
+    ok, hits = guard.check_diff_sanity(["src/AuthStub.ts"], [])
     assert not ok
     assert any("Production-only violation" in h for h in hits)
-    assert any("khachhang@demo" in h for h in hits)
+    assert any("user@demo.com" in h for h in hits)

@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from starlette.testclient import TestClient
 
+from engine.blueprints import load_blueprints
 from engine.bootstrapper import bootstrap_project, detect_existing_stack
 from engine.interviewer import ProductInterviewer
 from engine.models import EngineConfig, InterviewOutput, PlanOutput, inline_json_schema
@@ -71,6 +72,30 @@ def test_bootstrap_fullstack_web_creates_real_backend_and_prisma(tmp_path: Path)
     assert "npx tsc --noEmit" in cmds
     assert "npm run build" in cmds
     assert preview == "npm run dev"
+
+
+def test_blueprints_and_generic_bootstrap_support_any_tech_product(tmp_path: Path) -> None:
+    built_ins = {bp.id: bp for bp in load_blueprints()}
+    assert {"generic", "fullstack_web", "web_react", "python_app"} <= set(built_ins.keys())
+
+    # Custom target blueprint overrides cleanly without editing Python code
+    custom_repo = tmp_path / "rust-cli"
+    (custom_repo / ".auto-engine").mkdir(parents=True)
+    (custom_repo / ".auto-engine" / "blueprint.yaml").write_text(
+        'id: rust_cli\nlabel: "Rust CLI"\nverify_commands:\n  - "cargo test"\nforbid_patterns:\n  - "unimplemented!\\\\("\n',
+        encoding="utf-8",
+    )
+    loaded = {bp.id: bp for bp in load_blueprints(custom_repo)}
+    assert "rust_cli" in loaded
+    assert loaded["rust_cli"].verify_commands == ["cargo test"]
+
+    # Generic stack initializes clean Git repo without forcing React/Python templates
+    gen_dir = tmp_path / "telegram-bot"
+    res = bootstrap_project(gen_dir, stack="generic")
+    assert res.stack == "generic"
+    assert (gen_dir / ".git").exists()
+    assert not (gen_dir / "package.json").exists()
+    assert not (gen_dir / "pyproject.toml").exists()
 
 
 def test_interviewer_parses_stream_json_for_interview_and_spec(tmp_path: Path) -> None:

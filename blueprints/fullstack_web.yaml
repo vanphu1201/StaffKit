@@ -1,0 +1,19 @@
+id: fullstack_web
+label: "Website Full-Stack (Frontend + Backend API + Database thật)"
+description: "React + Vite + Tailwind CSS + Express + Prisma (SQLite), proxy /api và xác thực thật."
+detect_markers:
+  - "server/"
+  - "prisma/"
+  - "package.json"
+scaffold_commands: []
+verify_commands:
+  - "npx tsc --noEmit"
+  - "npm run build"
+runtime_verify_commands: []
+preview_command: "npm run dev"
+quality_rules:
+  - "Dữ liệu & xác thực phải chạy thật qua Backend API + Database (tránh dùng localStorage làm kho chính hoặc hardcode tài khoản demo)."
+  - "Giao diện editorial sạch sẽ, tiết chế; tránh gradient tím-xanh đại trà hay icon lấp lánh AI; đặt chiều cao viewport rõ ràng cho vùng hiển thị chính hoặc canvas."
+  - "Với nội dung trực quan hoặc tài sản 3D/ảnh, ưu tiên nạp file thực tế hoặc tải lên thật thay vì ghép hình khối thô."
+forbid_patterns: []
+fallback_template: fullstack_web

@@ -20,6 +20,7 @@ from engine.bridges.agy_cli_executor import (
     encode_stream_user_message,
     kill_process_tree,
 )
+from engine.blueprints import get_blueprint, load_blueprints
 from engine.models import EngineConfig, InterviewOutput, ProductSpec, StackType, TokenUsage, inline_json_schema
 from engine.planner import _extract_plan_json_payload
 
@@ -207,21 +208,24 @@ class ProductInterviewer:
     def generate_interview(self, idea: str, stack_hint: StackType = "auto") -> InterviewOutput:
         """Analyze a vague idea and emit 3-5 plain-Vietnamese non-tech clarifying questions."""
         self._emit("info", "Đang phân tích ý tưởng & tạo 3-5 câu hỏi làm rõ (tiếng Việt dễ hiểu)...")
-        prompt = f"""Bạn là chuyên gia tư vấn sản phẩm công nghệ cho người KHÔNG rành kỹ thuật, luôn hướng tới SẢN PHẨM CHẠY THẬT (production-ready, không làm bản demo giả lập).
+        target_hint = self.config.target_repo_path if self.config.target_repo_path.is_dir() else None
+        blueprints = load_blueprints(target_hint)
+        bp_lines = "\n".join(f"  - `{bp.id}`: {bp.label} — {bp.description}" for bp in blueprints)
+        prompt = f"""Bạn là chuyên gia tư vấn sản phẩm công nghệ cho người KHÔNG rành kỹ thuật. Hệ thống có thể tạo ra MỌI loại sản phẩm công nghệ (Web, Mobile App, Desktop App, Backend API, CLI/Script, Bot, Game, AI Pipeline...) và luôn hướng tới SẢN PHẨM CHẠY THẬT (không làm bản demo giả lập).
 QUY TẮC BẮT BUỘC: TUYỆT ĐỐI KHÔNG gọi bất kỳ tool nào (`view_file`, `list_dir`, `run_command`...). Chỉ trả về JSON đúng schema `InterviewOutput` trong 1 lượt duy nhất.
 
 Người dùng có ý tưởng sau:
 "{idea.strip()}"
-Gợi ý loại sản phẩm: "{stack_hint}"
+Gợi ý loại sản phẩm từ người dùng: "{stack_hint}"
+
+Danh sách blueprint dựng khung có sẵn:
+{bp_lines}
 
 Yêu cầu:
-1. Chọn `recommended_stack`:
-   - `"fullstack_web"` nếu website/app có lưu dữ liệu, người dùng, sản phẩm, đơn hàng, giỏ hàng hoặc trang quản trị (cần Backend API + Database thật).
-   - `"web_react"` CHỈ khi là website tĩnh / công cụ thuần trình duyệt không cần lưu dữ liệu nhiều người dùng.
-   - `"python_app"` nếu là tool tự động hóa / AI script / CLI / xử lý file.
-2. Đặt `suggested_project_name` ngắn gọn viết thường không dấu nối bằng gạch ngang (vd: `ai-hr-manager`).
+1. Chọn `recommended_stack` là một `id` trong danh sách blueprint trên (nếu sản phẩm thuộc Mobile, Desktop, Bot, Game, hệ thống đa dịch vụ hoặc công nghệ khác ngoài Web/Python cơ bản, hãy chọn `"generic"` để Antigravity tự thiết kế kiến trúc phù hợp nhất).
+2. Đặt `suggested_project_name` ngắn gọn viết thường không dấu nối bằng gạch ngang (vd: `inventory-sync-bot`).
 3. Viết `product_summary_vi`: 1-2 câu mô tả sản phẩm thật bằng tiếng Việt bình dân.
-4. Sinh 3 đến 5 câu hỏi ngắn gọn trong `questions` hoàn toàn bằng tiếng Việt dễ hiểu (KHÔNG hỏi chuyện code, tập trung vào thông tin thật cần để chạy sản phẩm: tên thương hiệu/SĐT/Zalo liên hệ thật, nhu cầu lưu trữ dữ liệu/đăng nhập thật, nguồn ảnh chụp hoặc file 3D `.glb` sản phẩm thật thay vì hình khối hoạt hình, giá trị mặc định `default_answer`). Mỗi câu có 2-4 `options` gợi ý để người dùng bấm chọn nhanh.
+4. Sinh 3 đến 5 câu hỏi ngắn gọn trong `questions` hoàn toàn bằng tiếng Việt dễ hiểu (KHÔNG hỏi chuyện code; tập trung vào nhu cầu thực tế của đúng loại sản phẩm đó: người dùng mục tiêu, luồng sử dụng chính, nơi lưu dữ liệu/tích hợp thật nếu cần, tài nguyên hoặc API key thật, và giá trị mặc định `default_answer`). Mỗi câu có 2-4 `options` gợi ý để người dùng bấm chọn nhanh.
 """
         raw = self._call_agy_no_tools(
             prompt,
@@ -237,12 +241,19 @@ Yêu cầu:
     def synthesize_spec(self, idea: str, answers: dict[str, str], stack: str) -> ProductSpec:
         """Turn idea + user answers into plain-Vietnamese features and a production OpenSpec PRD."""
         self._emit("info", "Đang tổng hợp danh sách tính năng & bản đặc tả PRD chuẩn...")
+        target_hint = self.config.target_repo_path if self.config.target_repo_path.is_dir() else None
+        bp = get_blueprint(stack, target_hint)
+        bp_rules = ""
+        if bp is not None and bp.quality_rules:
+            bp_rules = "\nTiêu chuẩn bổ sung của blueprint `" + bp.id + "`:\n" + "\n".join(
+                f"     + {r}" for r in bp.quality_rules
+            )
         qa_lines = "\n".join(f"- {k}: {v}" for k, v in answers.items()) or "- (Người dùng giữ mặc định hợp lý)"
-        prompt = f"""Bạn là Product Manager & Software Architect xây dựng SẢN PHẨM THẬT (KHÔNG làm bản demo hay dữ liệu giả).
+        prompt = f"""Bạn là Product Manager & Software Architect xây dựng SẢN PHẨM CÔNG NGHỆ CHẠY THẬT (KHÔNG làm bản demo hay dữ liệu giả).
 QUY TẮC BẮT BUỘC: TUYỆT ĐỐI KHÔNG gọi bất kỳ tool nào. Chỉ trả về JSON đúng schema `ProductSpec` trong 1 lượt duy nhất.
 
 Ý tưởng gốc: "{idea.strip()}"
-Loại sản phẩm đã chọn: "{stack}"
+Blueprint / Nền tảng đã chọn: "{stack}"
 Câu trả lời của người dùng:
 {qa_lines}
 
@@ -250,12 +261,9 @@ Yêu cầu:
 1. `product_title`: Tên sản phẩm tiếng Việt ngắn gọn, chuyên nghiệp.
 2. `features_vi`: 4–7 gạch đầu dòng mô tả tính năng dùng thật bằng tiếng Việt đời thường để người dùng đọc và bấm duyệt.
 3. `prd_markdown`: Tài liệu PRD chuẩn sản phẩm thật (Markdown) gồm:
-   - Mục tiêu sản phẩm & thông tin thương hiệu/liên hệ thật từ câu trả lời người dùng
-   - Kiến trúc dữ liệu & chức năng thật:
-     + Nếu `stack` là `fullstack_web`: bắt buộc có Backend API (`/api/...`), Database thật (Prisma + SQLite/PostgreSQL), xác thực tài khoản thật (mã hóa bcrypt + JWT, đăng ký/đăng nhập chuẩn — CẤM nút "Đăng nhập nhanh Demo", CẤM `@demo.vn`, CẤM giả lập dữ liệu bằng mảng hardcode hoặc `localStorage` làm DB chính).
-     + Tài nguyên hình ảnh / 3D thật: KHÔNG dùng nhân vật/đồ vật ghép khối hộp/hình trụ kiểu hoạt hình; hỗ trợ nạp ảnh sản phẩm thực tế hoặc file model 3D `.glb`/`.gltf` thật (kèm tính năng tải lên trong trang quản trị).
-     + Giao diện editorial chuyên nghiệp: bố cục gọn, tương phản rõ, KHÔNG dùng icon lấp lánh AI hay gradient tím-xanh đại trà, mọi vùng hiển thị chính hoặc canvas 3D phải có chiều cao viewport cố định không bị co rúm.
-   - Tiêu chí kiểm thử tự động (`npx tsc --noEmit`, `npm run build`, `npm run db:push` nếu có Prisma; hoặc `pytest` nếu là `python_app`).
+   - Mục tiêu sản phẩm & phạm vi người dùng thật
+   - Kiến trúc kỹ thuật, lưu trữ dữ liệu & tích hợp thật phù hợp nhất với loại sản phẩm (tránh tạo tài khoản/dữ liệu demo giả lập; nếu có giao diện thì thiết kế chuyên nghiệp, tiết chế, dễ dùng; nếu thiếu thông tin/API key/tài nguyên thật từ người dùng thì thiết kế để hệ thống hỏi qua `user_questions` / `NEED_USER_INPUT`){bp_rules}
+   - Tiêu chí kiểm thử tự động & build/chạy thật phù hợp với công nghệ đã chọn.
 """
         raw = self._call_agy_no_tools(
             prompt,

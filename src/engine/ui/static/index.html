@@ -409,7 +409,8 @@
             <span>Loại sản phẩm</span>
             <select id="wizStackHint">
               <option value="auto">Để hệ thống tự chọn phù hợp nhất</option>
-              <option value="fullstack_web">Website Full-Stack (Frontend + Backend + Database thật)</option>
+              <option value="generic">Mọi sản phẩm công nghệ (Mobile, API, CLI, Bot, AI...)</option>
+              <option value="fullstack_web">Website Full-Stack (Frontend + Backend API + Database thật)</option>
               <option value="web_react">Website giao diện tĩnh (React)</option>
               <option value="python_app">Tool tự động hóa / Script AI (Python)</option>
             </select>
@@ -453,6 +454,7 @@
           <label class="field">
             <span>Công nghệ dựng khung (0 token)</span>
             <select id="wizChosenStack">
+              <option value="generic">Mọi sản phẩm công nghệ (Antigravity tự chọn stack tối ưu)</option>
               <option value="fullstack_web">Website Full-Stack (React + Express + Prisma/SQLite thật)</option>
               <option value="web_react">Website React + TypeScript (Vite)</option>
               <option value="python_app">Ứng dụng Python + Pytest</option>
@@ -901,6 +903,26 @@
       }
     }
 
+    function renderBlueprintSelectors(blueprints) {
+      if (!blueprints || !blueprints.length) return;
+      const key = JSON.stringify(blueprints.map(b => [b.id, b.label]));
+      const hintSel = document.getElementById("wizStackHint");
+      const chosenSel = document.getElementById("wizChosenStack");
+      if (hintSel && hintSel.dataset.bpKey !== key) {
+        const cur = hintSel.value || "auto";
+        hintSel.dataset.bpKey = key;
+        hintSel.innerHTML = `<option value="auto">Để hệ thống tự chọn phù hợp nhất</option>` +
+          blueprints.map(b => `<option value="${esc(b.id)}">${esc(b.label)}</option>`).join("");
+        hintSel.value = cur;
+      }
+      if (chosenSel && chosenSel.dataset.bpKey !== key) {
+        const cur = chosenSel.value || "generic";
+        chosenSel.dataset.bpKey = key;
+        chosenSel.innerHTML = blueprints.map(b => `<option value="${esc(b.id)}">${esc(b.label)}</option>`).join("");
+        chosenSel.value = cur;
+      }
+    }
+
     function renderInteractionBanner(pending) {
       const banner = document.getElementById("hitlBanner");
       const list = document.getElementById("hitlQuestionsList");
@@ -1070,6 +1092,7 @@
 
       renderInteractionBanner(s.pending_interaction);
       syncTraces(s.traces || []);
+      renderBlueprintSelectors(s.blueprints || []);
 
       const medModel = (s.config.agy && s.config.agy.tiers && s.config.agy.tiers.coder_medium && s.config.agy.tiers.coder_medium.model) || "";
       document.getElementById("modelPill").textContent = "Model: " + (medModel || "Mặc định agy");
