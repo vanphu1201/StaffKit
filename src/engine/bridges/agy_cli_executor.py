@@ -430,11 +430,16 @@ class AgyCliExecutor:
         raw_base_timeout = self.config.executor.timeout_seconds
         focus_paths = list(dict.fromkeys(task.allowed_write_files + task.create_new_files))
         if raw_base_timeout >= 60:
-            file_bonus = max(0, len(focus_paths) - 2) * 45
-            effort_bonus = 90 if effort == "high" else 0
+            file_bonus = max(0, len(focus_paths) - 2) * 60
+            effort_bonus = 120 if effort == "high" else 0
             base_timeout = raw_base_timeout + file_bonus + effort_bonus
             cfg_idle = self.config.executor.idle_timeout_seconds
-            min_idle = 240 if (len(task.create_new_files) >= 3 or effort == "high") else cfg_idle
+            if len(task.create_new_files) >= 3:
+                min_idle = 360 if effort == "high" else 300
+            elif effort == "high":
+                min_idle = 240
+            else:
+                min_idle = cfg_idle
             idle_limit = min(max(cfg_idle, min_idle), base_timeout)
         else:
             base_timeout = raw_base_timeout

@@ -53,6 +53,7 @@ class PromptCompiler:
             verify_rule,
             "- KHÔNG lách luật bằng `@ts-ignore`, `eslint-disable`, `# type: ignore`, `# noqa`, `.skip()`, `.only()`, hoặc xóa bỏ assertion trong test.",
             "- Ưu tiên sửa gọn trực tiếp (targeted edit), không viết lại phần code không liên quan.",
+            "- QUY TẮC GHI FILE TỪNG BƯỚC (INCREMENTAL WRITE): Khi TASK cần tạo mới hoặc sửa từ 2 file trở lên, BẮT BUỘC gọi tool `write_file` / `edit_file` cho TỪNG FILE MỘT (1 file mỗi lượt gọi tool) theo thứ tự phụ thuộc để lưu tiến độ ngay xuống đĩa; TUYỆT ĐỐI KHÔNG dồn tạo 3–5 file lớn vào cùng 1 lượt phản hồi duy nhất.",
             "- Kiểm tra và xử lý đầy đủ toàn bộ Acceptance Criteria cùng các nhánh biên (edge cases / input validation) nêu trong TASK và ARCHITECTURE CONTRACT để vượt qua cả kiểm thử đơn vị lẫn kiểm thử tích hợp cuối.",
             "- Tương thích môi trường thực thi (Windows / Node.js / Python): nếu một package C++ native (`node-gyp` như `better-sqlite3` trên Node v24 chưa cài Visual Studio C++) gây lỗi cài đặt hoặc thiếu binary, hãy chủ động dùng phiên bản prebuilt hoặc module tương đương có sẵn (`node:sqlite` `DatabaseSync` của Node 22+/24+ hoặc adapter tương thích cùng interface) để lệnh verify vượt qua 100%.",
             "- Thực thi sản phẩm thật, sạch sẽ theo đặc tả TASK; KHÔNG tạo tài khoản/dữ liệu demo, stub giữ chỗ hay bỏ qua chức năng thật.",
@@ -87,14 +88,16 @@ class PromptCompiler:
         if not readonly_files:
             return "(Không có)"
         blocks: list[str] = []
-        max_skel_lines = 8 if compact_mode else 12
+        max_skel_lines = 14 if compact_mode else 40
         max_files = 4 if compact_mode else 6
         for raw_rel in readonly_files[:max_files]:
             rel = normalize_posix_path(raw_rel)
+            if rel in ("openspec/prd.md", "prd.md") and compact_mode:
+                continue
             if rel in skeletons:
-                raw_Lines = skeletons[rel].splitlines()
-                body = "\n".join(raw_Lines[:max_skel_lines])
-                if len(raw_Lines) > max_skel_lines:
+                raw_lines = skeletons[rel].splitlines()
+                body = "\n".join(raw_lines[:max_skel_lines])
+                if len(raw_lines) > max_skel_lines:
                     body += "\n... [trimmed]"
                 blocks.append(f"## {rel} (skeleton)\n```\n{body}\n```")
                 continue
@@ -102,7 +105,7 @@ class PromptCompiler:
             full_path = self.repo_path / rel
             if full_path.is_file():
                 lines = full_path.read_text(encoding="utf-8", errors="replace").splitlines()
-                max_raw = 10 if compact_mode else 16
+                max_raw = 14 if compact_mode else 28
                 if len(lines) <= max_raw:
                     blocks.append(f"## {rel}\n```\n" + "\n".join(lines) + "\n```")
                 else:
@@ -131,24 +134,20 @@ class PromptCompiler:
         all_inlined = True
         cfg_max_lines = self.config.limits.inline_file_max_lines
         max_lines = cfg_max_lines if max_inline_lines is None else max_inline_lines
-        new_set = set(task.create_new_files)
 
-        existing_targets = [
-            normalize_posix_path(r)
-            for r in task.allowed_write_files
-            if normalize_posix_path(r) not in new_set
-        ]
-        multi_target = len(existing_targets) > 1
+        ordered_write_paths = list(
+            dict.fromkeys(
+                normalize_posix_path(r)
+                for r in (*task.allowed_write_files, *task.create_new_files)
+                if r and r.strip()
+            )
+        )
+        existing_on_disk = [r for r in ordered_write_paths if (self.repo_path / r).is_file()]
+        missing_on_disk = [r for r in ordered_write_paths if not (self.repo_path / r).is_file()]
+        multi_target = len(existing_on_disk) > 1
 
-        for idx, raw_rel in enumerate(task.allowed_write_files):
-            rel = normalize_posix_path(raw_rel)
-            if rel in new_set:
-                continue
+        for idx, rel in enumerate(existing_on_disk):
             full_path = self.repo_path / rel
-            if not full_path.is_file():
-                blocks.append(f"## {rel}\n(File sẽ tồn tại sau bước trước hoặc cần tạo mới)")
-                continue
-
             lines = full_path.read_text(encoding="utf-8", errors="replace").splitlines()
             effective_max = min(max_lines, 160 if (multi_target and idx == 0) else (90 if multi_target else max_lines))
             if max_inline_lines is not None:
@@ -156,7 +155,7 @@ class PromptCompiler:
 
             if len(lines) <= effective_max:
                 numbered = "\n".join(f"L{ln_idx}: {line}" for ln_idx, line in enumerate(lines, start=1))
-                blocks.append(f"## {rel} ({len(lines)} lines)\n```\n{numbered}\n```")
+                blocks.append(f"## {rel} ({len(lines)} lines — ALREADY EXISTS ON DISK)\n```\n{numbered}\n```")
             else:
                 all_inlined = False
                 identifiers = _extract_prd_identifiers(task.objective)
@@ -182,9 +181,8 @@ class PromptCompiler:
                     f"## {rel} ({len(lines)} lines > {cfg_max_lines} limit — skeleton only)\n```\n{body}\n```"
                 )
 
-        for raw_rel in task.create_new_files:
-            rel = normalize_posix_path(raw_rel)
-            blocks.append(f"## {rel}\n(NEW FILE TO CREATE)")
+        for rel in missing_on_disk:
+            blocks.append(f"## {rel}\n(NEW FILE TO CREATE — hãy dùng `write_file` tạo riêng từng file một)")
 
         return ("\n\n".join(blocks) if blocks else "(Không có)"), all_inlined
 

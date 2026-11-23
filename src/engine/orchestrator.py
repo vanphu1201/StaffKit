@@ -158,17 +158,17 @@ class Orchestrator:
         entry_lines = [f"### {task.task_id}: {task.title}"]
         if touched:
             entry_lines.append(f"- Touched files: {', '.join(f'`{p}`' for p in touched)}")
-        for rel in touched[:3]:
+        for rel in touched[:4]:
             fp = repo / rel
             if not fp.is_file():
                 continue
-            skel = extract_fast_skeleton(fp, max_lines=5)
+            skel = extract_fast_skeleton(fp, max_lines=12)
             if skel:
                 compact_sigs = " | ".join(
-                    ln.strip() for ln in skel.splitlines()[:4] if ln.strip() and not ln.startswith("...")
+                    ln.strip() for ln in skel.splitlines()[:10] if ln.strip() and not ln.startswith("...")
                 )
                 if compact_sigs:
-                    entry_lines.append(f"- `{rel}` signatures: `{compact_sigs[:220]}`")
+                    entry_lines.append(f"- `{rel}` signatures: `{compact_sigs[:420]}`")
         entry_block = "\n".join(entry_lines)
 
         auto_dir = self.config.auto_engine_dir
@@ -455,9 +455,9 @@ class Orchestrator:
                         guard.hard_rollback(checkpoint)
                 if exec_res.verdict_override == "BUDGET_EXCEEDED":
                     break
-                if exec_res.verdict_override == "TIMEOUT" and (attempt >= 1 or tier_name == "escalation"):
+                if exec_res.verdict_override == "TIMEOUT" and attempt >= 1:
                     break
-                if exec_res.verdict_override == "MAX_TURNS_EXCEEDED" and tier_name == "escalation":
+                if exec_res.verdict_override == "MAX_TURNS_EXCEEDED" and attempt >= 1 and tier_name == "escalation":
                     break
                 force_escalation = True
                 with self._db_lock:

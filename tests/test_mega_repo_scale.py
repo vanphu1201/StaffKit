@@ -539,4 +539,19 @@ def test_multi_lang_brace_windowing_and_cross_task_handoff_and_acceptance_contra
     assert "### T-001: Build pricing engine" in t2_prompts[0]
     assert "def apply_coupon(code: str) -> int:" in t2_prompts[0]
 
+    # 3. Greenfield create_new_files already created on disk during Attempt 0 must be inlined on Attempt 1 (never hidden as NEW FILE TO CREATE)
+    greenfield_task = TaskSpec(
+        task_id="T-GF",
+        title="Create new service and test",
+        objective="Create service_a.py and service_b.py",
+        allowed_write_files=["src/service_a.py", "src/service_b.py"],
+        create_new_files=["src/service_a.py", "src/service_b.py"],
+    )
+    (repo / "src" / "service_a.py").write_text("def already_written() -> int:\n    return 42\n", encoding="utf-8")
+    gf_prompt, _ = PromptCompiler(cfg).compile(greenfield_task, attempt=1, last_error="missing service_b")
+    assert "src/service_a.py (2 lines — ALREADY EXISTS ON DISK)" in gf_prompt
+    assert "def already_written() -> int:" in gf_prompt
+    assert "## src/service_b.py\n(NEW FILE TO CREATE" in gf_prompt
+
+
 
