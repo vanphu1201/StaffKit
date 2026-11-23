@@ -377,6 +377,8 @@ class Orchestrator:
                     guard.hard_rollback(checkpoint)
                 if exec_res.verdict_override == "BUDGET_EXCEEDED":
                     break
+                if exec_res.verdict_override == "TIMEOUT" and (attempt >= 1 or tier_name == "escalation"):
+                    break
                 if exec_res.verdict_override == "MAX_TURNS_EXCEEDED" and tier_name == "escalation":
                     break
                 force_escalation = True

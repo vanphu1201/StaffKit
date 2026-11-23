@@ -53,6 +53,10 @@ _ROOT_MANIFEST_NAMES = {
     "tsconfig.json", "go.mod", "cargo.toml", "pom.xml", "build.gradle",
     "readme.md", "makefile", "dockerfile", "docker-compose.yml",
 }
+_DOC_META_DIRS = {"docs", "doc", ".github", "examples", "benchmarks", "changes"}
+_DOC_META_EXTS = {".md", ".rst", ".txt", ".adoc", ".lock", ".png", ".jpg", ".svg", ".gif"}
+_DOC_META_STEMS = {"changes", "changelog", "history", "contributing", "authors", "license", "readme"}
+_LOWER_WORD_RE = re.compile(r"\b[a-z][a-z0-9]{3,}\b")
 _PRD_STOPWORDS = {
     "the", "and", "for", "with", "from", "this", "that", "must", "should", "all",
     "any", "not", "are", "can", "will", "has", "have", "into", "when", "each",
@@ -62,7 +66,16 @@ _PRD_STOPWORDS = {
     "boolean", "class", "def", "import", "export", "const", "let", "var",
     "function", "async", "await", "try", "except", "pass", "keep", "passing",
     "without", "breaking", "implement", "upgrade", "extend", "existing",
-    "support", "complete", "Across", "across", "using", "via", "per",
+    "support", "complete", "across", "using", "via", "per",
+    "also", "update", "logic", "issue", "issues", "fix", "fixes", "fixing",
+    "fixed", "error", "hint", "special", "case", "cases", "output", "screen",
+    "before", "after", "value", "nothing", "missing", "invalid", "parameter",
+    "rendering", "ensure", "ensuring", "proper", "multiple", "line", "lines",
+    "other", "followed", "within", "sits", "move", "there", "enough", "entire",
+    "current", "appropriate", "location", "locations", "retain", "retaining",
+    "same", "both", "more", "less", "when", "some", "such", "been", "what",
+    "which", "where", "about", "make", "makes", "made", "does", "done",
+    "show", "shows", "clean", "cleanly", "handling", "handle", "work", "works",
 }
 
 
@@ -91,6 +104,23 @@ def _is_test_path(rel_path: str) -> bool:
         or ".test." in name
         or ".spec." in name
     )
+
+
+def _is_doc_or_meta_path(rel_path: str) -> bool:
+    norm = normalize_posix_path(rel_path).lower()
+    parts = norm.split("/")
+    name = parts[-1]
+    stem = name.rsplit(".", 1)[0]
+    ext = ("." + name.rsplit(".", 1)[1]) if "." in name else ""
+    if any(p in _DOC_META_DIRS for p in parts[:-1]):
+        return True
+    return ext in _DOC_META_EXTS or stem in _DOC_META_STEMS
+
+
+def _clip_line(line: str, max_chars: int = 200) -> str:
+    if len(line) <= max_chars:
+        return line
+    return line[:max_chars] + " ... [clipped]"
 
 
 def _split_guard_clauses(prd_text: str) -> tuple[str, str]:
@@ -141,6 +171,26 @@ def _extract_prd_identifiers(active_prd_text: str) -> list[str]:
         _add(tok)
     for tok in _SNAKE_RE.findall(active_prd_text):
         _add(tok)
+
+    for word in _LOWER_WORD_RE.findall(active_prd_text):
+        if word in _PRD_STOPWORDS:
+            continue
+        _add(word)
+        if word.endswith("ing") and len(word) >= 6:
+            base = word[:-3]
+            _add(base)
+            if len(base) >= 2 and base[-1] == base[-2]:
+                _add(base[:-1])
+        elif word.endswith("ed") and len(word) >= 5:
+            base = word[:-2]
+            _add(base)
+            if len(base) >= 2 and base[-1] == base[-2]:
+                _add(base[:-1])
+        elif word.endswith("es") and len(word) >= 5:
+            _add(word[:-2])
+            _add(word[:-1])
+        elif word.endswith("s") and len(word) >= 5:
+            _add(word[:-1])
     return tokens
 
 
@@ -245,9 +295,13 @@ def locate_relevant_files(
     active_lower = active_prd.lower()
     guard_lower = guard_text.lower()
     identifiers = _extract_prd_identifiers(active_prd)
+    ident_lower_set = {i.lower() for i in identifiers}
+    ranked_ident_subset = identifiers[:30]
     ident_regex = (
-        re.compile(r"\b(?:" + "|".join(re.escape(i) for i in sorted(identifiers, key=len, reverse=True)) + r")\b")
-        if identifiers
+        re.compile(
+            r"\b(?:" + "|".join(re.escape(i) for i in sorted(ranked_ident_subset, key=len, reverse=True)) + r")\b"
+        )
+        if ranked_ident_subset
         else None
     )
 
@@ -282,6 +336,7 @@ def locate_relevant_files(
             guarded_paths.add(rel)
 
     path_scores: dict[str, int] = {}
+    stem_matched_ids: set[str] = set()
     candidate_pool: list[str] = []
     for rel in non_test_files:
         if rel in guarded_paths:
@@ -295,6 +350,16 @@ def locate_relevant_files(
             candidate_pool.append(rel)
             continue
 
+        explicit_doc_mention = (
+            base_lower in active_lower
+            and (
+                _contains_path_token(active_lower, rel_lower)
+                or _contains_path_token(active_lower, base_lower)
+            )
+        )
+        if _is_doc_or_meta_path(rel) and not explicit_doc_mention:
+            continue
+
         candidate_pool.append(rel)
         if base_lower in active_lower:
             if rel_lower in active_lower and _contains_path_token(active_lower, rel_lower):
@@ -302,11 +367,27 @@ def locate_relevant_files(
             elif _contains_path_token(active_lower, base_lower):
                 path_scores[rel] = 60 if base_counts.get(base_lower, 1) == 1 else 45
 
+        stem = base_lower.rsplit(".", 1)[0].lstrip("_")
+        stripped_stem = stem.rstrip("s")
+        if len(stem) >= 4 and (
+            stem in ident_lower_set
+            or (len(stripped_stem) >= 4 and stripped_stem in ident_lower_set)
+        ):
+            if path_scores.get(rel, 0) < 35:
+                path_scores[rel] = 35
+            stem_matched_ids.add(stem)
+
     content_scan_set: set[str] | None = None
     if repo_path is not None and ident_regex is not None and len(candidate_pool) > 150:
-        grep_hits = _git_grep_candidate_files(repo_path, identifiers, max_files=120)
+        grep_priority = list(
+            dict.fromkeys(
+                [i for i in identifiers if "_" in i or any(c.isupper() for c in i) or i.lower() in stem_matched_ids]
+                + identifiers
+            )
+        )
+        grep_hits = _git_grep_candidate_files(repo_path, grep_priority, max_files=120)
         if grep_hits is not None:
-            content_scan_set = (grep_hits & norm_set) | set(path_scores.keys())
+            content_scan_set = (grep_hits & set(candidate_pool)) | set(path_scores.keys())
         else:
             content_scan_set = set(path_scores.keys()) | set(candidate_pool[:250])
 
@@ -419,26 +500,25 @@ def extract_fast_skeleton(
             tree = ast.parse(text)
             for node in tree.body:
                 if isinstance(node, (ast.Import, ast.ImportFrom)) and len(out) < 12:
-                    ln = lines[node.lineno - 1]
-                    out.append(f"L{node.lineno}: {ln}")
+                    out.append(f"L{node.lineno}: {_clip_line(lines[node.lineno - 1])}")
                 elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    out.append(f"L{node.lineno}: {lines[node.lineno - 1]}")
+                    out.append(f"L{node.lineno}: {_clip_line(lines[node.lineno - 1])}")
                 elif isinstance(node, ast.ClassDef):
-                    out.append(f"L{node.lineno}: {lines[node.lineno - 1]}")
+                    out.append(f"L{node.lineno}: {_clip_line(lines[node.lineno - 1])}")
                     for sub in node.body:
                         if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                            out.append(f"L{sub.lineno}: {lines[sub.lineno - 1]}")
+                            out.append(f"L{sub.lineno}: {_clip_line(lines[sub.lineno - 1])}")
         except SyntaxError:
             out.clear()
 
     if not out:
         for idx, line in enumerate(lines, start=1):
             if _DECL_LINE_RE.match(line):
-                out.append(f"L{idx}: {line.rstrip()}")
+                out.append(f"L{idx}: {_clip_line(line.rstrip())}")
 
     if not out:
         limit = min(len(lines), min(max_lines, 40))
-        out = [f"L{idx}: {lines[idx - 1].rstrip()}" for idx in range(1, limit + 1)]
+        out = [f"L{idx}: {_clip_line(lines[idx - 1].rstrip())}" for idx in range(1, limit + 1)]
         if len(lines) > limit:
             out.append("... [skeleton trimmed]")
         return "\n".join(out)
@@ -504,10 +584,10 @@ def extract_symbol_windows(
         hits = [idx for idx, line in enumerate(lines) if pat.search(line)]
 
     if not hits:
-        head = [f"L{i + 1}: {lines[i]}" for i in range(min(40, len(lines)))]
+        head = [f"L{i + 1}: {_clip_line(lines[i])}" for i in range(min(40, len(lines)))]
         if len(lines) > 60:
             head.append("...")
-            head.extend(f"L{i + 1}: {lines[i]}" for i in range(max(40, len(lines) - 20), len(lines)))
+            head.extend(f"L{i + 1}: {_clip_line(lines[i])}" for i in range(max(40, len(lines) - 20), len(lines)))
         return "\n".join(head)
 
     intervals: list[list[int]] = []
@@ -524,7 +604,7 @@ def extract_symbol_windows(
         if w_idx > 0:
             emitted.append("...")
         for i in range(start, end + 1):
-            emitted.append(f"L{i + 1}: {lines[i]}")
+            emitted.append(f"L{i + 1}: {_clip_line(lines[i])}")
             if len(emitted) >= max_total_lines:
                 emitted.append("... [window limit reached]")
                 return "\n".join(emitted)
@@ -643,9 +723,13 @@ class RepoIndexer:
         for rel in sorted(norm_set):
             if len(selected) >= 80:
                 break
-            if rel not in seen and not _is_test_path(rel):
-                seen.add(rel)
-                selected.append(rel)
+            if rel in seen or _is_test_path(rel) or _is_doc_or_meta_path(rel):
+                continue
+            full_path = self.repo_path / rel
+            if full_path.is_file() and full_path.stat().st_size > 120_000:
+                continue
+            seen.add(rel)
+            selected.append(rel)
 
         dir_summary = build_hierarchical_dir_summary(norm_set, priority_dirs=priority_dirs, max_entries=80)
         blocks = [f"<directory_structure>\n{dir_summary}\n</directory_structure>", "<files>"]

@@ -8,6 +8,7 @@ from engine.compiler import PromptCompiler
 from engine.indexer import (
     RepoIndexer,
     compact_repo_map_for_planner,
+    extract_fast_skeleton,
     list_real_files,
     locate_relevant_files,
 )
@@ -134,3 +135,37 @@ def test_mega_repo_2000_files_locator_compiler_and_planner_map(tmp_path: Path) -
     )
     assert "services/inventory/warehouse_allocator.py" in compacted
     assert "allocate_multi_warehouse" in compacted
+
+
+def test_prose_locator_excludes_docs_and_skeleton_clips_giant_data_lines(tmp_path: Path) -> None:
+    repo = tmp_path / "prose_repo"
+    for d in ("pkg", "docs"):
+        (repo / d).mkdir(parents=True, exist_ok=True)
+    (repo / "CHANGES.md").write_text("wrapping double-width cells\n", encoding="utf-8")
+    (repo / "docs" / "wrap.md").write_text("wrapping double-width cells\n", encoding="utf-8")
+    (repo / "pkg" / "cells.py").write_text("def cell_len(s: str) -> int:\n    return len(s)\n", encoding="utf-8")
+    (repo / "pkg" / "width_table.py").write_text("WIDTHS = [(0, 1)]\n", encoding="utf-8")
+    (repo / "pkg" / "_wrap.py").write_text(
+        "from .cells import cell_len\nfrom .width_table import WIDTHS\n\n"
+        "def divide_line(text: str, width: int) -> list[int]:\n    return []\n",
+        encoding="utf-8",
+    )
+    (repo / "pkg" / "_emoji_data.py").write_text(
+        "EMOJI = {" + ", ".join(f'":{i}:": "x"' for i in range(4000)) + "}\n",
+        encoding="utf-8",
+    )
+
+    real_files = {p.relative_to(repo).as_posix() for p in repo.rglob("*") if p.is_file()}
+    located = locate_relevant_files(
+        "Update wrapping logic for double-width cells when folding long words.",
+        real_files,
+        repo,
+    )
+    assert located.target_files[0] == "pkg/_wrap.py"
+    assert "CHANGES.md" not in located.target_files
+    assert "docs/wrap.md" not in located.target_files
+    assert "pkg/cells.py" in located.target_files
+    assert "pkg/width_table.py" in located.readonly_files
+
+    skel = extract_fast_skeleton(repo / "pkg" / "_emoji_data.py")
+    assert all(len(line) <= 225 for line in skel.splitlines())

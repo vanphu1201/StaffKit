@@ -113,11 +113,14 @@ class PromptCompiler:
         self,
         task: TaskSpec,
         skeletons: dict[str, str],
+        *,
+        max_inline_lines: int | None = None,
+        window_max_lines: int = 160,
     ) -> tuple[str, bool]:
         """Format target files and return (formatted_text, all_existing_targets_inlined)."""
         blocks: list[str] = []
         all_inlined = True
-        max_lines = self.config.limits.inline_file_max_lines
+        max_lines = self.config.limits.inline_file_max_lines if max_inline_lines is None else max_inline_lines
         new_set = set(task.create_new_files)
 
         for raw_rel in task.allowed_write_files:
@@ -137,16 +140,20 @@ class PromptCompiler:
                 all_inlined = False
                 identifiers = _extract_prd_identifiers(task.objective)
                 skel = skeletons.get(rel) or extract_fast_skeleton(
-                    full_path, max_lines=100, priority_identifiers=identifiers
+                    full_path,
+                    max_lines=100 if window_max_lines >= 60 else 60,
+                    priority_identifiers=identifiers,
                 )
                 if not skel:
                     skel = "(File > 300 dòng; hãy đọc có chọn lọc theo symbol/line range)"
-                win_text = extract_symbol_windows(full_path, identifiers, radius=25, max_total_lines=160)
+                radius = 25 if window_max_lines >= 60 else 12
+                win_text = extract_symbol_windows(full_path, identifiers, radius=radius, max_total_lines=window_max_lines)
                 body = skel
                 if win_text:
                     body = f"{skel}\n\n// Relevant line windows:\n{win_text}"
+                limit_label = self.config.limits.inline_file_max_lines
                 blocks.append(
-                    f"## {rel} ({len(lines)} lines > {max_lines} limit — skeleton only)\n```\n{body}\n```"
+                    f"## {rel} ({len(lines)} lines > {limit_label} limit — skeleton only)\n```\n{body}\n```"
                 )
 
         for raw_rel in task.create_new_files:
@@ -346,6 +353,32 @@ class PromptCompiler:
                 repo_tree_text="",
             )
             tokens = estimate_tokens(prompt)
+
+        if tokens > cap and cap >= 2000:
+            for inline_cap, win_cap in ((60, 60), (0, 30)):
+                compact_targets, _ = self._format_target_files(
+                    task,
+                    skeletons,
+                    max_inline_lines=inline_cap,
+                    window_max_lines=win_cap,
+                )
+                compact_readonly = self._format_readonly_context(
+                    task.readonly_context_files,
+                    skeletons,
+                    compact_mode=True,
+                )
+                prompt = self._assemble_prompt(
+                    static_prefix,
+                    task,
+                    compact_readonly,
+                    compact_targets,
+                    feedback_text,
+                    user_answers_text=user_answers_text,
+                    repo_tree_text="",
+                )
+                tokens = estimate_tokens(prompt)
+                if tokens <= cap:
+                    break
 
         if tokens > cap:
             raise PromptTooLargeError(

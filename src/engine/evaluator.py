@@ -372,6 +372,21 @@ def grade_with_hidden_tests(
             check=False,
         )
         if already_applied.returncode != 0:
+            patch_paths = sorted(set(re.findall(r"^\+\+\+\s+b/(\S+)", patch_text, flags=re.MULTILINE)))
+            if patch_paths:
+                rst = subprocess.run(
+                    ["git", "checkout", "main", "--", *patch_paths],
+                    cwd=str(repo_dir),
+                    capture_output=True,
+                    check=False,
+                )
+                if rst.returncode != 0:
+                    subprocess.run(
+                        ["git", "checkout", "--", *patch_paths],
+                        cwd=str(repo_dir),
+                        capture_output=True,
+                        check=False,
+                    )
             apply_proc = subprocess.run(
                 ["git", "apply", "--whitespace=nowarn", "-"],
                 cwd=str(repo_dir),
