@@ -77,7 +77,7 @@ class ExecutorConfig(BaseModel):
 
     mode: ExecutorMode = "agy_cli"
     timeout_seconds: int = Field(default=300, ge=5)
-    idle_timeout_seconds: int = Field(default=120, ge=5)
+    idle_timeout_seconds: int = Field(default=240, ge=5)
     default_verify_commands: list[str] = Field(default_factory=list)
 
 

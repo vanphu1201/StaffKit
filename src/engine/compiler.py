@@ -43,7 +43,7 @@ class PromptCompiler:
         verify_rule = (
             "- CHỈ sửa code theo đặc tả rồi kết thúc ngay. TUYỆT ĐỐI KHÔNG tự chạy lệnh test, build, typecheck hay lint bên trong phiên (hệ thống bên ngoài sẽ tự chạy verify và trả log rút gọn nếu cần)."
             if self.config.agy.forbid_shell_verify_commands
-            else "- Toàn bộ file mục tiêu và ngữ cảnh liên quan đã được đính kèm bên dưới và Engine sẽ TỰ ĐỘNG chạy verify sau khi bạn xong — vì vậy hãy sửa thẳng và kết thúc ngay, tránh gọi `list_dir`/`view_file` hoặc chạy verify lặp lại trừ khi thực sự cần debug."
+            else "- Tập trung 100% tạo/sửa đầy đủ các file được giao rồi kết thúc ngay. KHÔNG tự chạy `npm install`, `pip install`, hay lệnh build/test nặng bằng shell tool bên trong phiên — ngay sau khi bạn ghi xong các file, Engine bên ngoài sẽ TỰ ĐỘNG chạy toàn bộ `Verification Commands` ở mức 0 token và gửi log lỗi (nếu có) cho bạn."
         )
         lines = [
             "[STATIC PREFIX]",

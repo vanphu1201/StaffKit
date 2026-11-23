@@ -86,6 +86,40 @@ def kill_process_tree(proc: subprocess.Popen[str]) -> None:
         pass
 
 
+def _latest_repo_activity_mtime(repo_path: Path, focus_rel_paths: list[str]) -> float:
+    """Return latest mtime across target files and shallow project tree so disk writes reset the idle watchdog."""
+    latest = 0.0
+    if not repo_path.is_dir():
+        return latest
+    for rel in focus_rel_paths:
+        p = repo_path / rel
+        for candidate in (p, p.parent):
+            try:
+                if candidate.exists():
+                    mt = candidate.stat().st_mtime
+                    if mt > latest:
+                        latest = mt
+            except OSError:
+                pass
+    try:
+        checked = 0
+        for root, dirs, files in os.walk(repo_path):
+            dirs[:] = [d for d in dirs if d not in {".git", ".auto-engine", "node_modules", ".venv", "__pycache__", "dist", "build"}]
+            for fname in files:
+                checked += 1
+                if checked > 160:
+                    return latest
+                try:
+                    mt = (Path(root) / fname).stat().st_mtime
+                    if mt > latest:
+                        latest = mt
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return latest
+
+
 def build_agy_command(
     config: EngineConfig,
     model: str,
@@ -95,6 +129,7 @@ def build_agy_command(
     output_format: str = "stream-json",
     json_schema_path: Path | None = None,
     inline_prompt: str | None = None,
+    timeout_override: int | None = None,
 ) -> list[str]:
     """Construct verified `agy` CLI flags from EngineConfig (defaults to stdin NDJSON streaming)."""
     cmd = [
@@ -118,7 +153,8 @@ def build_agy_command(
         cmd.append("--dangerously-skip-permissions")
     if json_schema_path is not None:
         cmd.extend(["--json-schema", str(json_schema_path)])
-    cmd.extend(["--print-timeout", f"{config.executor.timeout_seconds}s"])
+    eff_timeout = timeout_override if timeout_override is not None else config.executor.timeout_seconds
+    cmd.extend(["--print-timeout", f"{eff_timeout}s"])
     if inline_prompt is not None:
         cmd.append(f"--print={inline_prompt}")
     return cmd
@@ -391,7 +427,20 @@ class AgyCliExecutor:
     ) -> ExecutionResult:
         """Run one stateless `agy` session via stdin with real-time stream-json watchdog."""
         start = time.monotonic()
-        cmd = build_agy_command(self.config, model, effort, output_format="stream-json")
+        raw_base_timeout = self.config.executor.timeout_seconds
+        focus_paths = list(dict.fromkeys(task.allowed_write_files + task.create_new_files))
+        if raw_base_timeout >= 60:
+            file_bonus = max(0, len(focus_paths) - 2) * 45
+            effort_bonus = 90 if effort == "high" else 0
+            base_timeout = raw_base_timeout + file_bonus + effort_bonus
+            cfg_idle = self.config.executor.idle_timeout_seconds
+            min_idle = 240 if (len(task.create_new_files) >= 3 or effort == "high") else cfg_idle
+            idle_limit = min(max(cfg_idle, min_idle), base_timeout)
+        else:
+            base_timeout = raw_base_timeout
+            idle_limit = max(self.config.executor.idle_timeout_seconds, base_timeout)
+
+        cmd = build_agy_command(self.config, model, effort, output_format="stream-json", timeout_override=base_timeout)
         used_model = model or "agy-default"
 
         emit_trace(
@@ -451,22 +500,25 @@ class AgyCliExecutor:
             latest_usage = TokenUsage()
             verdict_override: str | None = None
             err_msg = ""
-            base_timeout = self.config.executor.timeout_seconds
             deadline = start + base_timeout
-            hard_deadline = start + int(base_timeout * 1.4)
-            idle_limit = (
-                max(self.config.executor.idle_timeout_seconds, base_timeout)
-                if base_timeout < 30
-                else min(self.config.executor.idle_timeout_seconds, base_timeout)
-            )
+            hard_deadline = start + int(base_timeout * 1.5)
             last_activity = start
+            last_disk_check = start
+            last_disk_mtime = _latest_repo_activity_mtime(self.config.target_repo_path, focus_paths)
 
             while True:
                 now = time.monotonic()
+                if (now - last_disk_check) >= 2.5:
+                    last_disk_check = now
+                    cur_mtime = _latest_repo_activity_mtime(self.config.target_repo_path, focus_paths)
+                    if cur_mtime > last_disk_mtime:
+                        last_disk_mtime = cur_mtime
+                        last_activity = now
+
                 remaining = deadline - now
                 if remaining <= 0:
-                    if tool_calls > 0 and (now - last_activity) < 25.0 and deadline < hard_deadline:
-                        deadline = min(hard_deadline, now + 60.0)
+                    if (tool_calls > 0 or last_activity > start + 5.0) and (now - last_activity) < 45.0 and deadline < hard_deadline:
+                        deadline = min(hard_deadline, now + 90.0)
                         remaining = deadline - now
                     else:
                         kill_process_tree(proc)
@@ -476,7 +528,7 @@ class AgyCliExecutor:
                 if base_timeout >= 60 and (now - last_activity) >= idle_limit:
                     kill_process_tree(proc)
                     verdict_override = "TIMEOUT"
-                    err_msg = f"agy CLI stalled with no output for {int(idle_limit)}s"
+                    err_msg = f"agy CLI stalled with no stdout or disk activity for {int(idle_limit)}s"
                     break
                 try:
                     item = line_queue.get(timeout=min(0.5, max(0.05, remaining)))

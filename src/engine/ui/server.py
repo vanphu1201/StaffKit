@@ -741,12 +741,34 @@ class DesktopAppController:
             ask_user=self.request_user_input,
         )
         res = orch.run_sprint(auto_approve=True, sprint_name="sprint-1")
-        counts = res["summary"]["counts"]
-        gate = "PASS" if res.get("final_verify_passed", True) else "FAIL"
-        msg = f"Hoàn tất! Đã xong {counts.get('DONE', 0)}/{res['summary']['total_tasks']} phần (Cổng nghiệm thu cuối: {gate})."
+        msg, is_ok = self._format_sprint_done_message(res)
         with self._lock:
             self.wizard_done_message = msg
-        self.emit_log("success" if gate == "PASS" and not res.get("halted_reason") else "warn", msg)
+        self.emit_log("success" if is_ok else "warn", msg)
+
+    @staticmethod
+    def _format_sprint_done_message(res: dict[str, Any]) -> tuple[str, bool]:
+        counts = res["summary"]["counts"]
+        done_cnt = counts.get("DONE", 0)
+        blocked_cnt = counts.get("BLOCKED", 0)
+        tot_cnt = res["summary"].get("total_tasks", 0)
+        halted = res.get("halted_reason")
+        passed_gate = bool(res.get("final_verify_passed", False))
+        if done_cnt >= tot_cnt and tot_cnt > 0 and blocked_cnt == 0 and passed_gate and not halted:
+            return (
+                f"✅ Hoàn tất! Đã xong {done_cnt}/{tot_cnt} phần (Cổng nghiệm thu cuối: PASS).",
+                True,
+            )
+        if blocked_cnt > 0:
+            return (
+                f"⚠️ Tạm dừng: Đã xong {done_cnt}/{tot_cnt} phần ({blocked_cnt} phần bị gián đoạn/BLOCKED — bấm '🔄 Thử lại phần bị lỗi & Chạy tiếp' bên dưới).",
+                False,
+            )
+        gate_label = "PASS" if passed_gate else "FAIL"
+        return (
+            f"⚠️ Chưa hoàn tất trọn vẹn: Đã xong {done_cnt}/{tot_cnt} phần (Halted={halted or 'None'}, Cổng cuối: {gate_label}).",
+            False,
+        )
 
     def start_wizard_build(
         self,
@@ -915,14 +937,32 @@ class DesktopAppController:
                 ask_user=self.request_user_input,
             )
             res = orch.run_sprint(auto_approve=True, sprint_name="quick-update")
-            counts = res["summary"]["counts"]
-            gate = "PASS" if res.get("final_verify_passed", True) else "FAIL"
-            msg = f"Đã cập nhật xong {counts.get('DONE', 0)}/{res['summary']['total_tasks']} phần (Kiểm thử cuối: {gate})."
+            msg, is_ok = self._format_sprint_done_message(res)
             with self._lock:
                 self.wizard_done_message = msg
-            self.emit_log("success" if gate == "PASS" and not res.get("halted_reason") else "warn", msg)
+            self.emit_log("success" if is_ok else "warn", msg)
 
         return self._start_worker("updating", "Đang tự động nâng cấp sản phẩm...", _job)
+
+    def retry_blocked_and_resume(self) -> bool:
+        """Reset all BLOCKED tasks to PENDING and immediately resume the sprint from Step 4 or Dashboard."""
+        cfg = self.load_config()
+        db = self._get_db(cfg, create_if_missing=False)
+        if db is None:
+            raise ValueError("Chưa có state.db cho dự án hiện tại.")
+        reset_ids: list[str] = []
+        for row in db.list_tasks():
+            if row["status"] in ("BLOCKED", "RUNNING", "VERIFYING"):
+                db.update_task_status(row["task_id"], "PENDING", retry_count=0, last_error="")
+                reset_ids.append(row["task_id"])
+        db.set_meta("consecutive_blocked", "0")
+        db.set_meta("plan_approved", "1")
+        with self._lock:
+            self.wizard_step = 4
+            self.wizard_done_message = ""
+        if reset_ids:
+            self.emit_log("info", f"🔄 Đã đặt lại {len(reset_ids)} phần ({', '.join(reset_ids)}) về PENDING để chạy tiếp...")
+        return self.start_run(auto_approve=True, resume_mode=True)
 
     def launch_preview_command(self, custom_command: str = "") -> dict[str, str]:
         """Launch the product preview command in a new visible terminal so non-tech users can run it in 1 click."""
@@ -1225,6 +1265,14 @@ def create_ui_app(config_path: Path) -> Starlette:
     async def api_wizard_reset(_request: Request) -> JSONResponse:
         return JSONResponse(controller.reset_wizard())
 
+    async def api_wizard_retry_blocked(_request: Request) -> JSONResponse:
+        try:
+            if not controller.retry_blocked_and_resume():
+                return JSONResponse({"error": "Đang có tác vụ nền khác chạy."}, status_code=409)
+            return JSONResponse({"started": True})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
     async def api_open_folder(_request: Request) -> JSONResponse:
         try:
             opened = controller.open_target_folder()
@@ -1280,6 +1328,7 @@ def create_ui_app(config_path: Path) -> Starlette:
         Route("/api/wizard/build", api_wizard_build, methods=["POST"]),
         Route("/api/wizard/autopilot", api_wizard_autopilot, methods=["POST"]),
         Route("/api/wizard/quick-update", api_wizard_quick_update, methods=["POST"]),
+        Route("/api/wizard/retry-blocked", api_wizard_retry_blocked, methods=["POST"]),
         Route("/api/wizard/reset", api_wizard_reset, methods=["POST"]),
         Route("/api/preview/launch", api_preview_launch, methods=["POST"]),
         Route("/api/contracts", api_save_contracts, methods=["POST"]),

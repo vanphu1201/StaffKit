@@ -563,6 +563,7 @@
         <div class="row" style="justify-content:space-between;">
           <div class="row">
             <button class="btn danger" id="btnWizStop" onclick="stopSprint()">Dừng an toàn</button>
+            <button class="btn primary" id="btnWizRetryBlocked" style="display:none;" onclick="retryBlockedFromWizard()">🔄 Thử lại phần bị lỗi &amp; Chạy tiếp</button>
             <button class="btn" onclick="resetWizard()">+ Tạo sản phẩm mới khác</button>
           </div>
           <div class="row">
@@ -1194,6 +1195,8 @@
       // Step 4 progress
       const tasks = s.tasks || [];
       const doneCnt = (s.summary.counts && s.summary.counts.DONE) || 0;
+      const blockedCnt = (s.summary.counts && s.summary.counts.BLOCKED) || 0;
+      const pendingCnt = (s.summary.counts && s.summary.counts.PENDING) || 0;
       const totCnt = s.summary.total_tasks || tasks.length || 0;
       const pct = totCnt > 0 ? Math.round((doneCnt / totCnt) * 100) : 0;
       document.getElementById("wizProgressText").textContent = `${doneCnt} / ${totCnt} phần hoàn thành (${pct}%)`;
@@ -1202,21 +1205,44 @@
       const tokPill = document.getElementById("wizTokensSavedPill");
       if (tokPill) tokPill.textContent = `Tokens: ${totTok.toLocaleString()}`;
 
-      document.getElementById("wizTaskSimpleList").innerHTML = tasks.map(t =>
-        `<div class="q-card" style="flex-direction:row; justify-content:space-between; align-items:center;">
-          <span><b>${esc(t.task_id)}:</b> ${esc(t.title)}</span>
+      const retryBtn = document.getElementById("btnWizRetryBlocked");
+      if (retryBtn) {
+        retryBtn.style.display = (!busy && (blockedCnt > 0 || (pendingCnt > 0 && doneCnt < totCnt))) ? "inline-block" : "none";
+      }
+
+      document.getElementById("wizTaskSimpleList").innerHTML = tasks.map(t => {
+        const errNote = (t.status === "BLOCKED" && t.last_error)
+          ? `<div style="color:#fca5a5; font-size:12px; margin-top:4px;">Lý do dừng: ${esc(t.last_error)}</div>`
+          : "";
+        return `<div class="q-card" style="flex-direction:row; justify-content:space-between; align-items:center;">
+          <div>
+            <span><b>${esc(t.task_id)}:</b> ${esc(t.title)}</span>
+            ${errNote}
+          </div>
           <span class="badge b-${esc(t.status)}">${esc(t.status)}</span>
-        </div>`
-      ).join("");
+        </div>`;
+      }).join("");
 
       const doneBanner = document.getElementById("wizDoneBanner");
       if (w.done_message) {
         doneBanner.style.display = "block";
         doneBanner.textContent = w.done_message;
+        const isWarn = w.done_message.includes("⚠️") || blockedCnt > 0 || doneCnt < totCnt;
+        doneBanner.style.background = isWarn ? "rgba(234,179,8,.14)" : "rgba(34,197,94,.12)";
+        doneBanner.style.borderColor = isWarn ? "rgba(234,179,8,.45)" : "rgba(34,197,94,.4)";
+        doneBanner.style.color = isWarn ? "#fde047" : "#86efac";
       } else {
         doneBanner.style.display = "none";
       }
       document.getElementById("wizPreviewHint").textContent = w.preview_cmd ? `Lệnh chạy: ${w.preview_cmd}` : "";
+    }
+
+    async function retryBlockedFromWizard() {
+      try {
+        await api("/api/wizard/retry-blocked", "POST");
+        showToast("🔄 Đang thử lại phần bị gián đoạn và chạy tiếp...");
+        await refreshState();
+      } catch (e) { showToast(e.message); }
     }
 
     function updateWizInput(qIdx, val) {

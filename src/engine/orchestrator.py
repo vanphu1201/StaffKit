@@ -419,8 +419,20 @@ class Orchestrator:
                         exec_res.verdict_override,
                         trimmed_error_log=last_error,
                     )
-                if exec_res.verdict_override in ("SCOPE_VIOLATION", "BUDGET_EXCEEDED", "MAX_TURNS_EXCEEDED", "TIMEOUT"):
+                if exec_res.verdict_override in ("SCOPE_VIOLATION", "BUDGET_EXCEEDED"):
                     guard.hard_rollback(checkpoint)
+                elif exec_res.verdict_override in ("MAX_TURNS_EXCEEDED", "TIMEOUT"):
+                    # Preserve valid in-scope partial files created before timeout so the next attempt continues instead of restarting from 0
+                    allowed_all = task.allowed_write_files + task.create_new_files
+                    strict_flag = task.strict_scope and self.config.guards.scope_mode == "strict"
+                    scope_ok, _violating = guard.check_scope(
+                        checkpoint,
+                        allowed_all,
+                        task.protected_test_files,
+                        strict_scope=strict_flag,
+                    )
+                    if not scope_ok:
+                        guard.hard_rollback(checkpoint)
                 if exec_res.verdict_override == "BUDGET_EXCEEDED":
                     break
                 if exec_res.verdict_override == "TIMEOUT" and (attempt >= 1 or tier_name == "escalation"):
@@ -789,8 +801,16 @@ class Orchestrator:
                     break
 
         summary = self.db.get_sprint_summary()
-        final_verify_passed = True
-        final_verify_error = ""
+        done_cnt = summary["counts"].get("DONE", 0)
+        blocked_cnt = summary["counts"].get("BLOCKED", 0)
+        tot_cnt = summary.get("total_tasks", 0)
+        all_tasks_done = done_cnt > 0 and blocked_cnt == 0 and done_cnt >= tot_cnt
+        final_verify_passed = all_tasks_done
+        final_verify_error = (
+            ""
+            if all_tasks_done
+            else f"Sprint chưa hoàn tất ({done_cnt}/{tot_cnt} phần hoàn thành, {blocked_cnt} phần bị BLOCKED)."
+        )
         bp = get_blueprint(self.config.project.blueprint, self.config.target_repo_path)
         runtime_cmds = list(self.config.sprint.runtime_verify_commands) or (
             list(bp.runtime_verify_commands) if bp is not None and bp.runtime_verify_commands else []
@@ -798,7 +818,7 @@ class Orchestrator:
 
         if (
             halted_reason is None
-            and summary["counts"]["DONE"] > 0
+            and all_tasks_done
             and self.config.sprint.final_verify_commands
         ):
             gate_res = self.verifier.run_commands(self.config.sprint.final_verify_commands)
