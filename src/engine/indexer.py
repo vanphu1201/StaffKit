@@ -30,8 +30,22 @@ _GUARD_CLAUSE_RE = re.compile(
 )
 _BACKTICK_RE = re.compile(r"`([^`]+)`")
 _IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b")
+_DOTTED_SYMBOL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\b")
 _CAMEL_RE = re.compile(r"\b[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+\b")
+_PASCAL_WORD_RE = re.compile(r"\b[A-Z][a-z]{2,}[A-Za-z0-9_]*\b")
+_ACRONYM_RE = re.compile(r"\b[A-Z]{2,}[A-Z0-9_]*\b")
 _SNAKE_RE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
+_COMMON_PROSE_CAPS = {
+    "The", "This", "That", "These", "Those", "When", "Where", "What", "Which",
+    "While", "With", "Without", "From", "Into", "Over", "Under", "After", "Before",
+    "Ensure", "Ensures", "Update", "Updates", "Upgrade", "Extend", "Fix", "Fixes",
+    "Fixed", "Allow", "Allows", "Add", "Adds", "Added", "Remove", "Removes",
+    "Move", "Moves", "Improve", "Improves", "Refactor", "List", "Always", "Stop",
+    "Resolve", "Forwards", "Close", "Land", "Open", "Various", "Some", "Other",
+    "Note", "Error", "Warning", "Usage", "Options", "Description", "Checklist",
+    "Type", "Tests", "Bug", "New", "Parameter", "Hint", "Nothing", "Help", "Also",
+    "Simple", "Mixed", "True", "False", "None", "Release", "Revert", "Drop",
+}
 _PY_IMPORT_RE = re.compile(r"^\s*(?:from|import)\s+(\.*[A-Za-z0-9_.]*)(?:\s+import\s+([^\n#]+))?", re.MULTILINE)
 _JS_IMPORT_RE = re.compile(
     r"""(?:from\s+|require\s*\(\s*|import\s*\(\s*)["'](\.[^"']+)["']"""
@@ -168,10 +182,19 @@ def _extract_prd_identifiers(active_prd_text: str) -> list[str]:
     for block in _BACKTICK_RE.findall(active_prd_text):
         for tok in _IDENT_RE.findall(block):
             _add(tok)
+    for cls_part, member_part in _DOTTED_SYMBOL_RE.findall(active_prd_text):
+        _add(cls_part)
+        _add(member_part)
     for tok in _CAMEL_RE.findall(active_prd_text):
         _add(tok)
     for tok in _SNAKE_RE.findall(active_prd_text):
         _add(tok)
+    for tok in _PASCAL_WORD_RE.findall(active_prd_text):
+        if tok not in _COMMON_PROSE_CAPS:
+            _add(tok)
+    for tok in _ACRONYM_RE.findall(active_prd_text):
+        if len(tok) >= 3 and tok not in {"TODO", "FIXME", "NOTE"}:
+            _add(tok)
 
     for word in _LOWER_WORD_RE.findall(active_prd_text):
         if word in _PRD_STOPWORDS:
@@ -297,7 +320,17 @@ def locate_relevant_files(
     guard_lower = guard_text.lower()
     identifiers = _extract_prd_identifiers(active_prd)
     ident_lower_set = {i.lower() for i in identifiers}
-    ranked_ident_subset = identifiers[:30]
+    dotted_owners = {
+        m.group(1).lower()
+        for m in _DOTTED_SYMBOL_RE.finditer(active_prd)
+        if len(m.group(1)) >= 3 and m.group(1) not in _COMMON_PROSE_CAPS
+    }
+    pascal_classes = {
+        w.lower()
+        for w in _PASCAL_WORD_RE.findall(active_prd)
+        if w not in _COMMON_PROSE_CAPS and len(w) >= 4
+    }
+    ranked_ident_subset = identifiers[:60]
     ident_regex = (
         re.compile(
             r"\b(?:" + "|".join(re.escape(i) for i in sorted(ranked_ident_subset, key=len, reverse=True)) + r")\b"
@@ -370,12 +403,18 @@ def locate_relevant_files(
 
         stem = base_lower.rsplit(".", 1)[0].lstrip("_")
         stripped_stem = stem.rstrip("s")
-        if len(stem) >= 4 and (
+        if len(stem) >= 3 and (stem in dotted_owners or stem in pascal_classes):
+            path_scores[rel] = max(path_scores.get(rel, 0), 75)
+            stem_matched_ids.add(stem)
+        elif len(stem) >= 4 and any(cls.endswith(stem) for cls in (dotted_owners | pascal_classes)):
+            path_scores[rel] = max(path_scores.get(rel, 0), 52)
+            stem_matched_ids.add(stem)
+        elif len(stem) >= 4 and (
             stem in ident_lower_set
             or (len(stripped_stem) >= 4 and stripped_stem in ident_lower_set)
         ):
-            if path_scores.get(rel, 0) < 35:
-                path_scores[rel] = 35
+            if path_scores.get(rel, 0) < 38:
+                path_scores[rel] = 38
             stem_matched_ids.add(stem)
 
     content_scan_set: set[str] | None = None
@@ -429,12 +468,27 @@ def locate_relevant_files(
             continue
         score = float(path_scores.get(rel, 0))
         matched = matched_by_file.get(rel, set())
-        content_pts = 0.0
+        token_pts: list[float] = []
         for ident in matched:
-            idf = 1.0 + math.log((total_scanned + 1.0) / (doc_freq.get(ident, 1) + 1.0))
-            mult = 1.6 if (ident.lower() in high_spec_lower or "_" in ident or any(c.isupper() for c in ident[1:])) else 0.9
-            content_pts += 5.5 * idf * mult
-        score += min(65.0, content_pts)
+            df = doc_freq.get(ident, 1)
+            idf = 1.0 + math.log((total_scanned + 1.0) / (df + 1.0))
+            is_high_spec = (
+                ident.lower() in high_spec_lower
+                or "_" in ident
+                or any(c.isupper() for c in ident)
+            )
+            if is_high_spec and df <= 3:
+                token_pts.append((idf ** 1.4) * 7.5)
+            elif is_high_spec:
+                token_pts.append(idf * 5.0)
+            else:
+                token_pts.append(idf * 2.2)
+        token_pts.sort(reverse=True)
+        content_pts = sum(token_pts[:14])
+        stem_now = rel.lower().rsplit("/", 1)[-1].rsplit(".", 1)[0].lstrip("_")
+        if len(stem_now) >= 4 and stem_now in {m.lower() for m in matched}:
+            content_pts += 22.0
+        score += content_pts
         if matched and _STUB_MARKER_RE.search(file_texts.get(rel, "")):
             score += 20.0
 
@@ -447,11 +501,20 @@ def locate_relevant_files(
     demoted_runners_up: list[str] = []
     if top_pool:
         top_score = top_pool[0][0]
-        cutoff = max(22.0, top_score * 0.55)
         target_files.append(top_pool[0][1])
+        prev_score = top_score
         for sc, rel in top_pool[1:]:
-            if path_scores.get(rel, 0) >= 45 or sc >= cutoff:
+            p_sc = path_scores.get(rel, 0)
+            if p_sc >= 60 or (p_sc >= 38 and len(target_files) < 3 and sc >= 38.0):
                 target_files.append(rel)
+                prev_score = sc
+            elif (
+                len(target_files) < 3
+                and sc >= max(24.0, top_score * 0.68)
+                and sc >= prev_score * 0.65
+            ):
+                target_files.append(rel)
+                prev_score = sc
             else:
                 demoted_runners_up.append(rel)
     else:
@@ -640,17 +703,24 @@ def extract_symbol_windows(
     if not lines:
         return ""
 
-    filtered = [ident for ident in identifiers if len(ident) >= 3][:30]
+    filtered = [ident for ident in identifiers if len(ident) >= 3][:35]
     hits: list[int] = []
+    pat: re.Pattern[str] | None = None
+    id_weights: dict[str, float] = {}
     if filtered:
+        for idx, ident in enumerate(filtered):
+            base_w = 18.0 if ("_" in ident or any(c.isupper() for c in ident)) else 6.0
+            key = ident.lower()
+            if key not in id_weights:
+                id_weights[key] = base_w / (1.0 + idx * 0.15)
         pat = re.compile(r"\b(?:" + "|".join(re.escape(i) for i in sorted(filtered, key=len, reverse=True)) + r")\b")
         hits = [idx for idx, line in enumerate(lines) if pat.search(line)]
 
     if not hits:
-        head = [f"L{i + 1}: {_clip_line(lines[i])}" for i in range(min(40, len(lines)))]
-        if len(lines) > 60:
+        head = [f"L{i + 1}: {_clip_line(lines[i])}" for i in range(min(30, len(lines)))]
+        if len(lines) > 50:
             head.append("...")
-            head.extend(f"L{i + 1}: {_clip_line(lines[i])}" for i in range(max(40, len(lines) - 20), len(lines)))
+            head.extend(f"L{i + 1}: {_clip_line(lines[i])}" for i in range(max(30, len(lines) - 15), len(lines)))
         return "\n".join(head)
 
     py_spans = _python_function_spans(text) if file_path.suffix.lower() == ".py" else []
@@ -659,10 +729,10 @@ def extract_symbol_windows(
         enclosing = next((sp for sp in py_spans if sp[0] <= h <= sp[1]), None)
         if enclosing is not None:
             fn_start, fn_end = enclosing
-            if (fn_end - fn_start) <= 80:
+            if (fn_end - fn_start) <= 65:
                 raw_intervals.append([fn_start, fn_end])
             else:
-                raw_intervals.append([fn_start, min(fn_end, fn_start + 4)])
+                raw_intervals.append([fn_start, min(fn_end, fn_start + 3)])
                 raw_intervals.append([max(fn_start, h - radius), min(fn_end, h + radius)])
         else:
             start = max(0, h - radius)
@@ -680,6 +750,38 @@ def extract_symbol_windows(
             intervals[-1][1] = max(intervals[-1][1], end)
         else:
             intervals.append([start, end])
+
+    total_interval_lines = sum((end - start + 1) for start, end in intervals)
+    if total_interval_lines > max_total_lines and pat is not None:
+        scored_ivs: list[tuple[float, int, int]] = []
+        for start, end in intervals:
+            block_text = "\n".join(lines[start : end + 1])
+            found_ids = {m.lower() for m in pat.findall(block_text)}
+            win_score = sum(id_weights.get(fid, 3.0) for fid in found_ids)
+            header_text = "\n".join(lines[start : min(end + 1, start + 3)])
+            header_ids = {m.lower() for m in pat.findall(header_text)}
+            if header_ids:
+                win_score += 30.0 + sum(id_weights.get(fid, 3.0) for fid in header_ids)
+            if (end - start) <= 45:
+                win_score += 5.0
+            scored_ivs.append((win_score, start, end))
+
+        scored_ivs.sort(key=lambda item: (-item[0], item[1]))
+        chosen: list[list[int]] = []
+        used_lines = 0
+        for _sc, start, end in scored_ivs:
+            span_len = end - start + 1
+            if used_lines + span_len <= max_total_lines:
+                chosen.append([start, end])
+                used_lines += span_len
+            elif max_total_lines - used_lines >= 12:
+                rem_len = max_total_lines - used_lines
+                chosen.append([start, start + rem_len - 1])
+                used_lines = max_total_lines
+                break
+        if chosen:
+            chosen.sort(key=lambda iv: iv[0])
+            intervals = chosen
 
     emitted: list[str] = []
     for w_idx, (start, end) in enumerate(intervals):

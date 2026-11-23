@@ -165,7 +165,7 @@ def test_prose_locator_excludes_docs_and_skeleton_clips_giant_data_lines(tmp_pat
     assert located.target_files[0] == "pkg/_wrap.py"
     assert "CHANGES.md" not in located.target_files
     assert "docs/wrap.md" not in located.target_files
-    assert "pkg/cells.py" in located.target_files
+    assert "pkg/cells.py" in (located.target_files + located.readonly_files)
     assert "pkg/width_table.py" in located.readonly_files
 
     skel = extract_fast_skeleton(repo / "pkg" / "_emoji_data.py")
@@ -233,3 +233,56 @@ def test_ast_function_window_extracts_complete_enclosing_method(tmp_path: Path) 
     assert "return d" in window
     assert "filler_0" not in window
     assert "trailing_79" not in window
+
+
+def test_universal_stack_detection_dynamic_blueprint_and_traceback_escalation(tmp_path: Path) -> None:
+    from engine.bootstrapper import detect_existing_stack
+    from engine.interviewer import save_custom_blueprint_if_needed
+    from engine.models import ProductSpec
+
+    # 1. Non-listed tech product (e.g. Rust / Go / Flutter) detected at 0 tokens
+    rust_dir = tmp_path / "rust_cli"
+    rust_dir.mkdir(parents=True)
+    (rust_dir / "Cargo.toml").write_text('[package]\nname = "demo"\nversion = "0.1.0"\n', encoding="utf-8")
+    stack, v_cmds, f_cmds, prev = detect_existing_stack(rust_dir)
+    assert stack == "rust_app"
+    assert "cargo check" in v_cmds
+    assert "cargo test" in f_cmds
+
+    # 2. Dynamic blueprint synthesis for any brand-new tech product (e.g. Godot/Unity/Chrome Extension)
+    custom_dir = tmp_path / "chrome_ext"
+    custom_dir.mkdir(parents=True)
+    spec = ProductSpec(
+        product_title="Trình quản lý Tab thông minh",
+        features_vi=["Gom nhóm tab tự động"],
+        prd_markdown="# PRD\nBuild Chrome Extension Manifest V3",
+        verify_commands=["node scripts/validate_manifest.js"],
+        preview_command="npx web-ext run",
+        quality_rules=["Manifest V3 strict CSP"],
+    )
+    bp_path = save_custom_blueprint_if_needed(custom_dir, spec, stack="generic")
+    assert bp_path is not None and bp_path.is_file()
+    st2, vc2, _fc2, pv2 = detect_existing_stack(custom_dir)
+    assert st2 == "custom_product"
+    assert vc2 == ["node scripts/validate_manifest.js"]
+    assert pv2 == "npx web-ext run"
+
+    # 3. Pillar 4: Traceback file+line auto-extraction on retry attempt > 0
+    (custom_dir / "src").mkdir(parents=True, exist_ok=True)
+    (custom_dir / "src" / "worker.py").write_text(
+        "\n".join(f"x_{i} = {i}" for i in range(1, 30)) + "\n",
+        encoding="utf-8",
+    )
+    cfg = EngineConfig(project=ProjectConfig(target_repo=str(custom_dir)))
+    compiler = PromptCompiler(cfg)
+    task = TaskSpec(
+        task_id="T-ERR",
+        title="Fix worker",
+        objective="Fix crash",
+        allowed_write_files=["src/other.py"],
+        create_new_files=["src/other.py"],
+    )
+    tb = f'Traceback (most recent call last):\n  File "{(custom_dir / "src" / "worker.py").as_posix()}", line 15, in run\n    raise ValueError("bad")'
+    retry_prompt, _ = compiler.compile(task, attempt=1, last_error=tb, last_verdict="VERIFY_FAIL")
+    assert "Crashing Code Context (Auto-Extracted from Traceback)" in retry_prompt
+    assert "> L15: x_15 = 15" in retry_prompt

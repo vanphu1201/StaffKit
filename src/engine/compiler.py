@@ -17,6 +17,7 @@ from engine.indexer import (
     list_real_files,
 )
 from engine.models import EngineConfig, TaskSpec, normalize_posix_path
+from engine.verifier import extract_error_locations
 
 
 class PromptTooLargeError(RuntimeError):
@@ -84,27 +85,33 @@ class PromptCompiler:
         if not readonly_files:
             return "(Không có)"
         blocks: list[str] = []
-        for raw_rel in readonly_files:
+        max_skel_lines = 8 if compact_mode else 12
+        max_files = 4 if compact_mode else 6
+        for raw_rel in readonly_files[:max_files]:
             rel = normalize_posix_path(raw_rel)
             if rel in skeletons:
-                body = skeletons[rel]
-                if compact_mode:
-                    body_lines = body.splitlines()[:12]
-                    body = "\n".join(body_lines) + ("\n... [trimmed]" if len(body.splitlines()) > 12 else "")
+                raw_Lines = skeletons[rel].splitlines()
+                body = "\n".join(raw_Lines[:max_skel_lines])
+                if len(raw_Lines) > max_skel_lines:
+                    body += "\n... [trimmed]"
                 blocks.append(f"## {rel} (skeleton)\n```\n{body}\n```")
                 continue
 
             full_path = self.repo_path / rel
             if full_path.is_file():
                 lines = full_path.read_text(encoding="utf-8", errors="replace").splitlines()
-                max_raw = 15 if compact_mode else 80
+                max_raw = 10 if compact_mode else 16
                 if len(lines) <= max_raw:
                     blocks.append(f"## {rel}\n```\n" + "\n".join(lines) + "\n```")
                 else:
-                    preview = "\n".join(lines[:max_raw])
-                    blocks.append(
-                        f"## {rel} (truncated to first {max_raw}/{len(lines)} lines)\n```\n{preview}\n```"
-                    )
+                    fast_skel = extract_fast_skeleton(full_path, max_lines=max_skel_lines)
+                    if fast_skel:
+                        blocks.append(f"## {rel} (pointer signatures, {len(lines)} lines)\n```\n{fast_skel}\n```")
+                    else:
+                        preview = "\n".join(lines[:max_raw])
+                        blocks.append(
+                            f"## {rel} (truncated to first {max_raw}/{len(lines)} lines)\n```\n{preview}\n```"
+                        )
             else:
                 blocks.append(f"## {rel}\n(Sẽ được tạo hoặc chưa có sẵn trên đĩa)")
         return "\n\n".join(blocks)
@@ -115,15 +122,23 @@ class PromptCompiler:
         skeletons: dict[str, str],
         *,
         max_inline_lines: int | None = None,
-        window_max_lines: int = 160,
+        window_max_lines: int = 75,
     ) -> tuple[str, bool]:
-        """Format target files and return (formatted_text, all_existing_targets_inlined)."""
+        """Format target files with ultra-lean primary inlining and ranked AST function windows for large files."""
         blocks: list[str] = []
         all_inlined = True
-        max_lines = self.config.limits.inline_file_max_lines if max_inline_lines is None else max_inline_lines
+        cfg_max_lines = self.config.limits.inline_file_max_lines
+        max_lines = cfg_max_lines if max_inline_lines is None else max_inline_lines
         new_set = set(task.create_new_files)
 
-        for raw_rel in task.allowed_write_files:
+        existing_targets = [
+            normalize_posix_path(r)
+            for r in task.allowed_write_files
+            if normalize_posix_path(r) not in new_set
+        ]
+        multi_target = len(existing_targets) > 1
+
+        for idx, raw_rel in enumerate(task.allowed_write_files):
             rel = normalize_posix_path(raw_rel)
             if rel in new_set:
                 continue
@@ -133,27 +148,36 @@ class PromptCompiler:
                 continue
 
             lines = full_path.read_text(encoding="utf-8", errors="replace").splitlines()
-            if len(lines) <= max_lines:
-                numbered = "\n".join(f"L{idx}: {line}" for idx, line in enumerate(lines, start=1))
+            effective_max = min(max_lines, 160 if (multi_target and idx == 0) else (90 if multi_target else max_lines))
+            if max_inline_lines is not None:
+                effective_max = max_inline_lines
+
+            if len(lines) <= effective_max:
+                numbered = "\n".join(f"L{ln_idx}: {line}" for ln_idx, line in enumerate(lines, start=1))
                 blocks.append(f"## {rel} ({len(lines)} lines)\n```\n{numbered}\n```")
             else:
                 all_inlined = False
                 identifiers = _extract_prd_identifiers(task.objective)
-                skel = skeletons.get(rel) or extract_fast_skeleton(
+                skel_cap = 30 if window_max_lines >= 50 else 20
+                raw_skel = skeletons.get(rel) or extract_fast_skeleton(
                     full_path,
-                    max_lines=100 if window_max_lines >= 60 else 60,
+                    max_lines=skel_cap,
                     priority_identifiers=identifiers,
                 )
-                if not skel:
+                if raw_skel:
+                    skel_lines = raw_skel.splitlines()
+                    skel = "\n".join(skel_lines[:skel_cap]) + (
+                        "\n... [skeleton trimmed]" if len(skel_lines) > skel_cap else ""
+                    )
+                else:
                     skel = "(File > 300 dòng; hãy đọc có chọn lọc theo symbol/line range)"
-                radius = 25 if window_max_lines >= 60 else 12
+                radius = 18 if window_max_lines >= 60 else 10
                 win_text = extract_symbol_windows(full_path, identifiers, radius=radius, max_total_lines=window_max_lines)
                 body = skel
                 if win_text:
                     body = f"{skel}\n\n// Relevant line windows:\n{win_text}"
-                limit_label = self.config.limits.inline_file_max_lines
                 blocks.append(
-                    f"## {rel} ({len(lines)} lines > {limit_label} limit — skeleton only)\n```\n{body}\n```"
+                    f"## {rel} ({len(lines)} lines > {cfg_max_lines} limit — skeleton only)\n```\n{body}\n```"
                 )
 
         for raw_rel in task.create_new_files:
@@ -187,6 +211,24 @@ class PromptCompiler:
 
         if last_error.strip():
             parts.append("## Trimmed Error Log / Violation Summary:\n```\n" + last_error.strip() + "\n```")
+            err_locs = extract_error_locations(last_error, self.repo_path, max_locations=3)
+            loc_Snippets: list[str] = []
+            for rel, lineno in err_locs:
+                full_p = self.repo_path / rel
+                if not full_p.is_file():
+                    continue
+                f_lines = full_p.read_text(encoding="utf-8", errors="replace").splitlines()
+                if not f_lines or lineno < 1 or lineno > len(f_lines):
+                    continue
+                s_ln = max(1, lineno - 10)
+                e_ln = min(len(f_lines), lineno + 10)
+                numbered = "\n".join(
+                    f"{'>' if ln == lineno else ' '} L{ln}: {f_lines[ln - 1]}"
+                    for ln in range(s_ln, e_ln + 1)
+                )
+                loc_Snippets.append(f"### {rel} (around L{lineno})\n```\n{numbered}\n```")
+            if loc_Snippets:
+                parts.append("## Crashing Code Context (Auto-Extracted from Traceback):\n" + "\n\n".join(loc_Snippets))
 
         return "\n\n".join(parts)
 
@@ -212,7 +254,7 @@ class PromptCompiler:
         known = len(task.allowed_write_files) + len(task.readonly_context_files)
         if len(real_files) <= 8 or len(real_files) <= known:
             return ""
-        if len(real_files) <= 120:
+        if len(real_files) <= 30:
             return "\n".join(real_files)
 
         focus_paths = [
@@ -225,8 +267,8 @@ class PromptCompiler:
             parts = p.split("/")
             depth_dirs.add("." if len(parts) <= 1 else "/".join(parts[: min(len(parts) - 1, 3)]))
 
-        siblings = [p for p in real_files if (posixpath.dirname(p) or ".") in exact_dirs][:60]
-        summary = build_hierarchical_dir_summary(set(real_files), priority_dirs=depth_dirs, max_entries=50)
+        siblings = [p for p in real_files if (posixpath.dirname(p) or ".") in exact_dirs][:25]
+        summary = build_hierarchical_dir_summary(set(real_files), priority_dirs=depth_dirs, max_entries=25)
         parts_out: list[str] = []
         if siblings:
             parts_out.append("## Nearby Sibling Files\n" + "\n".join(siblings))

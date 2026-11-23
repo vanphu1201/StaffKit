@@ -24,6 +24,19 @@ def _default_python_cmd() -> str:
 
 def detect_existing_stack(project_dir: Path) -> tuple[str, list[str], list[str], str]:
     """Infer stack and verification commands from existing project files (0 LLM tokens)."""
+    # Match any custom/external YAML blueprint by detect_markers first (including .auto-engine/blueprint.yaml)
+    custom_bp_path = project_dir / ".auto-engine" / "blueprint.yaml"
+    if custom_bp_path.is_file():
+        for bp in load_blueprints(project_dir):
+            if bp.id != "generic" and (bp.verify_commands or bp.preview_command):
+                if not bp.detect_markers or all((project_dir / m.rstrip("/")).exists() for m in bp.detect_markers):
+                    return (
+                        bp.id,
+                        list(bp.verify_commands),
+                        list(bp.verify_commands),
+                        bp.preview_command,
+                    )
+
     pkg_json = project_dir / "package.json"
     if pkg_json.is_file():
         try:
@@ -56,7 +69,20 @@ def detect_existing_stack(project_dir: Path) -> tuple[str, list[str], list[str],
             py = _default_python_cmd()
         return "python_app", [f"{py} -m pytest -q"], [f"{py} -m pytest -v"], f"{py} -m src.app"
 
-    # Match any custom/external YAML blueprint by detect_markers
+    if (project_dir / "Cargo.toml").is_file():
+        return "rust_app", ["cargo check"], ["cargo test"], "cargo run"
+    if (project_dir / "go.mod").is_file():
+        return "go_app", ["go build ./..."], ["go test ./..."], "go run ."
+    if (project_dir / "pubspec.yaml").is_file():
+        return "flutter_app", ["dart analyze"], ["flutter test"], "flutter run"
+    if (project_dir / "pom.xml").is_file():
+        return "java_maven", ["mvn test-compile"], ["mvn test"], ""
+    if (project_dir / "build.gradle").is_file() or (project_dir / "build.gradle.kts").is_file():
+        return "gradle_app", ["gradle classes"], ["gradle test"], ""
+    if (project_dir / "CMakeLists.txt").is_file():
+        return "cpp_cmake", ["cmake -B build"], ["cmake --build build"], ""
+
+    # Match any built-in/external YAML blueprint by detect_markers
     for bp in load_blueprints(project_dir):
         if bp.detect_markers and all(
             (project_dir / m.rstrip("/")).exists() for m in bp.detect_markers
@@ -475,9 +501,21 @@ def bootstrap_project(
     target.mkdir(parents=True, exist_ok=True)
 
     has_existing_code = (
-        (target / "package.json").is_file()
-        or (target / "pyproject.toml").is_file()
-        or (target / "requirements.txt").is_file()
+        any(
+            (target / marker).is_file()
+            for marker in (
+                "package.json",
+                "pyproject.toml",
+                "requirements.txt",
+                "Cargo.toml",
+                "go.mod",
+                "pubspec.yaml",
+                "pom.xml",
+                "build.gradle",
+                "build.gradle.kts",
+                "CMakeLists.txt",
+            )
+        )
         or (target / ".git").exists()
     )
 

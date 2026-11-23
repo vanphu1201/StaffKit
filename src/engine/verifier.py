@@ -14,6 +14,7 @@ from engine.models import EngineConfig, TaskSpec, VerifyResult, normalize_posix_
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 PRIORITY_RE = re.compile(r"(Error|FAIL|AssertionError|Exception|Traceback|TS\d{4}|SyntaxError|TypeError)")
+_PY_TRACEBACK_FILE_RE = re.compile(r'File "([^"]+\.[A-Za-z0-9]+)", line (\d+)')
 FILE_LINE_RE = re.compile(r'([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+)(?::|\(|", line )(\d+)')
 NOISE_SUBSTRINGS = ("node_modules/", "node_modules\\", "site-packages/", "site-packages\\", "<frozen importlib")
 
@@ -34,6 +35,49 @@ def compute_error_hash(trimmed_log: str, repo_path: Path | None = None) -> str:
     normalized = HEX_ADDR_RE.sub("<ADDR>", normalized)
     normalized = "\n".join(line.strip() for line in normalized.splitlines() if line.strip())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def extract_error_locations(
+    error_log: str,
+    repo_path: Path,
+    max_locations: int = 3,
+) -> list[tuple[str, int]]:
+    """Extract up to `max_locations` unique (rel_posix_path, line_no) pairs from tracebacks/compiler logs."""
+    if not error_log:
+        return []
+    cleaned = ANSI_RE.sub("", error_log)
+    resolved_root = repo_path.resolve()
+    locations: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
+
+    for line in cleaned.splitlines():
+        if any(noise in line for noise in NOISE_SUBSTRINGS):
+            continue
+        matches = list(_PY_TRACEBACK_FILE_RE.finditer(line)) + list(FILE_LINE_RE.finditer(line))
+        for match in matches:
+            raw_file, raw_lineno = match.group(1), match.group(2)
+            try:
+                lineno = int(raw_lineno)
+            except ValueError:
+                continue
+            cand = Path(raw_file)
+            if not cand.is_absolute():
+                cand = (resolved_root / normalize_posix_path(raw_file)).resolve()
+            else:
+                cand = cand.resolve()
+            if not cand.is_file():
+                continue
+            try:
+                rel = cand.relative_to(resolved_root).as_posix()
+            except ValueError:
+                continue
+            key = (rel, lineno)
+            if key not in seen:
+                seen.add(key)
+                locations.append(key)
+                if len(locations) >= max_locations:
+                    return locations
+    return locations
 
 
 def _extract_code_context(repo_path: Path, trimmed_lines: list[str], budget: int) -> list[str]:

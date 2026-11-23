@@ -342,11 +342,14 @@ class InterviewOutput(BaseModel):
 
 
 class ProductSpec(BaseModel):
-    """Plain-Vietnamese feature list plus synthesized technical PRD for Layer 2 Planner."""
+    """Plain-Vietnamese feature list plus synthesized technical PRD and dynamic stack rules for Layer 2 Planner."""
 
     product_title: str
     features_vi: list[str] = Field(default_factory=list)
     prd_markdown: str
+    verify_commands: list[str] = Field(default_factory=list)
+    preview_command: str = ""
+    quality_rules: list[str] = Field(default_factory=list)
 
 
 class BootstrapResult(BaseModel):

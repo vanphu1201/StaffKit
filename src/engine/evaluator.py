@@ -730,7 +730,9 @@ def run_engine_arm(case: EvalCase, repo_dir: Path, config: EngineConfig) -> tupl
     auto_dir = repo_dir / ".auto-engine"
     auto_dir.mkdir(parents=True, exist_ok=True)
     prd_path = auto_dir / "eval_prd.md"
-    prd_path.write_text(case.prd_markdown, encoding="utf-8")
+    cleaned_prd = case.prd_markdown.strip()
+    full_prd = cleaned_prd if cleaned_prd.startswith("# ") else f"# {case.title}\n\n{cleaned_prd}\n"
+    prd_path.write_text(full_prd, encoding="utf-8")
 
     with _temp_env(case.env):
         db = StateDB(cfg.state_db_path)
