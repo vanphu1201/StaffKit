@@ -20,7 +20,12 @@ from starlette.responses import HTMLResponse, JSONResponse, StreamingResponse
 from starlette.routing import Route
 
 from engine.blueprints import get_blueprint, load_blueprints
-from engine.bootstrapper import bootstrap_project, detect_existing_stack, ensure_git_repo_ready
+from engine.bootstrapper import (
+    bootstrap_project,
+    detect_existing_stack,
+    ensure_git_repo_ready,
+    generate_nontech_delivery_guide,
+)
 from engine.bridges.agy_cli_executor import list_agy_models, smoke_test_agy
 from engine.compiler import PromptCompiler
 from engine.database import StateDB
@@ -350,12 +355,20 @@ class DesktopAppController:
                 "done_message": self.wizard_done_message,
             }
 
+        delivery_guide: dict[str, Any] | None = None
+        if repo_exists and summary.get("total_tasks", 0) > 0 and summary.get("counts", {}).get("DONE", 0) >= summary.get("total_tasks", 0):
+            try:
+                delivery_guide = generate_nontech_delivery_guide(repo_dir, write_files=True)
+            except Exception:
+                delivery_guide = None
+
         engine_insights = {
             "detected": detected_info,
             "contracts_md": contracts_md,
             "handoff_md": handoff_md,
             "custom_blueprint_yaml": custom_bp_yaml,
             "audit_report_md": audit_report_md,
+            "delivery_guide": delivery_guide,
             "pillars": {
                 "locator_ast_brace": True,
                 "contract_first": bool(contracts_md.strip()),
@@ -965,23 +978,28 @@ class DesktopAppController:
         return self.start_run(auto_approve=True, resume_mode=True)
 
     def launch_preview_command(self, custom_command: str = "") -> dict[str, str]:
-        """Launch the product preview command in a new visible terminal so non-tech users can run it in 1 click."""
+        """Launch the product preview command in a new visible terminal (and auto-open browser if web URL exists)."""
         cfg = self.load_config()
         target = cfg.target_repo_path
         if not target.is_dir():
             raise ValueError(f"Thư mục dự án không tồn tại: {target}")
-        det_stack, _vc, _fc, det_prev = detect_existing_stack(target)
-        cmd_str = (custom_command.strip() or self.wizard_preview_cmd or det_prev).strip()
+        guide = generate_nontech_delivery_guide(target, write_files=True)
+        cmd_str = (custom_command.strip() or guide.get("run_command") or self.wizard_preview_cmd).strip()
+        web_url = str(guide.get("web_url") or "")
+        det_stack = str(guide.get("stack") or "generic")
         if not cmd_str:
             self.open_target_folder()
-            return {"launched": "folder", "command": "", "stack": det_stack}
+            return {"launched": "folder", "command": "", "stack": det_stack, "web_url": ""}
 
         if os.name == "nt":
+            open_browser = f"Start-Job {{ Start-Sleep -Seconds 3; Start-Process '{web_url}' }} | Out-Null; " if web_url else ""
             ps_cmd = (
                 f"Set-Location -LiteralPath '{target.as_posix()}'; "
                 f"Write-Host '=== DANG CHAY SAN PHAM ({det_stack}) ===' -ForegroundColor Green; "
                 f"Write-Host 'Lenh: {cmd_str}' -ForegroundColor Cyan; "
-                f"{cmd_str}"
+                + (f"Write-Host 'Giao dien Web: {web_url}' -ForegroundColor Yellow; " if web_url else "")
+                + open_browser
+                + f"{cmd_str}"
             )
             subprocess.Popen(
                 ["cmd", "/c", "start", f"Auto-Engine Preview ({target.name})", "powershell", "-NoExit", "-Command", ps_cmd],
@@ -989,8 +1007,8 @@ class DesktopAppController:
             )
         else:
             subprocess.Popen(cmd_str, shell=True, cwd=str(target))
-        self.emit_log("success", f"▶️ Đã khởi chạy sản phẩm tại `{target.name}` với lệnh: `{cmd_str}`")
-        return {"launched": "terminal", "command": cmd_str, "stack": det_stack}
+        self.emit_log("success", f"▶️ Đã khởi chạy sản phẩm tại `{target.name}` với lệnh: `{cmd_str}`" + (f" ({web_url})" if web_url else ""))
+        return {"launched": "terminal", "command": cmd_str, "stack": det_stack, "web_url": web_url}
 
     def save_contracts_and_memory(
         self,

@@ -544,6 +544,14 @@
           <div class="progress-bar-fill" id="wizProgressFill"></div>
         </div>
         <div id="wizDoneBanner" style="display:none; background:rgba(34,197,94,.12); border:1px solid rgba(34,197,94,.4); color:#86efac; padding:10px 14px; border-radius:8px; margin-bottom:12px;"></div>
+        <div id="wizGuideCard" class="q-card" style="display:none; margin-bottom:14px; border-color:rgba(34,197,94,.5); background:rgba(34,197,94,.07);">
+          <div class="row" style="justify-content:space-between;">
+            <b style="color:#86efac;">📖 Hướng dẫn chạy &amp; sử dụng sản phẩm vừa tạo (Dành cho người Non-Tech)</b>
+            <button class="btn success sm" onclick="launchPreview()">▶️ Khởi chạy &amp; Mở trình duyệt ngay</button>
+          </div>
+          <ol id="wizGuideSteps" style="margin:6px 0 4px 18px; line-height:1.65; color:#e6edf3;"></ol>
+          <div id="wizGuideFiles" style="font-size:12px; color:var(--muted);"></div>
+        </div>
         <div id="wizTaskSimpleList" style="display:flex; flex-direction:column; gap:8px; margin-bottom:14px;"></div>
 
         <!-- HỘP YÊU CẦU CHỈNH SỬA / BỔ SUNG TÍNH NĂNG TIẾP THEO NGAY TẠI BƯỚC 4 -->
@@ -630,6 +638,14 @@
           </div>
           <div class="progress-bar-bg" style="margin-bottom:12px;">
             <div class="progress-bar-fill" id="devProgressFill"></div>
+          </div>
+          <div id="devGuideCard" class="q-card" style="display:none; margin-bottom:12px; border-color:rgba(34,197,94,.5); background:rgba(34,197,94,.07);">
+            <div class="row" style="justify-content:space-between;">
+              <b style="color:#86efac;">📖 Hướng dẫn chạy &amp; sử dụng sản phẩm (Đã tạo sẵn `CHAY_SAN_PHAM.bat` &amp; `HUONG_DAN_SU_DUNG.md`)</b>
+              <button class="btn success sm" onclick="launchPreview()">▶️ Khởi chạy &amp; Mở trình duyệt ngay</button>
+            </div>
+            <ol id="devGuideSteps" style="margin:6px 0 4px 18px; line-height:1.65; color:#e6edf3;"></ol>
+            <div id="devGuideFiles" style="font-size:12px; color:var(--muted);"></div>
           </div>
           <div id="devTaskQuickList" style="display:flex; flex-direction:column; gap:6px;"></div>
         </div>
@@ -1437,6 +1453,23 @@
       }
 
       const ins = s.engine_insights || {};
+      const guide = ins.delivery_guide || null;
+      for (const prefix of ["wiz", "dev"]) {
+        const gCard = document.getElementById(prefix + "GuideCard");
+        const gSteps = document.getElementById(prefix + "GuideSteps");
+        const gFiles = document.getElementById(prefix + "GuideFiles");
+        if (gCard && gSteps && gFiles) {
+          if (guide && guide.steps_vi && guide.steps_vi.length > 0) {
+            gCard.style.display = "block";
+            gSteps.innerHTML = guide.steps_vi.map(st => `<li>${esc(st)}</li>`).join("");
+            const urlPart = guide.web_url ? ` • Giao diện Web: <b>${esc(guide.web_url)}</b>` : "";
+            const batPart = guide.bat_path ? ` • File chạy nhanh 1-click: <code>CHAY_SAN_PHAM.bat</code>` : "";
+            gFiles.innerHTML = `Lệnh chạy: <code>${esc(guide.run_command || "-")}</code>${urlPart}${batPart}`;
+          } else {
+            gCard.style.display = "none";
+          }
+        }
+      }
       const p = ins.pillars || {};
       const pRow = document.getElementById("pillarsStatusRow");
       if (pRow) {

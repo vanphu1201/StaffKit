@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from engine.blueprints import get_blueprint, load_blueprints
 from engine.git_guard import GitGuard
@@ -558,3 +559,109 @@ def bootstrap_project(
         preview_command=preview,
         is_new_repo=is_new,
     )
+
+
+def generate_nontech_delivery_guide(project_dir: Path, *, write_files: bool = True) -> dict[str, Any]:
+    """Generate 0-token plain-Vietnamese usage guide (`HUONG_DAN_SU_DUNG.md`) and 1-click `CHAY_SAN_PHAM.bat`."""
+    target = project_dir.resolve()
+    stack, _vc, _fc, det_preview = detect_existing_stack(target)
+    run_cmd = det_preview or ""
+    web_url = ""
+    extra_notes: list[str] = []
+
+    pkg_path = target / "package.json"
+    if pkg_path.is_file():
+        try:
+            pkg = json.loads(pkg_path.read_text(encoding="utf-8", errors="replace"))
+            scripts = pkg.get("scripts") if isinstance(pkg.get("scripts"), dict) else {}
+            if "start" in scripts:
+                run_cmd = "npm start"
+            elif "dev" in scripts:
+                run_cmd = "npm run dev"
+            elif "dev:web" in scripts:
+                run_cmd = "npm run dev:web"
+
+            if (target / "dist" / "web" / "index.html").is_file() or (target / "server").is_dir():
+                web_url = "http://127.0.0.1:3001"
+                if "dev:web" in scripts and not (target / "dist" / "web" / "index.html").is_file():
+                    web_url = "http://127.0.0.1:5173"
+                    extra_notes.append(f"Nếu muốn chạy riêng giao diện dev frontend: `{scripts['dev:web']}` (mở {web_url}).")
+            elif (target / "vite.config.ts").is_file() or (target / "web" / "vite.config.ts").is_file():
+                web_url = "http://127.0.0.1:5173"
+            if "batch" in scripts:
+                extra_notes.append(f"Chế độ chạy hàng loạt (CLI Batch): `npm run batch -- --help`")
+            if "test" in scripts:
+                extra_notes.append("Kiểm tra sức khỏe toàn bộ hệ thống (Test tự động): `npm test`")
+        except (OSError, json.JSONDecodeError):
+            pass
+    elif (target / "pyproject.toml").is_file() or (target / "requirements.txt").is_file():
+        if not run_cmd:
+            run_cmd = "python -m src.app" if (target / "src" / "app.py").is_file() else "python main.py"
+        extra_notes.append("Chạy bộ kiểm thử tự động: `pytest -q`")
+    elif (target / "Cargo.toml").is_file():
+        run_cmd = run_cmd or "cargo run"
+    elif (target / "go.mod").is_file():
+        run_cmd = run_cmd or "go run ."
+
+    prd_title = target.name
+    prd_path = target / "openspec" / "prd.md"
+    if prd_path.is_file():
+        first_line = next((ln.lstrip("# ").strip() for ln in prd_path.read_text(encoding="utf-8", errors="replace").splitlines() if ln.strip()), "")
+        if first_line:
+            prd_title = first_line
+
+    steps_vi: list[str] = []
+    if run_cmd:
+        steps_vi.append(f"Cách 1 (Dễ nhất — 1 chạm): Bấm nút '▶️ Chạy thử sản phẩm' ngay trên ứng dụng Auto-Prompt Engine, HOẶC mở thư mục dự án và nhấp đúp file `CHAY_SAN_PHAM.bat`.")
+    if web_url:
+        steps_vi.append(f"Cách 2 (Mở giao diện trên trình duyệt): Sau khi cửa sổ đen khởi chạy hiện lên 2–3 giây, mở trình duyệt truy cập địa chỉ {web_url}.")
+    if run_cmd:
+        steps_vi.append(f"Cách 3 (Chạy bằng lệnh thủ công): Mở Terminal trong thư mục `{target.as_posix()}` và gõ `{run_cmd}`.")
+    steps_vi.extend(extra_notes)
+
+    guide_md_lines = [
+        f"# Hướng dẫn chạy & sử dụng — {prd_title}",
+        "",
+        f"- **Thư mục dự án:** `{target.as_posix()}`",
+        f"- **Công nghệ nhận diện:** `{stack}`",
+    ]
+    if run_cmd:
+        guide_md_lines.append(f"- **Lệnh khởi chạy chính:** `{run_cmd}`")
+    if web_url:
+        guide_md_lines.append(f"- **Địa chỉ giao diện Web:** {web_url}")
+    guide_md_lines.extend(["", "## Các bước chạy sản phẩm (Dành cho người Non-Tech)"])
+    for idx, st in enumerate(steps_vi, start=1):
+        guide_md_lines.append(f"{idx}. {st}")
+    guide_md = "\n".join(guide_md_lines) + "\n"
+
+    bat_path = target / "CHAY_SAN_PHAM.bat"
+    guide_path = target / "HUONG_DAN_SU_DUNG.md"
+    if write_files and target.is_dir() and run_cmd:
+        try:
+            guide_path.write_text(guide_md, encoding="utf-8")
+            open_browser_line = f'start "" "{web_url}"\r\n' if web_url else ""
+            bat_content = (
+                "@echo off\r\n"
+                "chcp 65001 >nul\r\n"
+                f'cd /d "{target}"\r\n'
+                f"echo === DANG KHOI CHAY SAN PHAM: {prd_title} ===\r\n"
+                f"echo Lenh: {run_cmd}\r\n"
+                + (f"echo Dang mo trinh duyet tai {web_url} sau 3 giay...\r\n" if web_url else "")
+                + (f'start "" /b cmd /c "timeout /t 3 /nobreak >nul & start "" "{web_url}""\r\n' if web_url else "")
+                + f"{run_cmd}\r\n"
+                + "pause\r\n"
+            )
+            bat_path.write_text(bat_content, encoding="utf-8")
+        except OSError:
+            pass
+
+    return {
+        "title": prd_title,
+        "stack": stack,
+        "run_command": run_cmd,
+        "web_url": web_url,
+        "steps_vi": steps_vi,
+        "bat_path": bat_path.as_posix() if bat_path.is_file() else "",
+        "guide_path": guide_path.as_posix() if guide_path.is_file() else "",
+        "guide_markdown": guide_md,
+    }
