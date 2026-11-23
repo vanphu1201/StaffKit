@@ -686,5 +686,5 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
         if errors:
             raise PlannerError("Imported tasks failed validation:\n" + "\n".join(errors))
 
-        self._persist_plan(ordered, auto_approve=auto_approve, prd_text=prd_text)
+        self._persist_plan(ordered, auto_approve=auto_approve)
         return PlanOutput(status="READY", tasks=ordered)
