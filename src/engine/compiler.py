@@ -245,6 +245,24 @@ class PromptCompiler:
         lines = [f"- {k}: {v}" for k, v in data.items() if str(v).strip()]
         return "\n".join(lines)
 
+    def _load_contract_text(self, max_lines: int = 40) -> str:
+        """Load shared `.auto-engine/contracts.md` or `openspec/contracts.md` so all tasks stay interface-aligned."""
+        for candidate in (
+            self.config.auto_engine_dir / "contracts.md",
+            self.repo_path / "openspec" / "contracts.md",
+        ):
+            if candidate.is_file():
+                try:
+                    raw = candidate.read_text(encoding="utf-8", errors="replace").strip()
+                except OSError:
+                    continue
+                if raw:
+                    c_lines = raw.splitlines()
+                    if len(c_lines) > max_lines:
+                        return "\n".join(c_lines[:max_lines]) + "\n... [contract trimmed]"
+                    return "\n".join(c_lines)
+        return ""
+
     def _format_repo_file_tree(self, task: TaskSpec) -> str:
         """Build a relevant-first paths/folder tree so mega-repos stay compact while skipping list_dir exploration."""
         try:
@@ -306,6 +324,7 @@ class PromptCompiler:
         feedback_text: str,
         user_answers_text: str = "",
         repo_tree_text: str = "",
+        contract_text: str = "",
     ) -> str:
         verify_cmds = task.verify_commands or self.config.executor.default_verify_commands
         payload_lines = [
@@ -320,13 +339,19 @@ class PromptCompiler:
             f"- Protected Test Files (DO NOT TOUCH): {self._format_protected_tests(task)}",
             f"- Constraints: {task.constraints}",
             f"- Verification Commands (Engine sẽ chạy sau khi bạn xong): {verify_cmds}",
-            "",
-            "# READONLY CONTEXT (Interfaces / Types / Signatures)",
-            readonly_text,
-            "",
-            "# TARGET FILES TO MODIFY",
-            targets_text,
         ]
+        if contract_text:
+            payload_lines.extend(["", "# ARCHITECTURE & INTERFACE CONTRACT (Shared Across All Tasks)", contract_text])
+        payload_lines.extend(
+            [
+                "",
+                "# READONLY CONTEXT (Interfaces / Types / Signatures)",
+                readonly_text,
+                "",
+                "# TARGET FILES TO MODIFY",
+                targets_text,
+            ]
+        )
         if repo_tree_text:
             payload_lines.extend(["", "# REPO FILE TREE (paths only)", repo_tree_text])
         if user_answers_text:
@@ -353,6 +378,7 @@ class PromptCompiler:
         static_prefix = self.build_static_prefix()
         targets_text, all_inlined = self._format_target_files(task, skeletons)
         user_answers_text = self._load_user_answers_text()
+        contract_text = self._load_contract_text(max_lines=40)
         repo_tree_text = self._format_repo_file_tree(task)
         feedback_text = self._format_retry_feedback(
             attempt=attempt,
@@ -375,6 +401,7 @@ class PromptCompiler:
             feedback_text,
             user_answers_text=user_answers_text,
             repo_tree_text=repo_tree_text,
+            contract_text=contract_text,
         )
         tokens = estimate_tokens(prompt)
 
@@ -393,6 +420,7 @@ class PromptCompiler:
                 feedback_text,
                 user_answers_text=user_answers_text,
                 repo_tree_text="",
+                contract_text=self._load_contract_text(max_lines=18),
             )
             tokens = estimate_tokens(prompt)
 
@@ -417,6 +445,7 @@ class PromptCompiler:
                     feedback_text,
                     user_answers_text=user_answers_text,
                     repo_tree_text="",
+                    contract_text="",
                 )
                 tokens = estimate_tokens(prompt)
                 if tokens <= cap:

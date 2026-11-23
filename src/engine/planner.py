@@ -36,6 +36,35 @@ _MD_HEADING_RE = re.compile(r"^\s*#{2,3}\s+\S")
 _MD_BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\S")
 
 
+def synthesize_deterministic_contract(prd_text: str, tasks: list[TaskSpec], max_lines: int = 40) -> str:
+    """Build a 0-token shared Architecture & Module Ownership Contract for multi-task DAG sprints."""
+    if len(tasks) < 2:
+        return ""
+    lines: list[str] = ["## Module & File Ownership Map"]
+    for t in tasks[:12]:
+        writes = ", ".join(t.allowed_write_files[:5]) or "(readonly)"
+        deps = f" (depends_on: {', '.join(t.depends_on)})" if t.depends_on else ""
+        lines.append(f"- `{t.task_id}` ({t.title}): `{writes}`{deps}")
+
+    spec_lines: list[str] = []
+    for raw_ln in prd_text.splitlines():
+        s = raw_ln.strip()
+        if not s:
+            continue
+        if (
+            s.startswith("|")
+            or "`" in s
+            or any(k in s.lower() for k in ("schema", "api", "endpoint", "route", "model", "return", "->"))
+        ):
+            spec_lines.append(s[:160])
+            if len(spec_lines) >= 18:
+                break
+    if spec_lines:
+        lines.append("\n## Shared Interfaces & Data Contracts")
+        lines.extend(spec_lines)
+    return "\n".join(lines[:max_lines]) + "\n"
+
+
 def should_use_fast_path(
     prd_text: str,
     real_files: set[str],
@@ -460,7 +489,7 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
             base += f"\n# FIX VALIDATION ERRORS (Tối đa 1 lần sửa)\n{err_bullets}\n"
         return base
 
-    def _persist_plan(self, ordered_tasks: list[TaskSpec], auto_approve: bool) -> Path:
+    def _persist_plan(self, ordered_tasks: list[TaskSpec], auto_approve: bool, prd_text: str = "") -> Path:
         auto_dir = self.config.auto_engine_dir
         auto_dir.mkdir(parents=True, exist_ok=True)
         plan_path = auto_dir / "plan.json"
@@ -469,6 +498,12 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
         plan_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
         approved = auto_approve or (not self.config.sprint.require_plan_approval)
         self.db.replace_plan(ordered_tasks, plan_hash=plan_hash, approved=approved)
+
+        contract_path = auto_dir / "contracts.md"
+        if len(ordered_tasks) >= 2 and not contract_path.is_file():
+            contract_md = synthesize_deterministic_contract(prd_text, ordered_tasks)
+            if contract_md:
+                contract_path.write_text(contract_md, encoding="utf-8")
         return plan_path
 
     def plan_from_prd(
@@ -584,7 +619,7 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
             if errors:
                 raise PlannerError("Planner failed deterministic DAG/file validation:\n" + "\n".join(errors))
 
-        self._persist_plan(ordered, auto_approve=auto_approve)
+        self._persist_plan(ordered, auto_approve=auto_approve, prd_text=prd_text)
         return PlanOutput(status="READY", tasks=ordered)
 
     def import_external_tasks(self, source_path: Path, *, auto_approve: bool = False) -> PlanOutput:
@@ -644,5 +679,5 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
         if errors:
             raise PlannerError("Imported tasks failed validation:\n" + "\n".join(errors))
 
-        self._persist_plan(ordered, auto_approve=auto_approve)
+        self._persist_plan(ordered, auto_approve=auto_approve, prd_text=prd_text)
         return PlanOutput(status="READY", tasks=ordered)

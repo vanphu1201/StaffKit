@@ -286,3 +286,125 @@ def test_universal_stack_detection_dynamic_blueprint_and_traceback_escalation(tm
     retry_prompt, _ = compiler.compile(task, attempt=1, last_error=tb, last_verdict="VERIFY_FAIL")
     assert "Crashing Code Context (Auto-Extracted from Traceback)" in retry_prompt
     assert "> L15: x_15 = 15" in retry_prompt
+
+
+def test_pillar_2_contract_first_and_pillar_3_final_gate_auto_repair(tmp_path: Path) -> None:
+    import sys
+    from engine.database import StateDB
+    from engine.git_guard import GitGuard
+    from engine.interviewer import persist_project_contracts
+    from engine.models import ExecutionResult, ProductSpec, TokenUsage
+    from engine.orchestrator import Orchestrator
+    from engine.planner import synthesize_deterministic_contract
+    from engine.verifier import Verifier
+
+    repo = tmp_path / "contract_and_final_gate_repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    for args in (
+        ["init", "-b", "main"],
+        ["config", "user.name", "Bot"],
+        ["config", "user.email", "bot@example.com"],
+    ):
+        subprocess.run(["git", *args], cwd=str(repo), check=True, capture_output=True)
+
+    (repo / "src").mkdir(parents=True, exist_ok=True)
+    (repo / "src" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "src" / "service.py").write_text(
+        "def compute_total(val: int) -> int:\n    return val + 1\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo), check=True, capture_output=True)
+
+    # 1. Pillar 2: Deterministic & Spec-driven Architecture Contract synthesis + Compiler injection
+    t1 = TaskSpec(
+        task_id="T-001",
+        title="Implement service module",
+        objective="Export compute_total(val: int) -> int returning val + 5",
+        allowed_write_files=["src/service.py"],
+        verify_commands=[f'"{sys.executable}" -c "import src.service"'],
+    )
+    t2 = TaskSpec(
+        task_id="T-002",
+        title="Verify contract consumer",
+        objective="Ensure compute_total satisfies contract",
+        depends_on=["T-001"],
+        allowed_write_files=["src/service.py"],
+        verify_commands=[f'"{sys.executable}" -c "import src.service"'],
+    )
+    auto_contract = synthesize_deterministic_contract("# PRD\nCompute total with +5 fee.", [t1, t2])
+    assert "Module & File Ownership Map" in auto_contract
+    assert "src/service.py" in auto_contract
+
+    spec = ProductSpec(
+        product_title="Billing Service",
+        prd_markdown="# PRD\nCompute total with +5 fee.",
+        architecture_contract="### Shared Interface\n- `src/service.py`: `compute_total(val: int) -> int` MUST return `val + 5`.",
+        runtime_verify_commands=[
+            f'"{sys.executable}" -c "from src.service import compute_total; assert compute_total(10) == 15"'
+        ],
+    )
+    c_path = persist_project_contracts(repo, spec)
+    assert c_path is not None and c_path.is_file()
+
+    cfg = EngineConfig(
+        project=ProjectConfig(target_repo=str(repo)),
+        sprint={
+            "final_verify_commands": spec.runtime_verify_commands,
+        },
+    )
+    compiler = PromptCompiler(cfg)
+    compiled_prompt, _ = compiler.compile(t1)
+    assert "# ARCHITECTURE & INTERFACE CONTRACT (Shared Across All Tasks)" in compiled_prompt
+    assert "compute_total(val: int) -> int" in compiled_prompt
+
+    # 2. Pillar 3: Final Gate / Runtime Gate Auto-Repair Loop (T-FINAL-FIX)
+    db = StateDB(cfg.state_db_path)
+    db.replace_plan([t1], plan_hash="test_hash", approved=True)
+
+    class RepairingExecutor:
+        def __init__(self) -> None:
+            self.seen_tasks: list[str] = []
+
+        def execute(self, prompt: str, task: TaskSpec, model: str, effort: str) -> ExecutionResult:
+            self.seen_tasks.append(task.task_id)
+            if task.task_id == "T-001":
+                # Task 1 leaves a subtle bug (returns val + 2 instead of val + 5), passing unit import check
+                (repo / "src" / "service.py").write_text(
+                    "def compute_total(val: int) -> int:\n    return val + 2\n",
+                    encoding="utf-8",
+                )
+            elif task.task_id == "T-FINAL-FIX":
+                # Auto-repair task receives the final gate failure + contract and fixes the bug
+                assert "ARCHITECTURE & INTERFACE CONTRACT" in prompt
+                (repo / "src" / "service.py").write_text(
+                    "def compute_total(val: int) -> int:\n    return val + 5\n",
+                    encoding="utf-8",
+                )
+            return ExecutionResult(
+                success=True,
+                model_used=model or "mock",
+                exit_code=0,
+                stdout="done",
+                stderr="",
+                duration_seconds=0.1,
+                token_usage=TokenUsage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+            )
+
+    exec_mock = RepairingExecutor()
+    guard = GitGuard(repo)
+    orch = Orchestrator(
+        cfg,
+        db=db,
+        guard=guard,
+        verifier=Verifier(cfg, guard),
+        compiler=compiler,
+        executor=exec_mock,
+    )
+    summary = orch.run_sprint()
+
+    assert "T-001" in exec_mock.seen_tasks
+    assert "T-FINAL-FIX" in exec_mock.seen_tasks
+    assert summary["final_verify_passed"] is True
+    assert summary["summary"]["counts"]["DONE"] == 2
+

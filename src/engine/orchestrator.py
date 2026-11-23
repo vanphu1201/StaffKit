@@ -13,14 +13,16 @@ from typing import Any, Callable, Protocol
 
 import httpx
 
+from engine.blueprints import get_blueprint
 from engine.bridges.agy_cli_executor import AgyCliExecutor, emit_trace
 from engine.bridges.agy_sdk_executor import AgySdkExecutor
 from engine.bridges.cli_executor import CliFallbackExecutor
 from engine.compiler import PromptCompiler, PromptTooLargeError
 from engine.database import StateDB
 from engine.git_guard import GitGuard
+from engine.indexer import IndexerError, list_real_files, locate_relevant_files
 from engine.models import EngineConfig, ExecutionResult, TaskSpec, TokenUsage
-from engine.verifier import Verifier
+from engine.verifier import Verifier, extract_error_locations
 
 
 class ExecutorProtocol(Protocol):
@@ -550,6 +552,9 @@ class Orchestrator:
             wt_auto.mkdir(parents=True, exist_ok=True)
             if self._user_answers_path.is_file():
                 shutil.copyfile(self._user_answers_path, wt_auto / "user_answers.json")
+            contracts_src = self.config.auto_engine_dir / "contracts.md"
+            if contracts_src.is_file():
+                shutil.copyfile(contracts_src, wt_auto / "contracts.md")
 
             wt_guard = GitGuard(
                 wt_dir,
@@ -619,6 +624,46 @@ class Orchestrator:
                 shutil.rmtree(wt_root, ignore_errors=True)
 
         return passed_cnt, blocked_cnt, stopped_any
+
+    def _attempt_final_gate_auto_repair(self, failed_commands: list[str], error_log: str) -> bool:
+        """Synthesize and execute a 1-shot `T-FINAL-FIX` task when Final/Runtime Gate detects an integration bug."""
+        if self.stop_event is not None and self.stop_event.is_set():
+            return False
+        if self.db.get_total_cost_usd() >= self.config.limits.max_budget_usd_per_sprint:
+            return False
+
+        try:
+            real_files = list_real_files(self.config.target_repo_path)
+        except IndexerError:
+            real_files = set()
+        if not real_files:
+            return False
+
+        err_locs = extract_error_locations(error_log, self.config.target_repo_path, max_locations=3)
+        tb_targets = [rel for rel, _ln in err_locs if not rel.startswith("tests/") and not rel.startswith("test/")]
+        located = locate_relevant_files(error_log, real_files, self.config.target_repo_path)
+        combined_targets = list(dict.fromkeys(tb_targets + located.target_files))[:4]
+        if not combined_targets:
+            combined_targets = sorted(f for f in real_files if not f.startswith("tests/"))[:4]
+
+        repair_task = TaskSpec(
+            task_id="T-FINAL-FIX",
+            title="Auto-repair Final & Runtime Verification Gate",
+            complexity="high",
+            objective=(
+                "Fix the integration or runtime verification failure below so all sprint final/runtime "
+                f"verification commands pass:\n\n{error_log}"
+            ),
+            allowed_write_files=combined_targets,
+            readonly_context_files=located.readonly_files,
+            protected_test_files=located.protected_tests,
+            strict_scope=False,
+            verify_commands=list(failed_commands),
+        )
+        self._emit("warn", f"[FINAL_GATE] Auto-spawning `{repair_task.task_id}` on {combined_targets}...")
+        self.db.upsert_task(repair_task)
+        passed, _stopped = self._run_single_task(repair_task)
+        return passed
 
     def run_sprint(self, *, auto_approve: bool = False, sprint_name: str = "sprint-1") -> dict:
         """Execute ready tasks in DAG order until completion, budget cap, or Global Circuit Breaker."""
@@ -697,6 +742,10 @@ class Orchestrator:
         summary = self.db.get_sprint_summary()
         final_verify_passed = True
         final_verify_error = ""
+        bp = get_blueprint(self.config.project.blueprint, self.config.target_repo_path)
+        runtime_cmds = list(self.config.sprint.runtime_verify_commands) or (
+            list(bp.runtime_verify_commands) if bp is not None and bp.runtime_verify_commands else []
+        )
 
         if (
             halted_reason is None
@@ -714,14 +763,22 @@ class Orchestrator:
                 content=final_verify_error or "Final Sprint Gate PASS.",
                 meta={"passed": gate_res.passed, "verdict": gate_res.verdict},
             )
+            if not final_verify_passed and self._attempt_final_gate_auto_repair(
+                self.config.sprint.final_verify_commands,
+                final_verify_error,
+            ):
+                recheck = self.verifier.run_commands(self.config.sprint.final_verify_commands)
+                final_verify_passed = recheck.passed
+                final_verify_error = recheck.trimmed_error_log
+                summary = self.db.get_sprint_summary()
 
         if (
             halted_reason is None
             and final_verify_passed
             and summary["counts"]["DONE"] > 0
-            and self.config.sprint.runtime_verify_commands
+            and runtime_cmds
         ):
-            rt_res = self.verifier.run_commands(self.config.sprint.runtime_verify_commands)
+            rt_res = self.verifier.run_commands(runtime_cmds)
             final_verify_passed = rt_res.passed
             if not rt_res.passed:
                 final_verify_error = rt_res.trimmed_error_log
@@ -733,6 +790,14 @@ class Orchestrator:
                 content=rt_res.trimmed_error_log or "Runtime Smoke Gate PASS.",
                 meta={"passed": rt_res.passed, "verdict": rt_res.verdict},
             )
+            if not final_verify_passed and self._attempt_final_gate_auto_repair(
+                runtime_cmds,
+                final_verify_error,
+            ):
+                rt_recheck = self.verifier.run_commands(runtime_cmds)
+                final_verify_passed = rt_recheck.passed
+                final_verify_error = rt_recheck.trimmed_error_log
+                summary = self.db.get_sprint_summary()
 
         if halted_reason is None and final_verify_passed:
             self._notify_webhook({"event": "SPRINT_DONE", "summary": summary})

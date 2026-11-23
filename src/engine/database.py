@@ -120,6 +120,31 @@ class StateDB:
             ).fetchone()
             return str(row["value"]) if row else default
 
+    def upsert_task(self, task: TaskSpec) -> None:
+        """Insert or update a single TaskSpec (used for auto-synthesized final/runtime repair tasks)."""
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO tasks (task_id, title, complexity, spec_json, depends_on_json, status)
+                VALUES (?, ?, ?, ?, ?, 'PENDING')
+                ON CONFLICT(task_id) DO UPDATE SET
+                    title = excluded.title,
+                    complexity = excluded.complexity,
+                    spec_json = excluded.spec_json,
+                    depends_on_json = excluded.depends_on_json,
+                    status = 'PENDING',
+                    retry_count = 0,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    task.task_id,
+                    task.title,
+                    task.complexity,
+                    task.model_dump_json(),
+                    json.dumps(task.depends_on),
+                ),
+            )
+
     def replace_plan(
         self,
         tasks: list[TaskSpec],

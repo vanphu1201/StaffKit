@@ -266,7 +266,11 @@ Yêu cầu:
    - Mục tiêu sản phẩm & phạm vi người dùng thật
    - Kiến trúc kỹ thuật, lưu trữ dữ liệu & tích hợp thật phù hợp nhất với loại sản phẩm (tránh tạo tài khoản/dữ liệu demo giả lập; nếu có giao diện thì thiết kế chuyên nghiệp, tiết chế, dễ dùng; nếu thiếu thông tin/API key/tài nguyên thật từ người dùng thì thiết kế để hệ thống hỏi qua `user_questions` / `NEED_USER_INPUT`){bp_rules}
    - Tiêu chí kiểm thử tự động & build/chạy thật phù hợp với công nghệ đã chọn.
-4. `verify_commands`, `preview_command`, `quality_rules`: Nếu sản phẩm dùng công nghệ mới ngoài các blueprint có sẵn (vd: Go, Rust, Flutter, Mobile, Game, Desktop, Chrome Extension, C#/.NET...), hãy điền các lệnh kiểm tra build/test chuẩn vào `verify_commands`, lệnh chạy thử vào `preview_command`, và quy tắc chất lượng riêng vào `quality_rules` để hệ thống tự động tạo `.auto-engine/blueprint.yaml` cho dự án.
+4. `architecture_contract`: Bản hợp đồng kiến trúc kỹ thuật ngắn gọn (<= 35 dòng Markdown) khóa cứng:
+   - Schema dữ liệu / bảng DB / kiểu dữ liệu dùng chung
+   - Giao diện API / chữ ký hàm liên module (input, output, mã lỗi)
+   - Ranh giới file/module chính để các task chạy song song khớp tuyệt đối 100%.
+5. `verify_commands`, `runtime_verify_commands`, `preview_command`, `quality_rules`: Nếu sản phẩm dùng công nghệ mới ngoài các blueprint có sẵn (vd: Go, Rust, Flutter, Mobile, Game, Desktop, Chrome Extension, C#/.NET...), hãy điền các lệnh kiểm tra build/test chuẩn vào `verify_commands`, lệnh smoke test runtime vào `runtime_verify_commands`, lệnh chạy thử vào `preview_command`, và quy tắc chất lượng riêng vào `quality_rules` để hệ thống tự động tạo `.auto-engine/blueprint.yaml` cho dự án.
 """
         raw = self._call_agy_no_tools(
             prompt,
@@ -278,12 +282,26 @@ Yêu cầu:
         spec = ProductSpec.model_validate_json(_extract_plan_json_payload(raw))
         if target_hint is not None:
             save_custom_blueprint_if_needed(target_hint, spec, stack=stack)
+            persist_project_contracts(target_hint, spec)
         return spec
+
+
+def persist_project_contracts(project_dir: Path, spec: ProductSpec | None = None, contract_markdown: str = "") -> Path | None:
+    """Persist `.auto-engine/contracts.md` so all DAG and parallel worktree tasks share one immutable technical contract."""
+    text = (spec.architecture_contract if spec is not None else "") or contract_markdown
+    cleaned = text.strip()
+    if not cleaned:
+        return None
+    auto_dir = project_dir / ".auto-engine"
+    auto_dir.mkdir(parents=True, exist_ok=True)
+    contract_path = auto_dir / "contracts.md"
+    contract_path.write_text(cleaned + "\n", encoding="utf-8")
+    return contract_path
 
 
 def save_custom_blueprint_if_needed(project_dir: Path, spec: ProductSpec, stack: str = "generic") -> Path | None:
     """Persist a dynamic `.auto-engine/blueprint.yaml` when the user requests any non-builtin tech product."""
-    if not (spec.verify_commands or spec.quality_rules or spec.preview_command):
+    if not (spec.verify_commands or spec.runtime_verify_commands or spec.quality_rules or spec.preview_command):
         return None
     existing_bp = get_blueprint(stack, project_dir)
     if existing_bp is not None and existing_bp.id not in ("generic", "custom"):
@@ -297,6 +315,7 @@ def save_custom_blueprint_if_needed(project_dir: Path, spec: ProductSpec, stack:
         "label": spec.product_title or bp_id,
         "description": "Dynamic blueprint synthesized from user requirements",
         "verify_commands": list(spec.verify_commands),
+        "runtime_verify_commands": list(spec.runtime_verify_commands),
         "preview_command": spec.preview_command,
         "quality_rules": list(spec.quality_rules),
     }

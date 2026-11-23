@@ -26,8 +26,12 @@ from engine.compiler import PromptCompiler
 from engine.database import StateDB
 from engine.git_guard import GitGuard
 from engine.indexer import RepoIndexer
-from engine.interviewer import ProductInterviewer
-from engine.models import EngineConfig, TaskSpec
+from engine.interviewer import (
+    ProductInterviewer,
+    persist_project_contracts,
+    save_custom_blueprint_if_needed,
+)
+from engine.models import EngineConfig, ProductSpec, TaskSpec
 from engine.orchestrator import Orchestrator
 from engine.planner import Planner
 from engine.verifier import Verifier
@@ -597,6 +601,15 @@ class DesktopAppController:
             base = Path(parent_dir.strip() or self.wizard_parent_dir).expanduser()
             clean_name = "".join(ch if (ch.isalnum() or ch in ("-", "_")) else "-" for ch in project_name.strip()).strip("-")
             target_dir = base if (not clean_name or base.name == clean_name) else (base / clean_name)
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+            if isinstance(self.wizard_spec, dict):
+                try:
+                    spec_obj = ProductSpec.model_validate(self.wizard_spec)
+                    save_custom_blueprint_if_needed(target_dir, spec_obj, stack=stack)
+                    persist_project_contracts(target_dir, spec_obj)
+                except Exception:
+                    pass
 
             self.emit_log("info", f"Bước 1/4: Dựng khung dự án 0-token tại {target_dir.as_posix()}...")
             boot = bootstrap_project(target_dir, stack=stack, install_deps=install_deps)  # type: ignore[arg-type]
