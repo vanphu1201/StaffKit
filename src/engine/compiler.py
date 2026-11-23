@@ -230,6 +230,17 @@ class PromptCompiler:
             if loc_Snippets:
                 parts.append("## Crashing Code Context (Auto-Extracted from Traceback):\n" + "\n\n".join(loc_Snippets))
 
+            err_low = last_error.lower()
+            if any(k in err_low for k in ("npm run ", "vite ", "tsc", "entry module", "package.json")):
+                pkg_p = self.repo_path / "package.json"
+                if pkg_p.is_file():
+                    pkg_txt = pkg_p.read_text(encoding="utf-8", errors="replace").strip()
+                    parts.append(
+                        "## Root `package.json` (ĐƯỢC PHÉP sửa script build/dev/test nếu lệch đường dẫn config như `--config web/vite.config.ts`):\n```json\n"
+                        + pkg_txt[:2500]
+                        + "\n```"
+                    )
+
         return "\n\n".join(parts)
 
     def _load_user_answers_text(self) -> str:
@@ -353,6 +364,12 @@ class PromptCompiler:
         handoff_text: str = "",
     ) -> str:
         verify_cmds = task.verify_commands or self.config.executor.default_verify_commands
+        is_strict = task.strict_scope and self.config.guards.scope_mode == "strict"
+        scope_desc = (
+            "STRICT (chỉ sửa/tạo các file trong danh sách trên)"
+            if is_strict
+            else "SOFT / FLEXIBLE (Ưu tiên sửa/tạo các file trong Allowed Write Files; nếu lệnh build/verify cần cập nhật cấu hình ở `package.json`, `tsconfig.json`, `vite.config.ts` hoặc file cùng thư mục thì ĐƯỢC PHÉP sửa để build/test PASS; tuyệt đối không sửa PROTECTED_TEST_FILES)"
+        )
         payload_lines = [
             "---",
             "[DYNAMIC TASK PAYLOAD - PER TASK]",
@@ -361,7 +378,7 @@ class PromptCompiler:
             f"- Acceptance Criteria: {task.acceptance_criteria}",
             f"- Allowed Write Files: {task.allowed_write_files}",
             f"- Create New Files: {task.create_new_files}",
-            f"- Scope Mode: {'STRICT (chỉ sửa/tạo các file trong danh sách trên)' if task.strict_scope else 'FLEXIBLE (có thể sửa/tạo các file cần thiết cho TASK; tuyệt đối không sửa PROTECTED_TEST_FILES)'}",
+            f"- Scope Mode: {scope_desc}",
             f"- Protected Test Files (DO NOT TOUCH): {self._format_protected_tests(task)}",
             f"- Constraints: {task.constraints}",
             f"- Verification Commands (Engine sẽ chạy sau khi bạn xong): {verify_cmds}",

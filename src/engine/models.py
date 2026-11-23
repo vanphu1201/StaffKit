@@ -111,7 +111,7 @@ class LimitsConfig(BaseModel):
     """Hard token, cost, retry, and circuit-breaker thresholds."""
 
     max_retries_per_task: int = Field(default=2, ge=0)
-    max_tokens_per_task: int = Field(default=150000, ge=500)
+    max_tokens_per_task: int = Field(default=350000, ge=500)
     max_tool_calls_per_attempt: int = Field(default=30, ge=1)
     max_prompt_tokens_per_call: int = Field(default=12000, ge=500)
     inline_file_max_lines: int = Field(default=300, ge=20)

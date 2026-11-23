@@ -618,7 +618,18 @@ class Orchestrator:
                     last_error_hash=verify_res.error_hash,
                 )
 
-        guard.hard_rollback(checkpoint)
+        preserve_greenfield = False
+        if task.create_new_files and last_verdict not in ("SCOPE_VIOLATION", "TEST_GAMING"):
+            scope_ok, _ = guard.check_scope(
+                task.allowed_write_files,
+                task.create_new_files,
+                task.protected_test_files,
+                strict_scope=task.strict_scope,
+                scope_mode=self.config.guards.scope_mode,
+            )
+            preserve_greenfield = scope_ok
+        if not preserve_greenfield:
+            guard.hard_rollback(checkpoint)
         with self._db_lock:
             self.db.update_task_status(task.task_id, "BLOCKED", last_error=last_error)
         return False, False, None
