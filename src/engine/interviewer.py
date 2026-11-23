@@ -265,7 +265,7 @@ Yêu cầu:
 3. `acceptance_criteria`: 4–8 tiêu chí nghiệm thu cụ thể, kiểm thử được, đánh mã `AC-1: ...`, `AC-2: ...` (bao phủ cả luồng nghiệp vụ chính, xử lý lỗi/dữ liệu biên, và trạng thái khởi tạo ban đầu để mở sản phẩm lên dùng được ngay).
 4. `prd_markdown`: Tài liệu PRD chuẩn sản phẩm thật (Markdown) gồm:
    - Mục tiêu sản phẩm & phạm vi người dùng thật
-   - Kiến trúc kỹ thuật, lưu trữ dữ liệu, xử lý lỗi đầu vào (validation/error boundary), trạng thái giao diện đầy đủ & tích hợp thật phù hợp nhất với loại sản phẩm (nếu thiếu thông tin/API key/tài nguyên thật từ người dùng thì thiết kế để hệ thống hỏi qua `user_questions` / `NEED_USER_INPUT`){bp_rules}
+   - Kiến trúc kỹ thuật, lưu trữ dữ liệu, xử lý lỗi đầu vào (validation/error boundary), trạng thái giao diện đầy đủ & tích hợp thật phù hợp nhất với loại sản phẩm (Lưu ý tương thích Windows/Node.js hiện đại: ưu tiên các thư viện có sẵn prebuilt binary hoặc `node:sqlite` / Prisma / pure-JS để `npm install` không bị lỗi biên dịch C++ `node-gyp` khi máy người dùng không cài Visual Studio C++){bp_rules}
    - Danh sách tiêu chí nghiệm thu (`AC-1..AC-N`) và kịch bản kiểm thử tự động (unit/integration/acceptance test) chứng minh từng tính năng hoạt động đúng.
 5. `architecture_contract`: Bản hợp đồng kiến trúc kỹ thuật ngắn gọn (<= 35 dòng Markdown) khóa cứng:
    - Schema dữ liệu / bảng DB / kiểu dữ liệu dùng chung

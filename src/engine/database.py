@@ -263,6 +263,12 @@ class StateDB:
         clauses = ["status = ?", "updated_at = CURRENT_TIMESTAMP"]
         params: list[object] = [status]
 
+        if status == "DONE":
+            if last_error is None:
+                last_error = ""
+            if last_error_hash is None:
+                last_error_hash = ""
+
         optional_fields = {
             "checkpoint_sha": checkpoint_sha,
             "commit_sha": commit_sha,

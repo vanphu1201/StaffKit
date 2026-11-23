@@ -371,7 +371,10 @@
         <span class="badge b-EMPTY_DIFF" id="hitlTaskBadge">TASK</span>
         <b style="margin-left:8px; color:#fde047;" id="hitlTitle">Antigravity cần bạn cung cấp thêm thông tin thật để tiếp tục</b>
       </div>
-      <button class="btn success sm" id="btnSubmitHitl" onclick="submitHitlAnswers()">Gửi câu trả lời &amp; Tiếp tục</button>
+      <div class="row">
+        <button class="btn sm" onclick="submitDefaultHitlAnswers()" title="Tự động điền giá trị mặc định hợp lý và chạy tiếp ngay">⚡ Dùng mặc định &amp; Chạy tiếp ngay</button>
+        <button class="btn success sm" id="btnSubmitHitl" onclick="submitHitlAnswers()">Gửi câu trả lời &amp; Tiếp tục</button>
+      </div>
     </div>
     <div id="hitlQuestionsList" style="display:flex; flex-direction:column; gap:8px;"></div>
   </div>
@@ -612,11 +615,23 @@
             <button class="btn primary" id="btnApprove" onclick="approvePlan()">1. Phê duyệt Plan</button>
             <button class="btn success" id="btnRun" onclick="runSprint(false)">2. Chạy Sprint Tự động</button>
             <button class="btn" id="btnResume" onclick="resumeSprint()">Khôi phục &amp; Chạy tiếp (Resume)</button>
+            <button class="btn primary" id="btnDevRetryBlocked" style="display:none;" onclick="retryBlockedFromWizard()">🔄 Thử lại phần BLOCKED &amp; Chạy tiếp</button>
             <button class="btn" onclick="launchPreview()">▶️ Chạy thử sản phẩm (Preview)</button>
             <button class="btn" onclick="openTargetFolder()">📂 Mở thư mục dự án</button>
             <button class="btn danger" id="btnStop" onclick="stopSprint()">Dừng an toàn</button>
           </div>
           <div id="pillarsStatusRow" class="row" style="margin-top:10px;"></div>
+        </div>
+
+        <div class="card">
+          <div class="row" style="justify-content:space-between; margin-bottom:8px;">
+            <h3 style="margin:0;">Tiến độ các phần công việc (Tasks &amp; Cơ chế Tự vá lỗi)</h3>
+            <span class="pill" id="devLiveTaskPill">Chưa chạy</span>
+          </div>
+          <div class="progress-bar-bg" style="margin-bottom:12px;">
+            <div class="progress-bar-fill" id="devProgressFill"></div>
+          </div>
+          <div id="devTaskQuickList" style="display:flex; flex-direction:column; gap:6px;"></div>
         </div>
 
         <div class="card">
@@ -1104,12 +1119,26 @@
       const answers = {};
       inputs.forEach(inp => {
         const q = inp.dataset.question || "";
-        if (q) answers[q] = inp.value.trim();
+        if (q) answers[q] = inp.value.trim() || "Sử dụng cấu hình mặc định chuẩn trong PRD (có thể chỉnh sau trong Settings).";
       });
       try {
         const next = await api("/api/interaction/answer", "POST", { answers });
         renderState(next);
         showToast("Đã gửi thông tin cho Antigravity!");
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function submitDefaultHitlAnswers() {
+      const inputs = document.querySelectorAll(".hitl-ans-input");
+      const answers = {};
+      inputs.forEach(inp => {
+        const q = inp.dataset.question || "";
+        if (q) answers[q] = inp.value.trim() || "Sử dụng giá trị mặc định chuẩn trong PRD và cho phép cấu hình qua Settings/.env.";
+      });
+      try {
+        const next = await api("/api/interaction/answer", "POST", { answers });
+        renderState(next);
+        showToast("⚡ Đã áp dụng mặc định và tiếp tục Sprint!");
       } catch (e) { showToast(e.message); }
     }
 
@@ -1298,11 +1327,61 @@
 
       // KPIs
       const cnt = s.summary.counts || {};
-      document.getElementById("kpiDone").textContent = `${cnt.DONE || 0} / ${s.summary.total_tasks || 0}`;
+      const doneCnt = cnt.DONE || 0;
+      const blockedCnt = cnt.BLOCKED || 0;
+      const totTasks = s.summary.total_tasks || (s.tasks ? s.tasks.length : 0) || 0;
+      document.getElementById("kpiDone").textContent = `${doneCnt} / ${totTasks}`;
       const totTok = (s.summary.prompt_tokens || 0) + (s.summary.completion_tokens || 0);
       document.getElementById("kpiTokens").textContent = totTok.toLocaleString();
       document.getElementById("kpiCost").textContent = "$" + Number(s.summary.cost_usd || 0).toFixed(4);
       document.getElementById("kpiApproval").textContent = s.plan_approved ? "Đã duyệt" : "Chưa duyệt";
+
+      const devPct = totTasks > 0 ? Math.round((doneCnt / totTasks) * 100) : 0;
+      const devFill = document.getElementById("devProgressFill");
+      if (devFill) devFill.style.width = `${devPct}%`;
+      const devRetryBtn = document.getElementById("btnDevRetryBlocked");
+      if (devRetryBtn) devRetryBtn.style.display = (!busy && blockedCnt > 0) ? "inline-block" : "none";
+
+      const activeTask = (s.tasks || []).find(t => t.status === "RUNNING" || t.status === "VERIFYING");
+      const devLivePill = document.getElementById("devLiveTaskPill");
+      if (devLivePill) {
+        if (activeTask) {
+          const retryNote = activeTask.retry_count > 0 ? ` • 🔧 Đang tự vá lỗi (Lần thử ${activeTask.retry_count})` : "";
+          devLivePill.textContent = `Đang xử lý ${activeTask.task_id} (${activeTask.status})${retryNote}`;
+          devLivePill.className = "pill busy";
+        } else if (blockedCnt > 0) {
+          devLivePill.textContent = `Tạm dừng (${blockedCnt} phần BLOCKED)`;
+          devLivePill.className = "pill warn";
+        } else if (totTasks > 0 && doneCnt >= totTasks) {
+          devLivePill.textContent = `Hoàn tất ${doneCnt}/${totTasks} (100%)`;
+          devLivePill.className = "pill ok";
+        } else {
+          devLivePill.textContent = `${doneCnt} / ${totTasks} hoàn thành (${devPct}%)`;
+          devLivePill.className = "pill";
+        }
+      }
+
+      const devQuickList = document.getElementById("devTaskQuickList");
+      if (devQuickList) {
+        devQuickList.innerHTML = (s.tasks || []).map(t => {
+          const isRepairing = (t.status === "RUNNING" || t.status === "VERIFYING") && t.retry_count > 0;
+          const subNote = isRepairing
+            ? `<div style="color:#fde047; font-size:12px; margin-top:2px;">🔧 Lần thử ${t.retry_count}: Hệ thống đã đính kèm log lỗi lần trước để Antigravity tự sửa...</div>`
+            : (t.status === "BLOCKED" && t.last_error
+              ? `<div style="color:#fca5a5; font-size:12px; margin-top:2px;">Lý do dừng: ${esc(t.last_error.split(/\r?\n/)[0])}</div>`
+              : "");
+          return `<div class="q-card" style="padding:8px 12px; flex-direction:row; justify-content:space-between; align-items:center;">
+            <div>
+              <span><b>${esc(t.task_id)}:</b> ${esc(t.title)}</span>
+              ${subNote}
+            </div>
+            <div class="row" style="gap:6px;">
+              ${t.retry_count > 0 ? `<span class="badge">Retry #${t.retry_count}</span>` : ""}
+              <span class="badge b-${esc(t.status)}">${esc(t.status)}</span>
+            </div>
+          </div>`;
+        }).join("") || `<div style="color:var(--muted); font-size:12px;">Chưa có task nào trong state.db.</div>`;
+      }
 
       // Clarifying questions
       const clarifyCard = document.getElementById("clarifyCard");

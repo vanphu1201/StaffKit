@@ -482,8 +482,8 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
    - Đặt `status = "READY"`. Lưu ý: mỗi task riêng đều phải khởi động 1 phiên `agy` mới (~15k input tokens). Vì vậy nếu tổng số file cần sửa `<= {max_files}`, TUYỆT ĐỐI KHÔNG tách nhiều task — hãy gom thành **1 task duy nhất (`T-01`)**. Nếu sprint lớn hơn, hãy gom thành **ít task nhất có thể** theo Vertical Slice (3–{max_files} file/task, giữ `len(allowed_write_files) <= {max_files}`), điền đầy đủ `readonly_context_files` (models/types/interfaces liên quan) và `create_new_files` để coder không phải dò file.
    - Gán đúng `complexity` (`low` | `medium` | `high`), `protected_test_files` (không trùng `allowed_write_files`), `needs_lsp_mcp`, `needs_docs_mcp`, và mảng `verify_commands: list[str]` (từng lệnh đơn, KHÔNG ghép `&&`).
    - Tuyệt đối KHÔNG bịa đường dẫn file không có trong repo (trừ file khai báo trong `create_new_files`).
-   - QUY TẮC SẢN PHẨM THẬT: Không thiết kế task tạo dữ liệu giả lập, tài khoản demo hay stub giữ chỗ. Hãy chọn công nghệ/kiến trúc phù hợp nhất với yêu cầu trong PRD (không tự thu hẹp nếu là Mobile/CLI/Backend/Desktop/AI).
-   - NẾU 1 TASK CẦN THÔNG TIN/TÀI NGUYÊN THẬT TỪ NGƯỜI DÙNG (cấu hình, API key, thông số nghiệp vụ, file dữ liệu/media thật trên máy...), hãy ghi 1–3 câu hỏi cụ thể vào `user_questions` của task đó để hệ thống hỏi lại người dùng trước khi code task.
+   - QUY TẮC SẢN PHẨM THẬT & TƯƠNG THÍCH MÔI TRƯỜNG: Không thiết kế task tạo dữ liệu giả lập, tài khoản demo hay stub giữ chỗ. Trên Windows + Node.js >= 20/22/24, nếu dùng SQLite hoặc thư viện hệ thống, hãy ưu tiên thư viện có prebuilt binaries hoặc `node:sqlite` / pure-JS fallback để tránh lỗi biên dịch C++ `node-gyp` khi chưa cài Visual Studio C++.
+   - QUY TẮC `user_questions`: Nếu PRD đã có giá trị mặc định hợp lý (ví dụ URL local mặc định, hoặc cho phép chỉnh sau trong giao diện Settings / `.env`) thì ĐỂ TRỐNG `user_questions: []` và dùng luôn giá trị mặc định đó để quá trình xây dựng tự động chạy xuyên suốt không làm gián đoạn người dùng. Chỉ dùng `user_questions` khi thật sự bắt buộc và không thể có giá trị mặc định.
 
 # PRD
 {prd_text}

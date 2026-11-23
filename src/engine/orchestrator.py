@@ -327,7 +327,28 @@ class Orchestrator:
         if task.user_questions and self.ask_user is not None:
             with self._db_lock:
                 saved_answers = self._load_user_answers()
-            unanswered = [q.strip() for q in task.user_questions if q.strip() and q.strip() not in saved_answers]
+            unanswered: list[str] = []
+            auto_defaults: dict[str, str] = {}
+            has_wizard_prd = (self.config.target_repo_path / "openspec" / "prd.md").is_file()
+            for raw_q in task.user_questions:
+                q = raw_q.strip()
+                if not q or q in saved_answers:
+                    continue
+                q_lower = q.lower()
+                if has_wizard_prd or any(
+                    kw in q_lower
+                    for kw in ("mặc định", "default", "có thể để trống", "tùy chọn", "settings", "cấu hình sau")
+                ):
+                    auto_defaults[q] = "Sử dụng giá trị mặc định chuẩn trong PRD và cho phép cấu hình qua Settings/.env."
+                else:
+                    unanswered.append(q)
+            if auto_defaults:
+                with self._db_lock:
+                    self._save_user_answers(auto_defaults)
+                self._emit(
+                    "info",
+                    f"[{task.task_id}] Tự động áp dụng cấu hình mặc định từ PRD cho {len(auto_defaults)} mục (không làm gián đoạn Sprint).",
+                )
             if unanswered and not self._prompt_user_for_task(
                 task, unanswered, checkpoint=checkpoint, retry_count=0, guard=guard
             ):
@@ -423,13 +444,12 @@ class Orchestrator:
                     guard.hard_rollback(checkpoint)
                 elif exec_res.verdict_override in ("MAX_TURNS_EXCEEDED", "TIMEOUT"):
                     # Preserve valid in-scope partial files created before timeout so the next attempt continues instead of restarting from 0
-                    allowed_all = task.allowed_write_files + task.create_new_files
-                    strict_flag = task.strict_scope and self.config.guards.scope_mode == "strict"
                     scope_ok, _violating = guard.check_scope(
-                        checkpoint,
-                        allowed_all,
+                        task.allowed_write_files,
+                        task.create_new_files,
                         task.protected_test_files,
-                        strict_scope=strict_flag,
+                        strict_scope=task.strict_scope,
+                        scope_mode=self.config.guards.scope_mode,
                     )
                     if not scope_ok:
                         guard.hard_rollback(checkpoint)
@@ -482,7 +502,19 @@ class Orchestrator:
                     self._emit("success", f"[{task.task_id}] PASS -> Committed {commit_sha[:8]}")
                 return True, False, commit_sha
 
-            self._emit("warn", f"[{task.task_id}] Attempt {attempt} failed: {verify_res.verdict}")
+            first_err_line = next(
+                (ln.strip() for ln in (verify_res.trimmed_error_log or "").splitlines() if ln.strip()),
+                verify_res.verdict,
+            )[:160]
+            max_retries = self.config.limits.max_retries_per_task
+            if attempt < max_retries:
+                self._emit(
+                    "warn",
+                    f"🔧 [{task.task_id}] Lần thử {attempt} cần sửa lỗi ({verify_res.verdict}: {first_err_line}) "
+                    f"→ Hệ thống đang tự động đính kèm log lỗi để Antigravity tự vá ở Lần thử {attempt + 1}/{max_retries}...",
+                )
+            else:
+                self._emit("warn", f"[{task.task_id}] Attempt {attempt} failed: {verify_res.verdict} ({first_err_line})")
 
             # Handle failure verdicts
             if verify_res.verdict in ("SCOPE_VIOLATION", "TEST_GAMING"):

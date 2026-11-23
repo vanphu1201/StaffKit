@@ -54,6 +54,7 @@ class PromptCompiler:
             "- KHÔNG lách luật bằng `@ts-ignore`, `eslint-disable`, `# type: ignore`, `# noqa`, `.skip()`, `.only()`, hoặc xóa bỏ assertion trong test.",
             "- Ưu tiên sửa gọn trực tiếp (targeted edit), không viết lại phần code không liên quan.",
             "- Kiểm tra và xử lý đầy đủ toàn bộ Acceptance Criteria cùng các nhánh biên (edge cases / input validation) nêu trong TASK và ARCHITECTURE CONTRACT để vượt qua cả kiểm thử đơn vị lẫn kiểm thử tích hợp cuối.",
+            "- Tương thích môi trường thực thi (Windows / Node.js / Python): nếu một package C++ native (`node-gyp` như `better-sqlite3` trên Node v24 chưa cài Visual Studio C++) gây lỗi cài đặt hoặc thiếu binary, hãy chủ động dùng phiên bản prebuilt hoặc module tương đương có sẵn (`node:sqlite` `DatabaseSync` của Node 22+/24+ hoặc adapter tương thích cùng interface) để lệnh verify vượt qua 100%.",
             "- Thực thi sản phẩm thật, sạch sẽ theo đặc tả TASK; KHÔNG tạo tài khoản/dữ liệu demo, stub giữ chỗ hay bỏ qua chức năng thật.",
             "- Nếu thiếu thông tin hoặc tài nguyên thật từ người dùng (API key, cấu hình DB, tài khoản, file media/dữ liệu, hoặc quyết định nghiệp vụ) mà không thể suy ra an toàn, hãy dừng và xuất dòng `NEED_USER_INPUT: <câu hỏi cụ thể bằng tiếng Việt>` — hệ thống sẽ hỏi người dùng và truyền câu trả lời thật cho bạn ngay.",
         ]
