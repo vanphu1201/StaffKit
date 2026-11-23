@@ -120,3 +120,24 @@ def test_ui_index_state_config_approve_and_rollback(tmp_path: Path) -> None:
     assert ans_res.json()["pending_interaction"] is None
     t.join(timeout=2)
     assert result_box == [{"Model path?": "D:/models/jacket.glb"}]
+
+    # 7. New 4-Pillar & Non-Tech UI integration endpoints (contracts, handoff memory, autopilot, quick-update, audit-repo)
+    c_res = client.post(
+        "/api/contracts",
+        json={
+            "contracts_md": "## Contract\n- AC-1: Must validate positive integers",
+            "handoff_md": "### T-01: Init\n- Touched files: `app.py`",
+            "custom_blueprint_yaml": "id: custom_py\nlabel: Custom Python\nverify_commands:\n  - pytest -q\n",
+        },
+    )
+    assert c_res.status_code == 200
+    insights = c_res.json()["engine_insights"]
+    assert "AC-1: Must validate positive integers" in insights["contracts_md"]
+    assert "### T-01: Init" in insights["handoff_md"]
+    assert "custom_py" in insights["custom_blueprint_yaml"]
+    assert insights["pillars"]["contract_first"] is True
+    assert insights["pillars"]["episodic_handoff"] is True
+
+    assert client.post("/api/wizard/autopilot", json={"idea": "  "}).status_code == 400
+    assert client.post("/api/wizard/quick-update", json={"request_text": ""}).status_code == 400
+

@@ -382,50 +382,84 @@
       <div class="stepper">
         <div class="step-chip active" id="stepChip1">1. Nhập ý tưởng</div>
         <div class="step-chip" id="stepChip2">2. Trả lời vài câu hỏi</div>
-        <div class="step-chip" id="stepChip3">3. Duyệt tính năng</div>
-        <div class="step-chip" id="stepChip4">4. Tự động tạo &amp; Nhận kết quả</div>
+        <div class="step-chip" id="stepChip3">3. Duyệt tính năng &amp; Cam kết</div>
+        <div class="step-chip" id="stepChip4">4. Tự động tạo &amp; Dùng ngay</div>
+      </div>
+
+      <!-- BANNER 4 TRỤ CỘT SỨC MẠNH TỰ ĐỘNG CHO NGƯỜI NON-TECH -->
+      <div class="card" style="padding:12px 16px; background:linear-gradient(135deg, rgba(59,130,246,.12), rgba(34,197,94,.08)); border-color:rgba(59,130,246,.35);">
+        <div class="row" style="justify-content:space-between;">
+          <div style="font-size:13px; font-weight:700; color:#93c5fd;">🚀 4 Công nghệ Tự động Đang Bảo vệ Sản phẩm của Bạn</div>
+          <span class="pill ok" id="wizActiveStackPill">Tự nhận diện mọi công nghệ</span>
+        </div>
+        <div class="grid-4" style="margin-top:8px; gap:8px;">
+          <div style="font-size:12px; color:#cbd5e1;">🎯 <b>Định vị 0-Token:</b> Cắt đúng hàm cần sửa (Python/React/Go/Rust...), tiết kiệm 30–50% chi phí.</div>
+          <div style="font-size:12px; color:#cbd5e1;">📐 <b>Hợp đồng &amp; Nghiệm thu:</b> Khóa cứng tiêu chí <code>AC-1..AC-N</code> để AI không làm thiếu tính năng.</div>
+          <div style="font-size:12px; color:#cbd5e1;">🧠 <b>Trí nhớ Bàn giao:</b> Các bước tự nhớ kết quả của nhau, không tốn thời gian đọc lại từ đầu.</div>
+          <div style="font-size:12px; color:#cbd5e1;">🛡️ <b>Tự kiểm thử &amp; Tự vá lỗi:</b> Tự chạy kiểm tra cuối và tự sinh bước vá lỗi nếu phát hiện trục trặc.</div>
+        </div>
       </div>
 
       <!-- STEP 1 -->
       <div id="wizStep1" class="card">
         <h3>Bạn muốn tạo sản phẩm công nghệ gì hôm nay?</h3>
-        <p style="color:var(--muted); margin-top:0;">Chỉ cần mô tả bằng ngôn ngữ đời thường. Hệ thống sẽ tự hỏi thêm vài ý để hiểu đúng nhu cầu rồi tự cấu hình, tự lập trình và tự kiểm thử với mức token thấp nhất.</p>
+        <p style="color:var(--muted); margin-top:0;">Chỉ cần gõ <b>1 câu bằng tiếng Việt đời thường</b>. Bạn có thể bấm <b>⚡ Tạo nhanh 1-Chạm</b> (hệ thống tự quyết mọi thứ từ A–Z) hoặc để hệ thống hỏi thêm vài câu trắc nghiệm dễ hiểu.</p>
         <div class="row" style="margin-bottom:10px;">
           <button class="example-chip" onclick="useIdeaSample('Tạo website quản lý nhân viên có AI gợi ý đánh giá hiệu suất và xuất báo cáo CSV')">Website quản lý nhân viên có AI</button>
-          <button class="example-chip" onclick="useIdeaSample('Tạo công cụ tự động viết kịch bản và tạo video ngắn từ chủ đề bằng AI')">Hệ thống tự tạo video bằng AI</button>
-          <button class="example-chip" onclick="useIdeaSample('Tạo app quản lý thu chi cá nhân thông minh tự phân loại hóa đơn')">Quản lý thu chi cá nhân AI</button>
+          <button class="example-chip" onclick="useIdeaSample('Tạo phần mềm quản lý bán hàng, tồn kho đa kho và xuất hóa đơn tự động')">Quản lý bán hàng &amp; tồn kho</button>
+          <button class="example-chip" onclick="useIdeaSample('Tạo app quản lý thu chi cá nhân thông minh tự phân loại hóa đơn và cảnh báo vượt ngân sách')">Quản lý thu chi cá nhân AI</button>
+          <button class="example-chip" onclick="useIdeaSample('Tạo công cụ tự động viết kịch bản và tổng hợp nội dung bằng Python CLI')">Công cụ tự động hóa Python</button>
+          <button class="example-chip" onclick="useIdeaSample('Tạo tiện ích Chrome Extension quản lý tab thông minh và ghi chú nhanh')">Chrome Extension thông minh</button>
         </div>
-        <textarea id="wizIdeaInput" rows="4" style="font-family:inherit;" placeholder="Ví dụ: Tạo cho tôi một website quản lý nhân viên có tích hợp AI tóm tắt báo cáo..."></textarea>
+        <textarea id="wizIdeaInput" rows="4" style="font-family:inherit; font-size:14px;" placeholder="Ví dụ: Tạo cho tôi một phần mềm quản lý quán cafe có gọi món, tính tiền chiết khấu VIP và thống kê doanh thu..."></textarea>
 
         <div class="grid-2" style="margin-top:14px;">
           <label class="field">
-            <span>Thư mục lưu dự án mới (hoặc chọn dự án đang có)</span>
+            <span>Thư mục lưu sản phẩm trên máy của bạn</span>
             <div class="row" style="flex-wrap:nowrap;">
               <input type="text" id="wizParentDir" />
               <button class="btn" onclick="pickWizardFolder()">Chọn nơi lưu...</button>
             </div>
           </label>
           <label class="field">
-            <span>Loại sản phẩm</span>
+            <span>Loại sản phẩm (Hỗ trợ mọi ngôn ngữ &amp; công nghệ)</span>
             <select id="wizStackHint">
-              <option value="auto">Để hệ thống tự chọn phù hợp nhất</option>
-              <option value="generic">Mọi sản phẩm công nghệ (Mobile, API, CLI, Bot, AI...)</option>
-              <option value="fullstack_web">Website Full-Stack (Frontend + Backend API + Database thật)</option>
-              <option value="web_react">Website giao diện tĩnh (React)</option>
-              <option value="python_app">Tool tự động hóa / Script AI (Python)</option>
+              <option value="auto">Để hệ thống tự chọn công nghệ phù hợp nhất</option>
+              <option value="generic">Mọi sản phẩm công nghệ (Mobile, Desktop, Rust, Go, Game, Extension...)</option>
+              <option value="fullstack_web">Website Full-Stack (Giao diện + Backend API + Cơ sở dữ liệu thật)</option>
+              <option value="web_react">Website giao diện hiện đại (React + TypeScript)</option>
+              <option value="python_app">Ứng dụng / Tool tự động hóa / AI (Python)</option>
             </select>
           </label>
         </div>
 
         <label class="field" style="margin-top:12px;">
-          <span>Model Antigravity sử dụng (tùy chọn)</span>
+          <span>Trí tuệ nhân tạo Antigravity sử dụng (tùy chọn)</span>
           <select id="wizModelSelect">
             <option value="">Theo cấu hình hiện tại (Mặc định agy)</option>
           </select>
         </label>
 
-        <div class="row" style="justify-content:flex-end; margin-top:16px;">
-          <button class="btn primary" id="btnWizInterview" onclick="submitWizardInterview()">Tiếp tục: Phân tích ý tưởng →</button>
+        <div class="row" style="justify-content:space-between; margin-top:16px;">
+          <label class="check-label"><input type="checkbox" id="wizAutopilotInstallDeps" /> Tự cài thư viện nếu là Web (`npm install`)</label>
+          <div class="row">
+            <button class="btn success" id="btnWizAutopilot" onclick="submitWizardAutopilot()" title="Hệ thống tự chọn cấu hình tối ưu, tự thiết kế, tự lập trình và tự kiểm thử từ A-Z không cần hỏi lại">⚡ Tạo nhanh 1-Chạm (Tự động từ A → Z)</button>
+            <button class="btn primary" id="btnWizInterview" onclick="submitWizardInterview()">💬 Hỏi tôi vài câu để tùy chỉnh kỹ hơn →</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- KHUNG NÂNG CẤP / SỬA LỖI NHANH SẢN PHẨM ĐANG CÓ CHO NGƯỜI NON-TECH -->
+      <div id="wizQuickUpdateCard" class="card" style="border-color:rgba(6,182,212,.35);">
+        <div class="row" style="justify-content:space-between;">
+          <h3 style="margin:0; color:#67e8f9;">✨ Bạn đã có sẵn sản phẩm và muốn Thêm tính năng / Sửa lỗi nhanh?</h3>
+          <span class="pill" id="wizCurrentTargetPill">Dự án hiện tại</span>
+        </div>
+        <p style="color:var(--muted); margin:6px 0 10px;">Không cần tạo lại từ đầu! Chỉ cần chọn thư mục sản phẩm đang có rồi gõ yêu cầu bằng tiếng Việt bình dân, hệ thống sẽ tự định vị đúng file code để nâng cấp và kiểm thử.</p>
+        <div class="row" style="flex-wrap:nowrap; margin-bottom:10px;">
+          <input type="text" id="wizQuickUpdateInput" style="font-family:inherit;" placeholder="Ví dụ: Thêm nút xuất báo cáo ra file Excel, đổi tông màu sang xanh đậm và kiểm tra không cho nhập số tiền âm..." />
+          <button class="btn" onclick="pickQuickUpdateRepo()">Chọn thư mục SP...</button>
+          <button class="btn primary" id="btnWizQuickUpdate" onclick="submitWizardQuickUpdate()">✨ Tự động Nâng cấp Ngay</button>
         </div>
       </div>
 
@@ -442,9 +476,18 @@
 
       <!-- STEP 3 -->
       <div id="wizStep3" class="card" style="display:none;">
-        <h3 id="wizProductTitle">Bản thiết kế tính năng sản phẩm</h3>
-        <p style="color:var(--muted); margin-top:0;">Hãy kiểm tra xem danh sách tính năng dưới đây đã đúng ý bạn chưa trước khi hệ thống bắt đầu lập trình:</p>
-        <ul id="wizFeaturesList" style="line-height:1.7; margin:0 0 14px 18px;"></ul>
+        <h3 id="wizProductTitle">Bản thiết kế tính năng &amp; Cam kết chất lượng sản phẩm</h3>
+        <p style="color:var(--muted); margin-top:0;">Hãy kiểm tra danh sách tính năng và các tiêu chí nghiệm thu tự động dưới đây trước khi hệ thống bắt đầu lập trình:</p>
+        <div class="grid-2" style="margin-bottom:14px;">
+          <div class="q-card">
+            <div style="font-weight:700; color:#93c5fd;">✨ Các tính năng chính sẽ có trong sản phẩm:</div>
+            <ul id="wizFeaturesList" style="line-height:1.7; margin:0 0 4px 18px;"></ul>
+          </div>
+          <div class="q-card">
+            <div style="font-weight:700; color:#86efac;">🛡️ Cam kết nghiệm thu tự động (AC-1..AC-N — Hệ thống tự kiểm tra):</div>
+            <textarea id="wizAcceptanceInput" rows="5" style="font-family:inherit; font-size:12px;" placeholder="Mỗi dòng 1 tiêu chí nghiệm thu (VD: AC-1: Kiểm tra đầy đủ dữ liệu đầu vào...)"></textarea>
+          </div>
+        </div>
 
         <div class="grid-2" style="margin-bottom:12px;">
           <label class="field">
@@ -452,9 +495,9 @@
             <input type="text" id="wizProjectName" />
           </label>
           <label class="field">
-            <span>Công nghệ dựng khung (0 token)</span>
+            <span>Công nghệ dựng khung (0 token — hỗ trợ mọi nền tảng)</span>
             <select id="wizChosenStack">
-              <option value="generic">Mọi sản phẩm công nghệ (Antigravity tự chọn stack tối ưu)</option>
+              <option value="generic">Mọi sản phẩm công nghệ (Antigravity tự sinh Blueprint tối ưu)</option>
               <option value="fullstack_web">Website Full-Stack (React + Express + Prisma/SQLite thật)</option>
               <option value="web_react">Website React + TypeScript (Vite)</option>
               <option value="python_app">Ứng dụng Python + Pytest</option>
@@ -463,8 +506,17 @@
         </div>
 
         <details style="margin-bottom:14px;">
-          <summary style="cursor:pointer; color:var(--muted); font-size:12px;">Xem bản đặc tả kỹ thuật chi tiết (dành cho người muốn kiểm tra thêm)</summary>
-          <textarea id="wizPrdPreview" rows="7" style="margin-top:8px;"></textarea>
+          <summary style="cursor:pointer; color:var(--muted); font-size:12px;">Xem / Chỉnh sửa Hợp đồng Kiến trúc (`contracts.md`) &amp; Đặc tả kỹ thuật (`PRD.md`)</summary>
+          <div class="grid-2" style="margin-top:8px;">
+            <label class="field">
+              <span>Hợp đồng Kiến trúc dùng chung (`.auto-engine/contracts.md`)</span>
+              <textarea id="wizContractPreview" rows="6"></textarea>
+            </label>
+            <label class="field">
+              <span>Đặc tả chi tiết (`openspec/prd.md`)</span>
+              <textarea id="wizPrdPreview" rows="6"></textarea>
+            </label>
+          </div>
         </details>
 
         <div class="row" style="justify-content:space-between;">
@@ -472,15 +524,18 @@
             <button class="btn" onclick="goWizardStep(2)">← Quay lại câu hỏi</button>
             <label class="check-label"><input type="checkbox" id="wizInstallDeps" /> Tự cài thư viện `npm install` (nếu là Web)</label>
           </div>
-          <button class="btn success" id="btnWizBuild" onclick="submitWizardBuild()">Đồng ý &amp; Bắt đầu tạo sản phẩm</button>
+          <button class="btn success" id="btnWizBuild" onclick="submitWizardBuild()">🚀 Đồng ý &amp; Bắt đầu tạo sản phẩm</button>
         </div>
       </div>
 
       <!-- STEP 4 -->
       <div id="wizStep4" class="card" style="display:none;">
         <div class="row" style="justify-content:space-between; margin-bottom:10px;">
-          <h3 style="margin:0;">Tiến độ xây dựng sản phẩm</h3>
-          <span class="pill" id="wizProgressText">0 / 0 phần hoàn thành</span>
+          <h3 style="margin:0;">Tiến độ xây dựng &amp; Kiểm định sản phẩm</h3>
+          <div class="row">
+            <span class="pill" id="wizTokensSavedPill" title="Tổng token sử dụng">Tokens: 0</span>
+            <span class="pill" id="wizProgressText">0 / 0 phần hoàn thành</span>
+          </div>
         </div>
         <div class="progress-bar-bg" style="margin-bottom:14px;">
           <div class="progress-bar-fill" id="wizProgressFill"></div>
@@ -488,22 +543,32 @@
         <div id="wizDoneBanner" style="display:none; background:rgba(34,197,94,.12); border:1px solid rgba(34,197,94,.4); color:#86efac; padding:10px 14px; border-radius:8px; margin-bottom:12px;"></div>
         <div id="wizTaskSimpleList" style="display:flex; flex-direction:column; gap:8px; margin-bottom:14px;"></div>
 
+        <!-- HỘP YÊU CẦU CHỈNH SỬA / BỔ SUNG TÍNH NĂNG TIẾP THEO NGAY TẠI BƯỚC 4 -->
+        <div class="q-card" style="margin-bottom:14px; border-color:rgba(59,130,246,.4);">
+          <div style="font-weight:700; color:#93c5fd;">✨ Bạn muốn thêm tính năng hay chỉnh sửa gì tiếp theo trên sản phẩm này?</div>
+          <div class="row" style="flex-wrap:nowrap;">
+            <input type="text" id="wizFollowupInput" style="font-family:inherit;" placeholder="Gõ yêu cầu bổ sung (VD: Thêm bộ lọc tìm kiếm nhanh, thêm biểu đồ thống kê, sửa lỗi nút lưu...)" />
+            <button class="btn primary" id="btnWizFollowup" onclick="submitWizardFollowup()">✨ Cập nhật sản phẩm ngay</button>
+          </div>
+        </div>
+
         <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">Nhật ký hoạt động trực tiếp:</div>
         <div id="wizLogBox" class="log-box" style="height:170px; margin-bottom:12px;"></div>
 
         <details style="margin-bottom:14px;">
-          <summary style="cursor:pointer; color:#93c5fd; font-size:12px; font-weight:600;">Xem tương tác trực tiếp Engine ↔ Antigravity (Prompt / Phản hồi / Tool Call)</summary>
+          <summary style="cursor:pointer; color:#93c5fd; font-size:12px; font-weight:600;">Xem tương tác trực tiếp Engine ↔ Antigravity (Prompt / Hợp đồng Kiến trúc / Tool Call)</summary>
           <div id="wizTraceBox" class="trace-box" style="height:280px; margin-top:8px;"></div>
         </details>
 
         <div class="row" style="justify-content:space-between;">
           <div class="row">
             <button class="btn danger" id="btnWizStop" onclick="stopSprint()">Dừng an toàn</button>
-            <button class="btn" onclick="resetWizard()">Tạo sản phẩm mới khác</button>
+            <button class="btn" onclick="resetWizard()">+ Tạo sản phẩm mới khác</button>
           </div>
           <div class="row">
             <span id="wizPreviewHint" style="color:var(--muted); font-size:12px;"></span>
-            <button class="btn primary" onclick="openTargetFolder()">Mở thư mục sản phẩm</button>
+            <button class="btn success" id="btnLaunchPreview" onclick="launchPreview()">▶️ Chạy thử sản phẩm ngay</button>
+            <button class="btn primary" onclick="openTargetFolder()">📂 Mở thư mục sản phẩm</button>
           </div>
         </div>
       </div>
@@ -516,6 +581,7 @@
       <button class="nav-btn active" onclick="switchTab('dashboard', this)">Điều khiển (Dashboard)</button>
       <button class="nav-btn" onclick="switchTab('live', this)">Tương tác Antigravity (Live)</button>
       <button class="nav-btn" onclick="switchTab('planner', this)">PRD &amp; Kế hoạch (Plan)</button>
+      <button class="nav-btn" onclick="switchTab('contracts', this)">Hợp đồng &amp; Kiểm định (4 Trụ cột)</button>
       <button class="nav-btn" onclick="switchTab('config', this)">Cấu hình (Settings)</button>
       <button class="nav-btn" onclick="switchTab('runs', this)">Lịch sử chạy (Runs)</button>
     </nav>
@@ -545,8 +611,11 @@
             <button class="btn primary" id="btnApprove" onclick="approvePlan()">1. Phê duyệt Plan</button>
             <button class="btn success" id="btnRun" onclick="runSprint(false)">2. Chạy Sprint Tự động</button>
             <button class="btn" id="btnResume" onclick="resumeSprint()">Khôi phục &amp; Chạy tiếp (Resume)</button>
+            <button class="btn" onclick="launchPreview()">▶️ Chạy thử sản phẩm (Preview)</button>
+            <button class="btn" onclick="openTargetFolder()">📂 Mở thư mục dự án</button>
             <button class="btn danger" id="btnStop" onclick="stopSprint()">Dừng an toàn</button>
           </div>
+          <div id="pillarsStatusRow" class="row" style="margin-top:10px;"></div>
         </div>
 
         <div class="card">
@@ -629,6 +698,47 @@
         </div>
       </section>
 
+      <!-- VIEW CONTRACTS, EPISODIC HANDOFF MEMORY & 0-TOKEN REPLAY AUDIT -->
+      <section id="view-contracts" class="view">
+        <div class="card">
+          <div class="row" style="justify-content:space-between; margin-bottom:10px;">
+            <div>
+              <h3 style="margin:0;">Trụ cột 2 &amp; Nâng cấp: Hợp đồng Kiến trúc (`contracts.md`), Trí nhớ Bàn giao (`handoff.md`) &amp; Dynamic Blueprint</h3>
+              <div style="color:var(--muted); font-size:12px; margin-top:3px;">Được tự động tiêm vào mọi Task &amp; nhánh Git Worktree song song để đảm bảo khớp 100% chữ ký hàm, schema và tiêu chí nghiệm thu AC-1..AC-N.</div>
+            </div>
+            <button class="btn primary" onclick="saveContractsAndMemory()">Lưu Hợp đồng &amp; Bộ nhớ</button>
+          </div>
+          <div class="grid-2">
+            <label class="field">
+              <span>Hợp đồng Kiến trúc &amp; Tiêu chí Nghiệm thu (`.auto-engine/contracts.md`)</span>
+              <textarea id="contractsMdBox" rows="10" placeholder="Chưa có contracts.md (Sẽ tự động được tạo khi qua Wizard hoặc lập kế hoạch DAG >= 2 tasks)..."></textarea>
+            </label>
+            <label class="field">
+              <span>Trí nhớ Bàn giao 0-Token giữa các Task (`.auto-engine/handoff.md`)</span>
+              <textarea id="handoffMdBox" rows="10" placeholder="Chưa có handoff.md (Sẽ tự động ghi lại các file và chữ ký hàm sau mỗi Task DONE)..."></textarea>
+            </label>
+          </div>
+          <label class="field" style="margin-top:10px;">
+            <span>Dynamic Custom Blueprint (`.auto-engine/blueprint.yaml` — Tự động sinh cho mọi công nghệ mới ngoài danh sách mẫu)</span>
+            <textarea id="customBlueprintBox" rows="5" placeholder="Tùy chọn: cấu hình verify_commands, runtime_verify_commands, preview_command, quality_rules riêng cho dự án..."></textarea>
+          </label>
+        </div>
+
+        <div class="card">
+          <div class="row" style="justify-content:space-between; margin-bottom:10px;">
+            <div>
+              <h3 style="margin:0;">Trụ cột 1: Kiểm định Định vị File 0-Token &amp; Cửa sổ AST/Brace trên Lịch sử Git (`audit-repo`)</h3>
+              <div style="color:var(--muted); font-size:12px; margin-top:3px;">Tái hiện các commit thực tế gần nhất trong repo ở mức 0 LLM token để đo Recall, Precision, AST/Brace Window Hit Rate và lượng Token tiết kiệm.</div>
+            </div>
+            <div class="row">
+              <input type="number" id="auditCommitsCount" value="10" min="1" max="50" style="width:80px;" />
+              <button class="btn success" id="btnAuditRepo" onclick="runRepoAudit()">🔍 Chạy 0-Token Replay Audit</button>
+            </div>
+          </div>
+          <pre id="auditReportPre" class="trace-pre" style="max-height:340px;">Bấm "Chạy 0-Token Replay Audit" để đo độ chính xác định vị của Engine trên repo hiện tại.</pre>
+        </div>
+      </section>
+
       <!-- VIEW 3: SETTINGS -->
       <section id="view-config" class="view">
         <div class="card">
@@ -699,16 +809,45 @@
             <label class="field"><span>Max Tool Calls / Lượt</span><input type="number" id="limToolCalls" /></label>
             <label class="field"><span>Max Blocked Liên tiếp</span><input type="number" id="limConsecBlocked" /></label>
           </div>
+          <div class="grid-4" style="margin-bottom:12px;">
+            <label class="field">
+              <span>Chế độ Lập kế hoạch (`sprint.planning_mode`)</span>
+              <select id="cfgPlanningMode">
+                <option value="auto">auto (Fast-Path 0-token khi gọn, DAG khi lớn)</option>
+                <option value="dag">dag (Luôn chia nhiều Task DAG)</option>
+                <option value="single">single (Gom 1 Task trực tiếp)</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Số nhánh Song song (`max_parallel_tasks`)</span>
+              <input type="number" id="cfgMaxParallel" min="1" max="8" />
+            </label>
+            <label class="field">
+              <span>Chế độ Phạm vi (`guards.scope_mode`)</span>
+              <select id="cfgScopeMode">
+                <option value="soft">soft (Linh hoạt cho phép mở rộng file liên quan)</option>
+                <option value="strict">strict (Khóa cứng chỉ các file được giao)</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Idle Watchdog Timeout (`idle_timeout_seconds`)</span>
+              <input type="number" id="cfgIdleTimeout" min="15" max="1800" />
+            </label>
+          </div>
           <div class="grid-2" style="margin-bottom:12px;">
             <label class="field">
               <span>Lệnh verify mặc định (mỗi dòng 1 lệnh đơn, KHÔNG dùng `&amp;&amp;`)</span>
               <textarea id="cfgDefaultVerify" rows="3"></textarea>
             </label>
             <label class="field">
-              <span>Lệnh verify cuối Sprint (mỗi dòng 1 lệnh đơn)</span>
+              <span>Lệnh verify cuối Sprint &amp; Runtime Gate (mỗi dòng 1 lệnh đơn)</span>
               <textarea id="cfgFinalVerify" rows="3"></textarea>
             </label>
           </div>
+          <label class="field" style="margin-bottom:12px;">
+            <span>Lệnh Runtime / Behavioral Smoke Gate (`sprint.runtime_verify_commands`, tự động chạy + tự vá lỗi `T-FINAL-FIX` cuối Sprint)</span>
+            <textarea id="cfgRuntimeVerify" rows="2" placeholder="VD: python scripts/smoke_http_health.py --cmd &quot;npm start&quot; --url http://127.0.0.1:3000"></textarea>
+          </label>
           <div class="row" style="justify-content:space-between;">
             <div class="row" style="gap:16px;">
               <label class="check-label"><input type="checkbox" id="chkAutoApproveTools" /> Tự duyệt quyền sửa file cho `agy` headless</label>
@@ -989,12 +1128,23 @@
 
     function renderWizard(s) {
       const w = s.wizard || {};
+      const insights = s.engine_insights || {};
+      const det = insights.detected || {};
       const busy = s.worker.status !== "idle";
-      ["btnWizInterview", "btnWizSynthesize", "btnWizBuild"].forEach(id => {
+      ["btnWizInterview", "btnWizSynthesize", "btnWizBuild", "btnWizAutopilot", "btnWizQuickUpdate", "btnWizFollowup"].forEach(id => {
         const b = document.getElementById(id);
         if (b) b.disabled = busy;
       });
       document.getElementById("btnWizStop").disabled = !busy;
+
+      const stackPill = document.getElementById("wizActiveStackPill");
+      if (stackPill) {
+        stackPill.textContent = det.stack ? `Stack nhận diện: ${det.stack}` : "Tự nhận diện mọi công nghệ";
+      }
+      const targetPill = document.getElementById("wizCurrentTargetPill");
+      if (targetPill && s.config && s.config.project) {
+        targetPill.textContent = s.config.project.target_repo || "Chưa chọn thư mục";
+      }
 
       if (!document.getElementById("wizParentDir").value && w.parent_dir) {
         document.getElementById("wizParentDir").value = w.parent_dir;
@@ -1028,12 +1178,16 @@
       }
 
       if (w.spec) {
-        document.getElementById("wizProductTitle").textContent = w.spec.product_title || "Bản thiết kế tính năng sản phẩm";
+        document.getElementById("wizProductTitle").textContent = w.spec.product_title || "Bản thiết kế tính năng & Cam kết chất lượng sản phẩm";
         document.getElementById("wizFeaturesList").innerHTML = (w.spec.features_vi || []).map(f => `<li>${esc(f)}</li>`).join("");
         const prdBox = document.getElementById("wizPrdPreview");
+        const acBox = document.getElementById("wizAcceptanceInput");
+        const conBox = document.getElementById("wizContractPreview");
         if (prdBox.dataset.loadedTitle !== w.spec.product_title) {
           prdBox.dataset.loadedTitle = w.spec.product_title || "";
           prdBox.value = w.spec.prd_markdown || "";
+          if (acBox) acBox.value = (w.spec.acceptance_criteria || []).join("\n");
+          if (conBox) conBox.value = w.spec.architecture_contract || "";
         }
       }
 
@@ -1044,6 +1198,9 @@
       const pct = totCnt > 0 ? Math.round((doneCnt / totCnt) * 100) : 0;
       document.getElementById("wizProgressText").textContent = `${doneCnt} / ${totCnt} phần hoàn thành (${pct}%)`;
       document.getElementById("wizProgressFill").style.width = `${pct}%`;
+      const totTok = (s.summary.prompt_tokens || 0) + (s.summary.completion_tokens || 0);
+      const tokPill = document.getElementById("wizTokensSavedPill");
+      if (tokPill) tokPill.textContent = `Tokens: ${totTok.toLocaleString()}`;
 
       document.getElementById("wizTaskSimpleList").innerHTML = tasks.map(t =>
         `<div class="q-card" style="flex-direction:row; justify-content:space-between; align-items:center;">
@@ -1059,7 +1216,7 @@
       } else {
         doneBanner.style.display = "none";
       }
-      document.getElementById("wizPreviewHint").textContent = w.preview_cmd ? `Lệnh chạy thử: ${w.preview_cmd}` : "";
+      document.getElementById("wizPreviewHint").textContent = w.preview_cmd ? `Lệnh chạy: ${w.preview_cmd}` : "";
     }
 
     function updateWizInput(qIdx, val) {
@@ -1173,6 +1330,33 @@
       if (!document.getElementById("view-config").classList.contains("active")) {
         populateConfigForm(s.config);
       }
+
+      const ins = s.engine_insights || {};
+      const p = ins.pillars || {};
+      const pRow = document.getElementById("pillarsStatusRow");
+      if (pRow) {
+        pRow.innerHTML = [
+          `<span class="pill ok">Trụ cột 1: AST + Brace Block Windowing (19 ngôn ngữ)</span>`,
+          `<span class="pill ${p.contract_first ? "ok" : ""}">Trụ cột 2: Contract-First (${p.contract_first ? "Đang bật" : "Tự sinh khi >=2 tasks"})</span>`,
+          `<span class="pill ${p.episodic_handoff ? "ok" : ""}">Handoff Memory (${p.episodic_handoff ? "Có dữ liệu" : "Sẵn sàng"})</span>`,
+          `<span class="pill ok">Trụ cột 3: Auto-Repair T-FINAL-FIX</span>`,
+          `<span class="pill ok">Trụ cột 4: Traceback Escalation &amp; ${p.soft_scope ? "Soft-Scope" : "Strict-Scope"}</span>`,
+          `<span class="pill">Parallel Worktrees: ${p.parallel_worktrees || 1}</span>`,
+          `<span class="pill">Watchdog: ${p.idle_watchdog_sec || 120}s</span>`,
+        ].join(" ");
+      }
+      if (!document.getElementById("view-contracts").classList.contains("active")) {
+        const cBox = document.getElementById("contractsMdBox");
+        const hBox = document.getElementById("handoffMdBox");
+        const bpBox = document.getElementById("customBlueprintBox");
+        if (cBox) cBox.value = ins.contracts_md || "";
+        if (hBox) hBox.value = ins.handoff_md || "";
+        if (bpBox) bpBox.value = ins.custom_blueprint_yaml || "";
+      }
+      const audPre = document.getElementById("auditReportPre");
+      if (audPre && ins.audit_report_md) {
+        audPre.textContent = ins.audit_report_md;
+      }
     }
 
     function populateConfigForm(c) {
@@ -1195,6 +1379,14 @@
       document.getElementById("limTokensTask").value = c.limits.max_tokens_per_task;
       document.getElementById("limToolCalls").value = c.limits.max_tool_calls_per_attempt;
       document.getElementById("limConsecBlocked").value = c.limits.max_consecutive_blocked_tasks;
+
+      if (document.getElementById("cfgPlanningMode")) {
+        document.getElementById("cfgPlanningMode").value = (c.sprint && c.sprint.planning_mode) || "auto";
+        document.getElementById("cfgMaxParallel").value = (c.sprint && c.sprint.max_parallel_tasks) || 2;
+        document.getElementById("cfgScopeMode").value = (c.guards && c.guards.scope_mode) || "soft";
+        document.getElementById("cfgIdleTimeout").value = (c.executor && c.executor.idle_timeout_seconds) || 120;
+        document.getElementById("cfgRuntimeVerify").value = ((c.sprint && c.sprint.runtime_verify_commands) || []).join("\n");
+      }
 
       document.getElementById("cfgDefaultVerify").value = (c.executor.default_verify_commands || []).join("\n");
       document.getElementById("cfgFinalVerify").value = (c.sprint.final_verify_commands || []).join("\n");
@@ -1262,6 +1454,11 @@
       const stack = document.getElementById("wizChosenStack").value;
       const prdMarkdown = document.getElementById("wizPrdPreview").value;
       const installDeps = document.getElementById("wizInstallDeps").checked;
+      const acLines = (document.getElementById("wizAcceptanceInput")?.value || "")
+        .split(/\r?\n/)
+        .map(s => s.trim())
+        .filter(Boolean);
+      const archContract = document.getElementById("wizContractPreview")?.value || "";
       try {
         await api("/api/wizard/build", "POST", {
           parent_dir: parentDir,
@@ -1269,8 +1466,102 @@
           stack,
           prd_markdown: prdMarkdown,
           install_deps: installDeps,
+          acceptance_criteria: acLines,
+          architecture_contract: archContract,
         });
         goWizardStep(4);
+        await refreshState();
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function submitWizardAutopilot() {
+      const idea = document.getElementById("wizIdeaInput").value.trim();
+      const stackHint = document.getElementById("wizStackHint").value;
+      const parentDir = document.getElementById("wizParentDir").value.trim();
+      const selectedModel = document.getElementById("wizModelSelect").value;
+      const installDeps = document.getElementById("wizAutopilotInstallDeps")?.checked || false;
+      try {
+        await api("/api/wizard/autopilot", "POST", {
+          idea,
+          stack_hint: stackHint,
+          parent_dir: parentDir,
+          selected_model: selectedModel,
+          install_deps: installDeps,
+        });
+        goWizardStep(4);
+        showToast("⚡ Đã kích hoạt 1-Chạm Autopilot từ A → Z!");
+        await refreshState();
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function pickQuickUpdateRepo() {
+      const res = await api("/api/pick-folder", "POST");
+      if (res.path) {
+        const cfg = structuredClone(latestState.config);
+        cfg.project.target_repo = res.path;
+        const next = await api("/api/config", "POST", cfg);
+        renderState(next);
+        showToast("Đã chọn dự án: " + res.path);
+      }
+    }
+
+    async function submitWizardQuickUpdate() {
+      const reqText = document.getElementById("wizQuickUpdateInput").value.trim();
+      const selectedModel = document.getElementById("wizModelSelect").value;
+      try {
+        await api("/api/wizard/quick-update", "POST", {
+          request_text: reqText,
+          selected_model: selectedModel,
+        });
+        document.getElementById("wizQuickUpdateInput").value = "";
+        goWizardStep(4);
+        showToast("✨ Đang tự động nâng cấp sản phẩm...");
+        await refreshState();
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function submitWizardFollowup() {
+      const reqText = document.getElementById("wizFollowupInput").value.trim();
+      const selectedModel = document.getElementById("wizModelSelect").value;
+      try {
+        await api("/api/wizard/quick-update", "POST", {
+          request_text: reqText,
+          selected_model: selectedModel,
+        });
+        document.getElementById("wizFollowupInput").value = "";
+        showToast("✨ Đang cập nhật sản phẩm theo yêu cầu mới...");
+        await refreshState();
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function launchPreview() {
+      try {
+        const res = await api("/api/preview/launch", "POST", {});
+        if (res.command) {
+          showToast("▶️ Đã mở cửa sổ chạy thử: " + res.command);
+        } else {
+          showToast("📂 Đã mở thư mục sản phẩm!");
+        }
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function saveContractsAndMemory() {
+      try {
+        const next = await api("/api/contracts", "POST", {
+          contracts_md: document.getElementById("contractsMdBox").value,
+          handoff_md: document.getElementById("handoffMdBox").value,
+          custom_blueprint_yaml: document.getElementById("customBlueprintBox").value,
+        });
+        renderState(next);
+        showToast("Đã lưu Hợp đồng Kiến trúc, Bộ nhớ & Blueprint!");
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function runRepoAudit() {
+      const cnt = Number(document.getElementById("auditCommitsCount").value || 10);
+      try {
+        await api("/api/audit-repo", "POST", { max_commits: cnt });
+        showToast("🔍 Đang chạy 0-Token Historical Replay Audit...");
         await refreshState();
       } catch (e) { showToast(e.message); }
     }
@@ -1279,6 +1570,8 @@
       const next = await api("/api/wizard/reset", "POST");
       document.getElementById("wizProjectName").value = "";
       document.getElementById("wizPrdPreview").dataset.loadedTitle = "";
+      if (document.getElementById("wizAcceptanceInput")) document.getElementById("wizAcceptanceInput").value = "";
+      if (document.getElementById("wizContractPreview")) document.getElementById("wizContractPreview").value = "";
       document.getElementById("wizQuestionsList").dataset.renderedFor = "";
       renderState(next);
       goWizardStep(1);
@@ -1313,6 +1606,13 @@
       cfg.executor.mode = document.getElementById("cfgMode").value;
       cfg.executor.default_verify_commands = document.getElementById("cfgDefaultVerify").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
       cfg.sprint.final_verify_commands = document.getElementById("cfgFinalVerify").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      if (document.getElementById("cfgPlanningMode")) {
+        cfg.sprint.planning_mode = document.getElementById("cfgPlanningMode").value;
+        cfg.sprint.max_parallel_tasks = Number(document.getElementById("cfgMaxParallel").value || 2);
+        cfg.guards.scope_mode = document.getElementById("cfgScopeMode").value;
+        cfg.executor.idle_timeout_seconds = Number(document.getElementById("cfgIdleTimeout").value || 120);
+        cfg.sprint.runtime_verify_commands = document.getElementById("cfgRuntimeVerify").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      }
 
       cfg.agy.tiers = {
         planner: { model: document.getElementById("tierPlannerModel").value.trim(), effort: document.getElementById("tierPlannerEffort").value },

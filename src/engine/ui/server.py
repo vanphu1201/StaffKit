@@ -20,10 +20,11 @@ from starlette.responses import HTMLResponse, JSONResponse, StreamingResponse
 from starlette.routing import Route
 
 from engine.blueprints import get_blueprint, load_blueprints
-from engine.bootstrapper import bootstrap_project, ensure_git_repo_ready
+from engine.bootstrapper import bootstrap_project, detect_existing_stack, ensure_git_repo_ready
 from engine.bridges.agy_cli_executor import list_agy_models, smoke_test_agy
 from engine.compiler import PromptCompiler
 from engine.database import StateDB
+from engine.evaluator import audit_historical_commits
 from engine.git_guard import GitGuard
 from engine.indexer import RepoIndexer
 from engine.interviewer import (
@@ -296,12 +297,48 @@ class DesktopAppController:
                 )
             runs_out = list(reversed(db.list_runs()))[:100]
 
+        contracts_md = ""
+        handoff_md = ""
+        custom_bp_yaml = ""
+        audit_report_md = ""
+        detected_info: dict[str, Any] = {
+            "stack": cfg.project.blueprint or "generic",
+            "verify_commands": list(cfg.executor.default_verify_commands),
+            "final_verify_commands": list(cfg.sprint.final_verify_commands),
+            "preview_command": "",
+        }
+        if repo_exists:
+            try:
+                det_stack, det_vc, det_fc, det_prev = detect_existing_stack(repo_dir)
+                detected_info = {
+                    "stack": det_stack,
+                    "verify_commands": det_vc,
+                    "final_verify_commands": det_fc,
+                    "preview_command": det_prev,
+                }
+            except Exception:
+                pass
+            for c_path in (cfg.auto_engine_dir / "contracts.md", repo_dir / "openspec" / "contracts.md"):
+                if c_path.is_file():
+                    contracts_md = c_path.read_text(encoding="utf-8", errors="replace")
+                    break
+            h_path = cfg.auto_engine_dir / "handoff.md"
+            if h_path.is_file():
+                handoff_md = h_path.read_text(encoding="utf-8", errors="replace")
+            bp_path = cfg.auto_engine_dir / "blueprint.yaml"
+            if bp_path.is_file():
+                custom_bp_yaml = bp_path.read_text(encoding="utf-8", errors="replace")
+            aud_path = cfg.auto_engine_dir / "ui_repo_audit.md"
+            if aud_path.is_file():
+                audit_report_md = aud_path.read_text(encoding="utf-8", errors="replace")
+
         with self._lock:
             worker = {"status": self.worker_status, "message": self.worker_message}
             questions = list(self.clarifying_questions)
             pending_interaction = dict(self.pending_interaction) if self.pending_interaction else None
             logs = list(self._logs)
             traces = list(self._traces)
+            preview_cmd = self.wizard_preview_cmd or detected_info.get("preview_command", "")
             wizard = {
                 "step": self.wizard_step,
                 "idea": self.wizard_idea,
@@ -309,9 +346,27 @@ class DesktopAppController:
                 "parent_dir": self.wizard_parent_dir,
                 "interview": self.wizard_interview,
                 "spec": self.wizard_spec,
-                "preview_cmd": self.wizard_preview_cmd,
+                "preview_cmd": preview_cmd,
                 "done_message": self.wizard_done_message,
             }
+
+        engine_insights = {
+            "detected": detected_info,
+            "contracts_md": contracts_md,
+            "handoff_md": handoff_md,
+            "custom_blueprint_yaml": custom_bp_yaml,
+            "audit_report_md": audit_report_md,
+            "pillars": {
+                "locator_ast_brace": True,
+                "contract_first": bool(contracts_md.strip()),
+                "episodic_handoff": bool(handoff_md.strip()),
+                "final_gate_auto_repair": True,
+                "soft_scope": cfg.guards.scope_mode in ("soft", "flexible"),
+                "planning_mode": cfg.sprint.planning_mode,
+                "parallel_worktrees": cfg.sprint.max_parallel_tasks,
+                "idle_watchdog_sec": cfg.executor.idle_timeout_seconds,
+            },
+        }
 
         return {
             "config_path": self.config_path.as_posix(),
@@ -327,6 +382,7 @@ class DesktopAppController:
             "clarifying_questions": questions,
             "pending_interaction": pending_interaction,
             "wizard": wizard,
+            "engine_insights": engine_insights,
             "logs": logs,
             "traces": traces,
             "blueprints": [b.model_dump() for b in load_blueprints(repo_dir if repo_exists else None)],
@@ -584,6 +640,114 @@ class DesktopAppController:
 
         return self._start_worker("synthesizing", "Đang tổng hợp tính năng sản phẩm...", _job)
 
+    def _execute_build_pipeline(
+        self,
+        *,
+        parent_dir: str,
+        project_name: str,
+        stack: str,
+        prd_markdown: str,
+        install_deps: bool = False,
+        acceptance_criteria: list[str] | None = None,
+        architecture_contract: str = "",
+    ) -> None:
+        with self._lock:
+            self.wizard_step = 4
+            self.wizard_done_message = ""
+            if isinstance(self.wizard_spec, dict):
+                if acceptance_criteria is not None:
+                    self.wizard_spec["acceptance_criteria"] = list(acceptance_criteria)
+                if architecture_contract.strip():
+                    self.wizard_spec["architecture_contract"] = architecture_contract.strip()
+
+        base = Path(parent_dir.strip() or self.wizard_parent_dir).expanduser()
+        clean_name = "".join(ch if (ch.isalnum() or ch in ("-", "_")) else "-" for ch in project_name.strip()).strip("-")
+        target_dir = base if (not clean_name or base.name == clean_name) else (base / clean_name)
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        if isinstance(self.wizard_spec, dict):
+            try:
+                spec_obj = ProductSpec.model_validate(self.wizard_spec)
+                save_custom_blueprint_if_needed(target_dir, spec_obj, stack=stack)
+                persist_project_contracts(target_dir, spec_obj)
+            except Exception:
+                pass
+        elif architecture_contract.strip():
+            persist_project_contracts(target_dir, contract_markdown=architecture_contract.strip())
+
+        self.emit_log("info", f"Bước 1/4: Dựng khung dự án 0-token tại {target_dir.as_posix()}...")
+        boot = bootstrap_project(target_dir, stack=stack, install_deps=install_deps)  # type: ignore[arg-type]
+
+        # Save openspec/prd.md and commit cleanly before sprint branch creation
+        openspec_dir = target_dir / "openspec"
+        openspec_dir.mkdir(parents=True, exist_ok=True)
+        prd_file = openspec_dir / "prd.md"
+        prd_file.write_text(prd_markdown, encoding="utf-8")
+        subprocess.run(["git", "add", "openspec/prd.md"], cwd=str(target_dir), capture_output=True, check=False)
+        if subprocess.run(["git", "status", "--porcelain"], cwd=str(target_dir), capture_output=True, text=True).stdout.strip():
+            subprocess.run(["git", "commit", "-m", "docs: add openspec/prd.md"], cwd=str(target_dir), capture_output=True, check=False)
+        ensure_git_repo_ready(target_dir)
+
+        # Update config.yaml cleanly to point at target_dir with auto-detected verify commands
+        cfg = self.load_config()
+        cfg.project.target_repo = target_dir.resolve().as_posix()
+        cfg.project.blueprint = boot.stack
+        if boot.verify_commands:
+            cfg.executor.default_verify_commands = boot.verify_commands
+        if boot.final_verify_commands:
+            cfg.sprint.final_verify_commands = boot.final_verify_commands
+        bp = get_blueprint(boot.stack, target_dir)
+        if bp is not None and bp.runtime_verify_commands:
+            cfg.sprint.runtime_verify_commands = list(bp.runtime_verify_commands)
+        self.save_config(cfg.model_dump())
+
+        with self._lock:
+            self.wizard_preview_cmd = boot.preview_command
+
+        self.emit_log("info", "Bước 2/4: Định vị file 0-token & Lập kế hoạch công việc từ đặc tả...")
+        db = StateDB(cfg.state_db_path)
+        indexer = RepoIndexer(cfg)
+        planner = Planner(
+            cfg,
+            db,
+            indexer,
+            on_event=self.emit_log,
+            stop_event=self.stop_event,
+            on_trace=self.emit_trace,
+        )
+        plan_res = planner.plan_from_prd(prd_file, auto_approve=True)
+        if plan_res.status == "NEEDS_CLARIFICATION":
+            self.emit_log("warn", "Planner cần bổ sung thông tin trước khi chạy.")
+            return
+
+        self.emit_log("info", f"Bước 3/4: Thực thi tự động {len(plan_res.tasks)} bước qua Antigravity (Hợp đồng Kiến trúc + Tự vá lỗi)...")
+        guard = GitGuard(
+            cfg.target_repo_path,
+            ignore_artifacts=cfg.guards.ignore_artifacts,
+            forbid_demo_patterns=cfg.guards.forbid_demo_patterns,
+            enforce_production_only=cfg.guards.enforce_production_only,
+        )
+        verifier = Verifier(cfg, guard)
+        compiler = PromptCompiler(cfg)
+        orch = Orchestrator(
+            cfg,
+            db,
+            guard,
+            verifier,
+            compiler,
+            on_event=self.emit_log,
+            stop_event=self.stop_event,
+            on_trace=self.emit_trace,
+            ask_user=self.request_user_input,
+        )
+        res = orch.run_sprint(auto_approve=True, sprint_name="sprint-1")
+        counts = res["summary"]["counts"]
+        gate = "PASS" if res.get("final_verify_passed", True) else "FAIL"
+        msg = f"Hoàn tất! Đã xong {counts.get('DONE', 0)}/{res['summary']['total_tasks']} phần (Cổng nghiệm thu cuối: {gate})."
+        with self._lock:
+            self.wizard_done_message = msg
+        self.emit_log("success" if gate == "PASS" and not res.get("halted_reason") else "warn", msg)
+
     def start_wizard_build(
         self,
         *,
@@ -592,56 +756,135 @@ class DesktopAppController:
         stack: str,
         prd_markdown: str,
         install_deps: bool = False,
+        acceptance_criteria: list[str] | None = None,
+        architecture_contract: str = "",
     ) -> bool:
         def _job() -> None:
+            self._execute_build_pipeline(
+                parent_dir=parent_dir,
+                project_name=project_name,
+                stack=stack,
+                prd_markdown=prd_markdown,
+                install_deps=install_deps,
+                acceptance_criteria=acceptance_criteria,
+                architecture_contract=architecture_contract,
+            )
+
+        return self._start_worker("building", "Đang tự động xây dựng sản phẩm...", _job)
+
+    def start_wizard_autopilot(
+        self,
+        *,
+        idea: str,
+        stack_hint: str = "auto",
+        parent_dir: str = "",
+        selected_model: str = "",
+        install_deps: bool = False,
+    ) -> bool:
+        """1-Click Express Autopilot for non-tech users: 1 sentence -> Interview defaults -> Spec + AC -> Build & Verify."""
+        def _job() -> None:
+            cfg = self.load_config()
+            if selected_model.strip():
+                for tier_key in cfg.agy.tiers:
+                    cfg.agy.tiers[tier_key].model = selected_model.strip()
+                self.save_config(cfg.model_dump())
+
+            with self._lock:
+                self.wizard_idea = idea
+                self.wizard_stack_hint = stack_hint
+                if parent_dir.strip():
+                    self.wizard_parent_dir = parent_dir.strip()
+                self.wizard_interview = None
+                self.wizard_spec = None
+                self.wizard_done_message = ""
+                self.wizard_step = 4
+
+            self.emit_log("info", "⚡ [1-Chạm Autopilot] Bước 1: Tự động phân tích ý tưởng & chọn cấu hình tối ưu...")
+            interviewer = ProductInterviewer(
+                cfg,
+                on_event=self.emit_log,
+                stop_event=self.stop_event,
+                on_trace=self.emit_trace,
+            )
+            iv = interviewer.generate_interview(idea, stack_hint=stack_hint)  # type: ignore[arg-type]
+            auto_answers = {
+                q.question: (q.default_answer or (q.options[0] if q.options else "Theo mặc định tốt nhất"))
+                for q in iv.questions
+            }
+            chosen_stack = iv.recommended_stack if stack_hint in ("auto", "") else stack_hint
+            with self._lock:
+                self.wizard_interview = iv.model_dump()
+
+            self.emit_log("info", f"⚡ [1-Chạm Autopilot] Bước 2: Thiết kế PRD, Hợp đồng Kiến trúc & Tiêu chí Nghiệm thu ({chosen_stack})...")
+            spec = interviewer.synthesize_spec(idea, auto_answers, chosen_stack)
+            with self._lock:
+                self.wizard_spec = spec.model_dump()
+
+            self._execute_build_pipeline(
+                parent_dir=parent_dir or self.wizard_parent_dir,
+                project_name=iv.suggested_project_name or "my-ai-product",
+                stack=chosen_stack,
+                prd_markdown=spec.prd_markdown,
+                install_deps=install_deps,
+                acceptance_criteria=spec.acceptance_criteria,
+                architecture_contract=spec.architecture_contract,
+            )
+
+        return self._start_worker("autopilot", "Đang chạy 1-Chạm Autopilot từ A-Z...", _job)
+
+    def start_wizard_quick_update(
+        self,
+        *,
+        request_text: str,
+        target_dir: str = "",
+        selected_model: str = "",
+    ) -> bool:
+        """1-Click non-tech upgrade/bugfix on the current or chosen project using a single plain-Vietnamese sentence."""
+        def _job() -> None:
+            cfg = self.load_config()
+            if selected_model.strip():
+                for tier_key in cfg.agy.tiers:
+                    cfg.agy.tiers[tier_key].model = selected_model.strip()
+            if target_dir.strip():
+                cfg.project.target_repo = Path(target_dir.strip()).expanduser().resolve().as_posix()
+
+            repo_path = cfg.target_repo_path
+            if not repo_path.is_dir():
+                self.emit_log("error", f"Thư mục dự án không tồn tại: {repo_path}")
+                return
+
             with self._lock:
                 self.wizard_step = 4
                 self.wizard_done_message = ""
 
-            base = Path(parent_dir.strip() or self.wizard_parent_dir).expanduser()
-            clean_name = "".join(ch if (ch.isalnum() or ch in ("-", "_")) else "-" for ch in project_name.strip()).strip("-")
-            target_dir = base if (not clean_name or base.name == clean_name) else (base / clean_name)
-            target_dir.mkdir(parents=True, exist_ok=True)
-
-            if isinstance(self.wizard_spec, dict):
-                try:
-                    spec_obj = ProductSpec.model_validate(self.wizard_spec)
-                    save_custom_blueprint_if_needed(target_dir, spec_obj, stack=stack)
-                    persist_project_contracts(target_dir, spec_obj)
-                except Exception:
-                    pass
-
-            self.emit_log("info", f"Bước 1/4: Dựng khung dự án 0-token tại {target_dir.as_posix()}...")
-            boot = bootstrap_project(target_dir, stack=stack, install_deps=install_deps)  # type: ignore[arg-type]
-
-            # Save openspec/prd.md and commit cleanly before sprint branch creation
-            openspec_dir = target_dir / "openspec"
-            openspec_dir.mkdir(parents=True, exist_ok=True)
-            prd_file = openspec_dir / "prd.md"
-            prd_file.write_text(prd_markdown, encoding="utf-8")
-            subprocess.run(["git", "add", "openspec/prd.md"], cwd=str(target_dir), capture_output=True, check=False)
-            if subprocess.run(["git", "status", "--porcelain"], cwd=str(target_dir), capture_output=True, text=True).stdout.strip():
-                subprocess.run(["git", "commit", "-m", "docs: add openspec/prd.md"], cwd=str(target_dir), capture_output=True, check=False)
-            ensure_git_repo_ready(target_dir)
-
-            # Update config.yaml cleanly to point at target_dir with auto-detected verify commands
-            cfg = self.load_config()
-            cfg.project.target_repo = target_dir.resolve().as_posix()
-            cfg.project.blueprint = boot.stack
-            if boot.verify_commands:
-                cfg.executor.default_verify_commands = boot.verify_commands
-            if boot.final_verify_commands:
-                cfg.sprint.final_verify_commands = boot.final_verify_commands
-            bp = get_blueprint(boot.stack, target_dir)
-            if bp is not None and bp.runtime_verify_commands:
-                cfg.sprint.runtime_verify_commands = list(bp.runtime_verify_commands)
+            ensure_git_repo_ready(repo_path)
+            det_stack, det_vc, det_fc, det_prev = detect_existing_stack(repo_path)
+            cfg.project.blueprint = det_stack
+            if det_vc and not cfg.executor.default_verify_commands:
+                cfg.executor.default_verify_commands = det_vc
+            if det_fc and not cfg.sprint.final_verify_commands:
+                cfg.sprint.final_verify_commands = det_fc
             self.save_config(cfg.model_dump())
 
             with self._lock:
-                self.wizard_preview_cmd = boot.preview_command
+                if det_prev:
+                    self.wizard_preview_cmd = det_prev
 
-            self.emit_log("info", "Bước 2/4: Lập kế hoạch công việc DAG từ đặc tả...")
+            cfg.auto_engine_dir.mkdir(parents=True, exist_ok=True)
+            update_prd = cfg.auto_engine_dir / "quick_update_prd.md"
+            update_prd.write_text(
+                f"# Yêu cầu nâng cấp / chỉnh sửa sản phẩm\n\n{request_text.strip()}\n",
+                encoding="utf-8",
+            )
+            self.emit_log("info", f"✨ Đang định vị file 0-token & lập kế hoạch nâng cấp trên {repo_path.name} ({det_stack})...")
             db = StateDB(cfg.state_db_path)
+            guard = GitGuard(
+                repo_path,
+                ignore_artifacts=cfg.guards.ignore_artifacts,
+                forbid_demo_patterns=cfg.guards.forbid_demo_patterns,
+                enforce_production_only=cfg.guards.enforce_production_only,
+            )
+            guard.ensure_git_exclude()
             indexer = RepoIndexer(cfg)
             planner = Planner(
                 cfg,
@@ -651,18 +894,13 @@ class DesktopAppController:
                 stop_event=self.stop_event,
                 on_trace=self.emit_trace,
             )
-            plan_res = planner.plan_from_prd(prd_file, auto_approve=True)
+            plan_res = planner.plan_from_prd(update_prd, auto_approve=True)
             if plan_res.status == "NEEDS_CLARIFICATION":
-                self.emit_log("warn", "Planner cần bổ sung thông tin trước khi chạy.")
+                with self._lock:
+                    self.clarifying_questions = list(plan_res.clarifying_questions)
+                self.emit_log("warn", "Yêu cầu cần làm rõ thêm trước khi sửa code.")
                 return
 
-            self.emit_log("info", f"Bước 3/4: Thực thi tự động {len(plan_res.tasks)} bước qua Antigravity...")
-            guard = GitGuard(
-                cfg.target_repo_path,
-                ignore_artifacts=cfg.guards.ignore_artifacts,
-                forbid_demo_patterns=cfg.guards.forbid_demo_patterns,
-                enforce_production_only=cfg.guards.enforce_production_only,
-            )
             verifier = Verifier(cfg, guard)
             compiler = PromptCompiler(cfg)
             orch = Orchestrator(
@@ -676,15 +914,85 @@ class DesktopAppController:
                 on_trace=self.emit_trace,
                 ask_user=self.request_user_input,
             )
-            res = orch.run_sprint(auto_approve=True, sprint_name="sprint-1")
+            res = orch.run_sprint(auto_approve=True, sprint_name="quick-update")
             counts = res["summary"]["counts"]
             gate = "PASS" if res.get("final_verify_passed", True) else "FAIL"
-            msg = f"Hoàn tất! Đã xong {counts.get('DONE', 0)}/{res['summary']['total_tasks']} phần (Kiểm thử cuối: {gate})."
+            msg = f"Đã cập nhật xong {counts.get('DONE', 0)}/{res['summary']['total_tasks']} phần (Kiểm thử cuối: {gate})."
             with self._lock:
                 self.wizard_done_message = msg
             self.emit_log("success" if gate == "PASS" and not res.get("halted_reason") else "warn", msg)
 
-        return self._start_worker("building", "Đang tự động xây dựng sản phẩm...", _job)
+        return self._start_worker("updating", "Đang tự động nâng cấp sản phẩm...", _job)
+
+    def launch_preview_command(self, custom_command: str = "") -> dict[str, str]:
+        """Launch the product preview command in a new visible terminal so non-tech users can run it in 1 click."""
+        cfg = self.load_config()
+        target = cfg.target_repo_path
+        if not target.is_dir():
+            raise ValueError(f"Thư mục dự án không tồn tại: {target}")
+        det_stack, _vc, _fc, det_prev = detect_existing_stack(target)
+        cmd_str = (custom_command.strip() or self.wizard_preview_cmd or det_prev).strip()
+        if not cmd_str:
+            self.open_target_folder()
+            return {"launched": "folder", "command": "", "stack": det_stack}
+
+        if os.name == "nt":
+            ps_cmd = (
+                f"Set-Location -LiteralPath '{target.as_posix()}'; "
+                f"Write-Host '=== DANG CHAY SAN PHAM ({det_stack}) ===' -ForegroundColor Green; "
+                f"Write-Host 'Lenh: {cmd_str}' -ForegroundColor Cyan; "
+                f"{cmd_str}"
+            )
+            subprocess.Popen(
+                ["cmd", "/c", "start", f"Auto-Engine Preview ({target.name})", "powershell", "-NoExit", "-Command", ps_cmd],
+                cwd=str(target),
+            )
+        else:
+            subprocess.Popen(cmd_str, shell=True, cwd=str(target))
+        self.emit_log("success", f"▶️ Đã khởi chạy sản phẩm tại `{target.name}` với lệnh: `{cmd_str}`")
+        return {"launched": "terminal", "command": cmd_str, "stack": det_stack}
+
+    def save_contracts_and_memory(
+        self,
+        *,
+        contracts_md: str | None = None,
+        handoff_md: str | None = None,
+        custom_blueprint_yaml: str | None = None,
+    ) -> dict[str, Any]:
+        cfg = self.load_config()
+        if not cfg.target_repo_path.is_dir():
+            raise ValueError(f"Thư mục target_repo không tồn tại: {cfg.target_repo_path}")
+        cfg.auto_engine_dir.mkdir(parents=True, exist_ok=True)
+        if contracts_md is not None:
+            (cfg.auto_engine_dir / "contracts.md").write_text(contracts_md.strip() + "\n" if contracts_md.strip() else "", encoding="utf-8")
+        if handoff_md is not None:
+            (cfg.auto_engine_dir / "handoff.md").write_text(handoff_md.strip() + "\n" if handoff_md.strip() else "", encoding="utf-8")
+        if custom_blueprint_yaml is not None and custom_blueprint_yaml.strip():
+            (cfg.auto_engine_dir / "blueprint.yaml").write_text(custom_blueprint_yaml.strip() + "\n", encoding="utf-8")
+        self.emit_log("success", "Đã lưu Hợp đồng Kiến trúc (`contracts.md`), Bộ nhớ (`handoff.md`) & Blueprint.")
+        return self.get_state_payload()
+
+    def start_repo_audit(self, max_commits: int = 10) -> bool:
+        """Run 0-token Historical Commit Replay Auditor on target_repo from the UI."""
+        def _job() -> None:
+            cfg = self.load_config()
+            repo = cfg.target_repo_path
+            if not (repo / ".git").exists():
+                self.emit_log("error", f"Thư mục không phải Git repo: {repo}")
+                return
+            self.emit_log("info", f"🔍 Đang chạy 0-Token Historical Commit Replay trên {max_commits} commits gần nhất của `{repo.name}`...")
+            report = audit_historical_commits(repo, max_commits=max(1, min(50, max_commits)), config=cfg)
+            md = report.to_markdown()
+            cfg.auto_engine_dir.mkdir(parents=True, exist_ok=True)
+            (cfg.auto_engine_dir / "ui_repo_audit.md").write_text(md, encoding="utf-8")
+            self.emit_log(
+                "success",
+                f"Hoàn tất Audit {report.commits_analyzed} commits: Recall={report.avg_recall:.1%}, "
+                f"Neighborhood={report.neighborhood_hit_rate:.1%}, WindowHit={report.window_hit_rate:.1%}, "
+                f"AvgTokens={report.avg_prompt_tokens}",
+            )
+
+        return self._start_worker("auditing", "Đang kiểm định 0-Token Replay Audit...", _job)
 
     def open_target_folder(self) -> str:
         cfg = self.load_config()
@@ -842,14 +1150,75 @@ def create_ui_app(config_path: Path) -> Starlette:
 
     async def api_wizard_build(request: Request) -> JSONResponse:
         body = await request.json()
+        raw_ac = body.get("acceptance_criteria")
+        ac_list = [str(x).strip() for x in raw_ac if str(x).strip()] if isinstance(raw_ac, list) else None
         ok = controller.start_wizard_build(
             parent_dir=str(body.get("parent_dir", "")),
             project_name=str(body.get("project_name", "my-ai-app")),
             stack=str(body.get("stack", "web_react")),
             prd_markdown=str(body.get("prd_markdown", "")),
             install_deps=bool(body.get("install_deps", False)),
+            acceptance_criteria=ac_list,
+            architecture_contract=str(body.get("architecture_contract", "")),
         )
         if not ok:
+            return JSONResponse({"error": "Đang có tác vụ nền khác chạy."}, status_code=409)
+        return JSONResponse({"started": True})
+
+    async def api_wizard_autopilot(request: Request) -> JSONResponse:
+        body = await request.json()
+        idea = str(body.get("idea", "")).strip()
+        if not idea:
+            return JSONResponse({"error": "Vui lòng mô tả ngắn ý tưởng sản phẩm."}, status_code=400)
+        ok = controller.start_wizard_autopilot(
+            idea=idea,
+            stack_hint=str(body.get("stack_hint", "auto")),
+            parent_dir=str(body.get("parent_dir", "")),
+            selected_model=str(body.get("selected_model", "")),
+            install_deps=bool(body.get("install_deps", False)),
+        )
+        if not ok:
+            return JSONResponse({"error": "Đang có tác vụ nền khác chạy."}, status_code=409)
+        return JSONResponse({"started": True})
+
+    async def api_wizard_quick_update(request: Request) -> JSONResponse:
+        body = await request.json()
+        req_txt = str(body.get("request_text", "")).strip()
+        if not req_txt:
+            return JSONResponse({"error": "Vui lòng nhập nội dung bạn muốn nâng cấp hoặc sửa lỗi."}, status_code=400)
+        ok = controller.start_wizard_quick_update(
+            request_text=req_txt,
+            target_dir=str(body.get("target_dir", "")),
+            selected_model=str(body.get("selected_model", "")),
+        )
+        if not ok:
+            return JSONResponse({"error": "Đang có tác vụ nền khác chạy."}, status_code=409)
+        return JSONResponse({"started": True})
+
+    async def api_preview_launch(request: Request) -> JSONResponse:
+        try:
+            body = await request.json() if request.headers.get("content-length") not in (None, "0") else {}
+            res = controller.launch_preview_command(str(body.get("command", "")))
+            return JSONResponse(res)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    async def api_save_contracts(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+            state = controller.save_contracts_and_memory(
+                contracts_md=body.get("contracts_md"),
+                handoff_md=body.get("handoff_md"),
+                custom_blueprint_yaml=body.get("custom_blueprint_yaml"),
+            )
+            return JSONResponse(state)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    async def api_audit_repo(request: Request) -> JSONResponse:
+        body = await request.json() if request.headers.get("content-length") not in (None, "0") else {}
+        commits = int(body.get("max_commits", 10))
+        if not controller.start_repo_audit(max_commits=commits):
             return JSONResponse({"error": "Đang có tác vụ nền khác chạy."}, status_code=409)
         return JSONResponse({"started": True})
 
@@ -909,7 +1278,12 @@ def create_ui_app(config_path: Path) -> Starlette:
         Route("/api/wizard/interview", api_wizard_interview, methods=["POST"]),
         Route("/api/wizard/synthesize", api_wizard_synthesize, methods=["POST"]),
         Route("/api/wizard/build", api_wizard_build, methods=["POST"]),
+        Route("/api/wizard/autopilot", api_wizard_autopilot, methods=["POST"]),
+        Route("/api/wizard/quick-update", api_wizard_quick_update, methods=["POST"]),
         Route("/api/wizard/reset", api_wizard_reset, methods=["POST"]),
+        Route("/api/preview/launch", api_preview_launch, methods=["POST"]),
+        Route("/api/contracts", api_save_contracts, methods=["POST"]),
+        Route("/api/audit-repo", api_audit_repo, methods=["POST"]),
         Route("/api/open-folder", api_open_folder, methods=["POST"]),
         Route("/api/agy/models", api_agy_models, methods=["GET"]),
         Route("/api/agy/login", api_agy_login, methods=["POST"]),
