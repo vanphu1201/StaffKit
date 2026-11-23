@@ -14,6 +14,7 @@ from typing import Any, Callable, Protocol
 import httpx
 
 from engine.blueprints import get_blueprint
+from engine.bootstrapper import reconcile_project_entrypoints
 from engine.bridges.agy_cli_executor import AgyCliExecutor, emit_trace
 from engine.bridges.agy_sdk_executor import AgySdkExecutor
 from engine.bridges.cli_executor import CliFallbackExecutor
@@ -858,6 +859,11 @@ class Orchestrator:
         runtime_cmds = list(self.config.sprint.runtime_verify_commands) or (
             list(bp.runtime_verify_commands) if bp is not None and bp.runtime_verify_commands else []
         )
+
+        if halted_reason is None and all_tasks_done:
+            reconciled = reconcile_project_entrypoints(self.config.target_repo_path)
+            if reconciled:
+                self._emit("info", f"🔧 Tự động đồng bộ entrypoint `package.json` (0-token): {', '.join(reconciled)}")
 
         if (
             halted_reason is None

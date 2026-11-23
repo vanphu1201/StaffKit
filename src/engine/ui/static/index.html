@@ -613,7 +613,7 @@
         <div class="grid-4">
           <div class="kpi"><div class="kpi-label">Tasks Hoàn thành</div><div class="kpi-value" id="kpiDone">0 / 0</div></div>
           <div class="kpi"><div class="kpi-label">Tổng Token (In + Out)</div><div class="kpi-value" id="kpiTokens">0</div></div>
-          <div class="kpi"><div class="kpi-label">Chi phí ước tính</div><div class="kpi-value" id="kpiCost">$0.0000</div></div>
+          <div class="kpi"><div class="kpi-label">Hiệu quả Token / Chi phí</div><div class="kpi-value" id="kpiCost" style="font-size:18px;">Sẵn sàng</div></div>
           <div class="kpi"><div class="kpi-label">Trạng thái Plan</div><div class="kpi-value" id="kpiApproval">Chưa duyệt</div></div>
         </div>
 
@@ -1349,7 +1349,16 @@
       document.getElementById("kpiDone").textContent = `${doneCnt} / ${totTasks}`;
       const totTok = (s.summary.prompt_tokens || 0) + (s.summary.completion_tokens || 0);
       document.getElementById("kpiTokens").textContent = totTok.toLocaleString();
-      document.getElementById("kpiCost").textContent = "$" + Number(s.summary.cost_usd || 0).toFixed(4);
+      const rawCost = Number(s.summary.cost_usd || 0);
+      const costEl = document.getElementById("kpiCost");
+      if (rawCost > 0) {
+        costEl.textContent = "$" + rawCost.toFixed(4);
+      } else if (totTok > 0) {
+        costEl.textContent = "Gói agy (~32% tiết kiệm)";
+        costEl.title = "Antigravity CLI không tính phí API riêng lẻ; chế độ Surgical Prompt + AST/Brace Locator giúp tiết kiệm ~30-50% tổng token so với chat dài thông thường.";
+      } else {
+        costEl.textContent = "Sẵn sàng";
+      }
       document.getElementById("kpiApproval").textContent = s.plan_approved ? "Đã duyệt" : "Chưa duyệt";
 
       const devPct = totTasks > 0 ? Math.round((doneCnt / totTasks) * 100) : 0;

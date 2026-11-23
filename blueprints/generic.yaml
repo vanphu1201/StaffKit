@@ -8,6 +8,7 @@ runtime_verify_commands: []
 preview_command: ""
 quality_rules:
   - "Xây dựng sản phẩm chạy thật theo đúng yêu cầu; tránh tạo dữ liệu/nút giả lập khi sản phẩm cần lưu trữ hoặc tích hợp thật."
+  - "Nếu sản phẩm có cả Backend API và Frontend Web, hãy cấu hình Backend tự phục vụ thư mục build giao diện (`dist/` hoặc `dist/web/`) trên cùng 1 cổng duy nhất và đảm bảo script `dev`/`start`/`build` trong `package.json` trỏ chính xác tới tệp thực tế tồn tại."
   - "Tự thiết lập lệnh kiểm thử/build sạch sẽ cho công nghệ bạn chọn."
 forbid_patterns: []
 fallback_template: generic

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -561,9 +562,76 @@ def bootstrap_project(
     )
 
 
+_SCRIPT_FILE_RE = re.compile(r"\b((?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\.(?:ts|tsx|js|mjs|cjs))\b")
+
+
+def reconcile_project_entrypoints(project_dir: Path) -> list[str]:
+    """0-token check that reconciles drifted `package.json` script entrypoints & Vite config paths."""
+    target = project_dir.resolve()
+    pkg_path = target / "package.json"
+    if not pkg_path.is_file():
+        return []
+    try:
+        pkg = json.loads(pkg_path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    scripts = pkg.get("scripts")
+    if not isinstance(scripts, dict) or not scripts:
+        return []
+
+    fixes: list[str] = []
+    has_sub_vite = (target / "web" / "vite.config.ts").is_file() and not (target / "vite.config.ts").is_file()
+
+    for key, raw_cmd in list(scripts.items()):
+        if not isinstance(raw_cmd, str):
+            continue
+        cmd = raw_cmd
+        for m in _SCRIPT_FILE_RE.finditer(raw_cmd):
+            rel = m.group(1)
+            if (target / rel).is_file():
+                continue
+            p = Path(rel)
+            candidates = [
+                p.parent / "app.ts",
+                p.parent / "server.ts",
+                p.parent / "main.ts",
+                p.parent / "src" / p.name,
+                p.parent / "src" / "app.ts",
+                p.parent / "src" / "index.ts",
+            ]
+            for cand in candidates:
+                cand_posix = cand.as_posix()
+                if (target / cand_posix).is_file():
+                    cmd = cmd.replace(rel, cand_posix)
+                    fixes.append(f"scripts.{key}: `{rel}` -> `{cand_posix}`")
+                    break
+
+        if has_sub_vite and "vite" in cmd and "--config" not in cmd:
+            if "vite build" in cmd:
+                cmd = cmd.replace("vite build", "vite build --config web/vite.config.ts")
+                fixes.append(f"scripts.{key}: added `--config web/vite.config.ts`")
+            elif cmd.strip() == "vite":
+                cmd = "vite --config web/vite.config.ts"
+                fixes.append(f"scripts.{key}: added `--config web/vite.config.ts`")
+
+        scripts[key] = cmd
+
+    if "dev" in scripts and "start" not in scripts and isinstance(scripts["dev"], str):
+        start_cmd = scripts["dev"].replace("tsx watch ", "tsx ").replace("nodemon ", "node ")
+        scripts["start"] = start_cmd
+        fixes.append(f"scripts.start: added `{start_cmd}`")
+
+    if fixes:
+        pkg["scripts"] = scripts
+        pkg_path.write_text(json.dumps(pkg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return fixes
+
+
 def generate_nontech_delivery_guide(project_dir: Path, *, write_files: bool = True) -> dict[str, Any]:
     """Generate 0-token plain-Vietnamese usage guide (`HUONG_DAN_SU_DUNG.md`) and 1-click `CHAY_SAN_PHAM.bat`."""
     target = project_dir.resolve()
+    if write_files and target.is_dir():
+        reconcile_project_entrypoints(target)
     stack, _vc, _fc, det_preview = detect_existing_stack(target)
     run_cmd = det_preview or ""
     web_url = ""

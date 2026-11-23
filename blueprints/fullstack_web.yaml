@@ -13,6 +13,7 @@ runtime_verify_commands: []
 preview_command: "npm run dev"
 quality_rules:
   - "Dữ liệu & xác thực phải chạy thật qua Backend API + Database (tránh dùng localStorage làm kho chính hoặc hardcode tài khoản demo)."
+  - "Máy chủ Backend PHẢI phục vụ sẵn thư mục build giao diện tĩnh (`dist/` hoặc `dist/web/` nếu tồn tại) trên cùng 1 cổng duy nhất và đảm bảo script `dev`/`start`/`build` trong `package.json` trỏ đúng tệp thực tế, để người dùng Non-Tech chỉ cần chạy 1 lệnh duy nhất là mở được cả giao diện lẫn API."
   - "Giao diện editorial sạch sẽ, tiết chế; tránh gradient tím-xanh đại trà hay icon lấp lánh AI; đặt chiều cao viewport rõ ràng cho vùng hiển thị chính hoặc canvas."
   - "Với nội dung trực quan hoặc tài sản 3D/ảnh, ưu tiên nạp file thực tế hoặc tải lên thật thay vì ghép hình khối thô."
 forbid_patterns: []

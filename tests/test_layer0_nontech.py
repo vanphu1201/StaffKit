@@ -175,3 +175,48 @@ def test_inline_json_schema_removes_refs_and_defs() -> None:
         dumped = json.dumps(inline_json_schema(raw_schema))
         assert '"$ref"' not in dumped
         assert '"$defs"' not in dumped
+
+
+def test_reconcile_project_entrypoints_and_nontech_delivery_guide(tmp_path: Path) -> None:
+    from engine.bootstrapper import generate_nontech_delivery_guide, reconcile_project_entrypoints
+
+    proj = tmp_path / "fullstack-demo"
+    (proj / "server" / "src").mkdir(parents=True)
+    (proj / "cli" / "src").mkdir(parents=True)
+    (proj / "web").mkdir(parents=True)
+    (proj / "dist" / "web").mkdir(parents=True)
+
+    (proj / "server" / "src" / "app.ts").write_text("console.log('ok')\n", encoding="utf-8")
+    (proj / "cli" / "src" / "batch.ts").write_text("console.log('batch')\n", encoding="utf-8")
+    (proj / "web" / "vite.config.ts").write_text("export default {}\n", encoding="utf-8")
+    (proj / "dist" / "web" / "index.html").write_text("<html></html>\n", encoding="utf-8")
+    (proj / "package.json").write_text(
+        json.dumps(
+            {
+                "name": "fullstack-demo",
+                "scripts": {
+                    "dev": "tsx watch server/src/index.ts",
+                    "dev:web": "vite",
+                    "build": "tsc --noEmit && vite build",
+                    "batch": "tsx cli/batch.ts",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    fixes = reconcile_project_entrypoints(proj)
+    assert len(fixes) >= 4
+    updated_pkg = json.loads((proj / "package.json").read_text(encoding="utf-8"))
+    assert updated_pkg["scripts"]["dev"] == "tsx watch server/src/app.ts"
+    assert updated_pkg["scripts"]["start"] == "tsx server/src/app.ts"
+    assert updated_pkg["scripts"]["batch"] == "tsx cli/src/batch.ts"
+    assert "--config web/vite.config.ts" in updated_pkg["scripts"]["build"]
+    assert "--config web/vite.config.ts" in updated_pkg["scripts"]["dev:web"]
+
+    guide = generate_nontech_delivery_guide(proj, write_files=True)
+    assert guide["run_command"] == "npm start"
+    assert guide["web_url"] == "http://127.0.0.1:3001"
+    assert (proj / "CHAY_SAN_PHAM.bat").is_file()
+    assert (proj / "HUONG_DAN_SU_DUNG.md").is_file()
+
