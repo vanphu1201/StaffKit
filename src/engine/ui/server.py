@@ -920,6 +920,18 @@ class DesktopAppController:
                 enforce_production_only=cfg.guards.enforce_production_only,
             )
             guard.ensure_git_exclude()
+            if guard.has_changes():
+                tracked, untracked = guard.get_changed_files()
+                all_dirty = tracked + untracked
+                if all_dirty:
+                    subprocess.run(["git", "add", "--", *all_dirty], cwd=str(repo_path), capture_output=True, check=False)
+                    subprocess.run(
+                        ["git", "commit", "-m", "chore: snapshot current working files before quick update"],
+                        cwd=str(repo_path),
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.emit_log("info", f"📦 Đã tự động lưu điểm khôi phục (Git snapshot) cho {len(all_dirty)} file thay đổi trước khi nâng cấp.")
             indexer = RepoIndexer(cfg)
             planner = Planner(
                 cfg,

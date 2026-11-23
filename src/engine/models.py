@@ -156,6 +156,13 @@ class GuardsConfig(BaseModel):
             "*.tsbuildinfo",
             ".mypy_cache/**",
             ".ruff_cache/**",
+            "CHAY_SAN_PHAM.bat",
+            "HUONG_DAN_SU_DUNG.md",
+            "**/*.db",
+            "**/*.db-shm",
+            "**/*.db-wal",
+            "**/*.sqlite",
+            "**/*.sqlite3",
         ]
     )
 
