@@ -981,13 +981,13 @@ class DesktopAppController:
                 self.emit_log("error", f"Thư mục không phải Git repo: {repo}")
                 return
             self.emit_log("info", f"🔍 Đang chạy 0-Token Historical Commit Replay trên {max_commits} commits gần nhất của `{repo.name}`...")
-            report = audit_historical_commits(repo, max_commits=max(1, min(50, max_commits)), config=cfg)
+            report = audit_historical_commits(repo, limit=max(1, min(50, max_commits)), config=cfg)
             md = report.to_markdown()
             cfg.auto_engine_dir.mkdir(parents=True, exist_ok=True)
             (cfg.auto_engine_dir / "ui_repo_audit.md").write_text(md, encoding="utf-8")
             self.emit_log(
                 "success",
-                f"Hoàn tất Audit {report.commits_analyzed} commits: Recall={report.avg_recall:.1%}, "
+                f"Hoàn tất Audit {report.commits_evaluated} commits: Recall={report.avg_recall:.1%}, "
                 f"Neighborhood={report.neighborhood_hit_rate:.1%}, WindowHit={report.window_hit_rate:.1%}, "
                 f"AvgTokens={report.avg_prompt_tokens}",
             )

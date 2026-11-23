@@ -141,3 +141,16 @@ def test_ui_index_state_config_approve_and_rollback(tmp_path: Path) -> None:
     assert client.post("/api/wizard/autopilot", json={"idea": "  "}).status_code == 400
     assert client.post("/api/wizard/quick-update", json={"request_text": ""}).status_code == 400
 
+    aud_res = client.post("/api/audit-repo", json={"max_commits": 3})
+    assert aud_res.status_code == 200
+    assert aud_res.json()["started"] is True
+    for _ in range(30):
+        st_aud = client.get("/api/state").json()
+        if st_aud["worker"]["status"] == "idle" and st_aud["engine_insights"]["audit_report_md"]:
+            break
+        import time
+
+        time.sleep(0.05)
+    assert "0-Token Historical Replay Audit" in client.get("/api/state").json()["engine_insights"]["audit_report_md"]
+
+
