@@ -1,0 +1,367 @@
+id: eval-saas-subscription-engine
+title: "Enterprise SaaS Subscription, Proration, Ledger & Dunning Engine (18-File Repo)"
+domain: product_engineering
+blueprint: python_app
+prd_markdown: |
+  Build the complete Enterprise SaaS Subscription, Mid-Cycle Proration, Invoice Ledger & Dunning Engine across `src/models/subscription.py`, `src/repositories/ledger_repo.py`, and `src/services/subscription_service.py` while keeping all existing auth, analytics, and currency tests (`tests/test_platform_regression.py`) passing.
+
+  ## Architecture & Interface Contract
+  - `src/models/subscription.py`:
+    + `PlanTier`: dataclass with `plan_id: str`, `base_price_cents: int`, `per_seat_cents: int`.
+    + `Subscription`: dataclass with `sub_id: str`, `customer_id: str`, `plan_id: str`, `seats: int`, `status: str = "ACTIVE"`, `consecutive_failures: int = 0`, `credit_balance_cents: int = 0`.
+    + `Invoice`: dataclass with `invoice_id: str`, `sub_id: str`, `subtotal_cents: int`, `discount_cents: int`, `tax_cents: int`, `credit_applied_cents: int`, `amount_due_cents: int`, `status: str = "OPEN"`, `paid_tx_ids: list[str] = field(default_factory=list)`.
+  - `src/repositories/ledger_repo.py`:
+    + `LedgerRepository`: store & retrieve `PlanTier`, `Subscription`, and `Invoice` objects in memory (`save_plan`, `get_plan`, `save_subscription`, `get_subscription`, `save_invoice`, `get_invoice`, `list_invoices_for_sub(sub_id: str) -> list[Invoice]`).
+  - `src/services/subscription_service.py` (`SubscriptionService(repo: LedgerRepository | None = None)`):
+    + `register_plan(plan_id: str, base_price_cents: int, per_seat_cents: int) -> PlanTier`
+    + `create_subscription(sub_id: str, customer_id: str, plan_id: str, seats: int) -> Subscription`
+    + `change_plan_prorated(sub_id: str, new_plan_id: str, new_seats: int, days_remaining: int, total_days_in_cycle: int = 30) -> int`:
+      * Compute old full-cycle cost = `old_plan.base_price_cents + old_plan.per_seat_cents * old_seats` and new full-cycle cost = `new_plan.base_price_cents + new_plan.per_seat_cents * new_seats`.
+      * Prorated delta in integer cents = `((new_cost - old_cost) * days_remaining) // total_days_in_cycle`.
+      * Update subscription's `plan_id` and `seats`.
+      * If `delta < 0` (downgrade credit), add `abs(delta)` to `sub.credit_balance_cents` and return `delta`. If `delta >= 0`, return `delta`.
+    + `generate_invoice(invoice_id: str, sub_id: str, extra_charge_cents: int = 0, discount_bps: int = 0, tax_bps: int = 0) -> Invoice`:
+      * Base cycle charge = `plan.base_price_cents + plan.per_seat_cents * sub.seats + extra_charge_cents`.
+      * `discount_cents = min(subtotal_cents, (subtotal_cents * discount_bps) // 10_000)`.
+      * `taxable_cents = subtotal_cents - discount_cents`.
+      * `tax_cents = (taxable_cents * tax_bps) // 10_000`.
+      * Gross total = `taxable_cents + tax_cents`.
+      * Automatically apply available `sub.credit_balance_cents`: `credit_applied_cents = min(sub.credit_balance_cents, gross_total)`, deduct `credit_applied_cents` from `sub.credit_balance_cents`, and set `amount_due_cents = gross_total - credit_applied_cents`.
+      * If `amount_due_cents == 0`, set invoice `status = "PAID"`, else `"OPEN"`.
+    + `record_payment(invoice_id: str, tx_id: str) -> Invoice`:
+      * Idempotent on `tx_id`: if `tx_id` is already in `invoice.paid_tx_ids` or invoice is already `"PAID"`, return the invoice without error.
+      * Mark invoice `status = "PAID"`, append `tx_id` to `paid_tx_ids`, reset subscription `consecutive_failures = 0`, and if subscription status was `"PAST_DUE"` or `"SUSPENDED"`, restore it to `"ACTIVE"`.
+    + `record_failed_payment(invoice_id: str) -> Subscription`:
+      * Increment subscription's `consecutive_failures` by 1 (raise `ValueError` if invoice is already `"PAID"`).
+      * Dunning rules: if `consecutive_failures >= 5`, set `sub.status = "SUSPENDED"`; else if `consecutive_failures >= 3`, set `sub.status = "PAST_DUE"`.
+    + `get_customer_summary(sub_id: str) -> dict`:
+      * Return `{"sub_id": sub.sub_id, "status": sub.status, "plan_id": sub.plan_id, "seats": sub.seats, "credit_balance_cents": sub.credit_balance_cents, "open_invoices_cents": sum(inv.amount_due_cents for inv in invoices if inv.status == "OPEN"), "paid_invoices_count": sum(1 for inv in invoices if inv.status == "PAID")}`.
+
+  ## Acceptance Criteria (Must Pass All Edge Cases)
+  - AC-1: `register_plan` and `create_subscription` must reject empty IDs, negative prices, or `seats <= 0` with `ValueError`.
+  - AC-2: `change_plan_prorated` must reject `seats <= 0`, `total_days_in_cycle <= 0`, `days_remaining < 0`, `days_remaining > total_days_in_cycle`, or `sub.status == "SUSPENDED"` with `ValueError`.
+  - AC-3: Downgrading a plan mid-cycle must credit `abs(delta)` to `sub.credit_balance_cents`, and the next `generate_invoice` must automatically consume that credit up to the invoice gross total.
+  - AC-4: `generate_invoice` must reject `extra_charge_cents < 0`, `discount_bps < 0`, `discount_bps > 10_000`, or `tax_bps < 0` with `ValueError`, and auto-mark 0-due invoices as `"PAID"`.
+  - AC-5: `record_failed_payment` must transition subscription status to `"PAST_DUE"` on the 3rd consecutive failure and `"SUSPENDED"` on the 5th consecutive failure, while `record_payment` must be idempotent on `tx_id` and restore `"ACTIVE"` status with `consecutive_failures = 0`.
+  - AC-6: Existing platform services (`auth`, `analytics`, `currency`) must remain 100% intact.
+starter_files:
+  "src/__init__.py": ""
+  "src/models/__init__.py": ""
+  "src/models/user.py": |
+    from dataclasses import dataclass
+
+    @dataclass
+    class UserAccount:
+        user_id: str
+        email: str
+        role: str = "member"
+        active: bool = True
+  "src/models/audit.py": |
+    from dataclasses import dataclass
+
+    @dataclass
+    class AuditEntry:
+        actor_id: str
+        action: str
+        resource_id: str
+  "src/models/subscription.py": |
+    from dataclasses import dataclass, field
+
+    @dataclass
+    class PlanTier:
+        plan_id: str
+        base_price_cents: int
+        per_seat_cents: int
+
+    @dataclass
+    class Subscription:
+        sub_id: str
+        customer_id: str
+        plan_id: str
+        seats: int
+        status: str = "ACTIVE"
+        consecutive_failures: int = 0
+        credit_balance_cents: int = 0
+
+    @dataclass
+    class Invoice:
+        invoice_id: str
+        sub_id: str
+        subtotal_cents: int
+        discount_cents: int
+        tax_cents: int
+        credit_applied_cents: int
+        amount_due_cents: int
+        status: str = "OPEN"
+        paid_tx_ids: list[str] = field(default_factory=list)
+  "src/utils/__init__.py": ""
+  "src/utils/validators.py": |
+    def require_non_empty(val: str, field_name: str) -> str:
+        if not isinstance(val, str) or not val.strip():
+            raise ValueError(f"{field_name} must be a non-empty string")
+        return val.strip()
+
+    def require_positive_int(val: int, field_name: str) -> int:
+        if not isinstance(val, int) or isinstance(val, bool) or val <= 0:
+            raise ValueError(f"{field_name} must be > 0")
+        return val
+
+    def require_non_negative_int(val: int, field_name: str) -> int:
+        if not isinstance(val, int) or isinstance(val, bool) or val < 0:
+            raise ValueError(f"{field_name} must be >= 0")
+        return val
+  "src/utils/currency.py": |
+    def format_usd_cents(cents: int) -> str:
+        sign = "-" if cents < 0 else ""
+        abs_c = abs(cents)
+        return f"{sign}${abs_c // 100}.{abs_c % 100:02d}"
+
+    def apply_bps_floor(amount_cents: int, bps: int) -> int:
+        return (amount_cents * bps) // 10_000
+  "src/auth/__init__.py": ""
+  "src/auth/token_guard.py": |
+    import hashlib
+
+    def sign_session_token(user_id: str, secret: str) -> str:
+        digest = hashlib.sha256(f"{user_id}:{secret}".encode("utf-8")).hexdigest()[:24]
+        return f"tok_{user_id}_{digest}"
+
+    def verify_session_token(token: str, user_id: str, secret: str) -> bool:
+        return token == sign_session_token(user_id, secret)
+  "src/audit/__init__.py": ""
+  "src/audit/audit_log.py": |
+    from src.models.audit import AuditEntry
+
+    class AuditLogger:
+        def __init__(self) -> None:
+            self._entries: list[AuditEntry] = []
+
+        def record(self, actor_id: str, action: str, resource_id: str) -> AuditEntry:
+            entry = AuditEntry(actor_id=actor_id, action=action, resource_id=resource_id)
+            self._entries.append(entry)
+            return entry
+
+        def list_for_resource(self, resource_id: str) -> list[AuditEntry]:
+            return [e for e in self._entries if e.resource_id == resource_id]
+  "src/notifications/__init__.py": ""
+  "src/notifications/email_gateway.py": |
+    class EmailGateway:
+        def __init__(self) -> None:
+            self.outbox: list[dict[str, str]] = []
+
+        def send_dunning_notice(self, customer_id: str, sub_id: str, status: str) -> None:
+            self.outbox.append({"customer_id": customer_id, "sub_id": sub_id, "status": status})
+  "src/analytics/__init__.py": ""
+  "src/analytics/metrics.py": |
+    def compute_mrr_cents(subscriptions: list[tuple[int, int, int]]) -> int:
+        return sum(base + per_seat * seats for base, per_seat, seats in subscriptions)
+
+    def compute_net_retention_bps(starting_mrr: int, ending_mrr: int) -> int:
+        if starting_mrr <= 0:
+            return 0
+        return (ending_mrr * 10_000) // starting_mrr
+  "src/repositories/__init__.py": ""
+  "src/repositories/ledger_repo.py": |
+    from src.models.subscription import Invoice, PlanTier, Subscription
+
+    class LedgerRepository:
+        def __init__(self) -> None:
+            self._plans: dict[str, PlanTier] = {}
+            self._subs: dict[str, Subscription] = {}
+            self._invoices: dict[str, Invoice] = {}
+
+        def save_plan(self, plan: PlanTier) -> None:
+            self._plans[plan.plan_id] = plan
+
+        def get_plan(self, plan_id: str) -> PlanTier | None:
+            return self._plans.get(plan_id)
+
+        def save_subscription(self, sub: Subscription) -> None:
+            self._subs[sub.sub_id] = sub
+
+        def get_subscription(self, sub_id: str) -> Subscription | None:
+            return self._subs.get(sub_id)
+
+        def save_invoice(self, invoice: Invoice) -> None:
+            self._invoices[invoice.invoice_id] = invoice
+
+        def get_invoice(self, invoice_id: str) -> Invoice | None:
+            return self._invoices.get(invoice_id)
+
+        def list_invoices_for_sub(self, sub_id: str) -> list[Invoice]:
+            return [inv for inv in self._invoices.values() if inv.sub_id == sub_id]
+  "src/services/__init__.py": ""
+  "src/services/subscription_service.py": |
+    from src.models.subscription import Invoice, PlanTier, Subscription
+    from src.repositories.ledger_repo import LedgerRepository
+
+    class SubscriptionService:
+        def __init__(self, repo: LedgerRepository | None = None) -> None:
+            self.repo = repo or LedgerRepository()
+
+        def register_plan(self, plan_id: str, base_price_cents: int, per_seat_cents: int) -> PlanTier:
+            raise NotImplementedError
+
+        def create_subscription(self, sub_id: str, customer_id: str, plan_id: str, seats: int) -> Subscription:
+            raise NotImplementedError
+
+        def change_plan_prorated(
+            self,
+            sub_id: str,
+            new_plan_id: str,
+            new_seats: int,
+            days_remaining: int,
+            total_days_in_cycle: int = 30,
+        ) -> int:
+            raise NotImplementedError
+
+        def generate_invoice(
+            self,
+            invoice_id: str,
+            sub_id: str,
+            extra_charge_cents: int = 0,
+            discount_bps: int = 0,
+            tax_bps: int = 0,
+        ) -> Invoice:
+            raise NotImplementedError
+
+        def record_payment(self, invoice_id: str, tx_id: str) -> Invoice:
+            raise NotImplementedError
+
+        def record_failed_payment(self, invoice_id: str) -> Subscription:
+            raise NotImplementedError
+
+        def get_customer_summary(self, sub_id: str) -> dict:
+            raise NotImplementedError
+  "tests/__init__.py": ""
+  "tests/test_platform_regression.py": |
+    from src.analytics.metrics import compute_mrr_cents, compute_net_retention_bps
+    from src.auth.token_guard import sign_session_token, verify_session_token
+    from src.utils.currency import format_usd_cents
+
+    def test_platform_helpers_regression() -> None:
+        tok = sign_session_token("u1", "sec")
+        assert verify_session_token(tok, "u1", "sec") is True
+        assert format_usd_cents(1250) == "$12.50"
+        assert compute_mrr_cents([(1000, 200, 5)]) == 2000
+        assert compute_net_retention_bps(2000, 2500) == 12500
+  "tests/test_subscription_public.py": |
+    from src.services.subscription_service import SubscriptionService
+
+    def test_subscription_service_smoke() -> None:
+        svc = SubscriptionService()
+        assert svc.repo is not None
+public_verify_commands:
+  - "{python} -m pytest tests/test_platform_regression.py tests/test_subscription_public.py -q"
+hidden_files:
+  "hidden_tests/test_hidden_subscription_acceptance.py": |
+    import pytest
+    from src.services.subscription_service import SubscriptionService
+
+    def _setup_service() -> SubscriptionService:
+        svc = SubscriptionService()
+        svc.register_plan("STARTER", base_price_cents=2000, per_seat_cents=500)
+        svc.register_plan("ENTERPRISE", base_price_cents=10000, per_seat_cents=1500)
+        return svc
+
+    def test_ac1_plan_and_subscription_validation() -> None:
+        svc = _setup_service()
+        with pytest.raises(ValueError):
+            svc.register_plan("", 1000, 100)
+        with pytest.raises(ValueError):
+            svc.register_plan("BAD", -10, 100)
+        with pytest.raises(ValueError):
+            svc.create_subscription("SUB-1", "CUST-1", "UNKNOWN_PLAN", 5)
+        with pytest.raises(ValueError):
+            svc.create_subscription("SUB-1", "CUST-1", "STARTER", 0)
+
+    def test_ac2_proration_upgrade_and_boundary_validation() -> None:
+        svc = _setup_service()
+        svc.create_subscription("SUB-1", "CUST-1", "STARTER", seats=4)  # old cost = 2000 + 2000 = 4000
+        # Upgrade to ENTERPRISE with 6 seats (new cost = 10000 + 9000 = 19000), 15/30 days left -> +7500
+        delta = svc.change_plan_prorated("SUB-1", "ENTERPRISE", new_seats=6, days_remaining=15, total_days_in_cycle=30)
+        assert delta == 7500
+        with pytest.raises(ValueError):
+            svc.change_plan_prorated("SUB-1", "ENTERPRISE", new_seats=6, days_remaining=35, total_days_in_cycle=30)
+        with pytest.raises(ValueError):
+            svc.change_plan_prorated("SUB-1", "ENTERPRISE", new_seats=0, days_remaining=10, total_days_in_cycle=30)
+
+    def test_ac3_downgrade_credit_automatically_applied_to_next_invoice() -> None:
+        svc = _setup_service()
+        svc.create_subscription("SUB-1", "CUST-1", "ENTERPRISE", seats=4)  # cost = 16000
+        # Downgrade to STARTER with 2 seats (cost = 3000) with 15/30 days remaining -> delta = -6500
+        delta = svc.change_plan_prorated("SUB-1", "STARTER", new_seats=2, days_remaining=15, total_days_in_cycle=30)
+        assert delta == -6500
+        sub = svc.repo.get_subscription("SUB-1")
+        assert sub is not None and sub.credit_balance_cents == 6500
+
+        # Next invoice on STARTER (3000 cents) should be completely covered by credit -> PAID, remaining credit 3500
+        inv1 = svc.generate_invoice("INV-1", "SUB-1")
+        assert inv1.credit_applied_cents == 3000
+        assert inv1.amount_due_cents == 0
+        assert inv1.status == "PAID"
+        assert svc.repo.get_subscription("SUB-1").credit_balance_cents == 3500
+
+    def test_ac4_invoice_discount_tax_and_validation() -> None:
+        svc = _setup_service()
+        svc.create_subscription("SUB-1", "CUST-1", "STARTER", seats=6)  # base 2000 + 3000 = 5000
+        # extra 1000 -> subtotal 6000; 10% discount (1000 bps) -> 600 discount, taxable 5400; 8% tax (800 bps) -> 432
+        inv = svc.generate_invoice("INV-10", "SUB-1", extra_charge_cents=1000, discount_bps=1000, tax_bps=800)
+        assert inv.subtotal_cents == 6000
+        assert inv.discount_cents == 600
+        assert inv.tax_cents == 432
+        assert inv.amount_due_cents == 5832
+        assert inv.status == "OPEN"
+
+        with pytest.raises(ValueError):
+            svc.generate_invoice("INV-BAD", "SUB-1", discount_bps=12000)
+
+    def test_ac5_dunning_state_machine_and_idempotent_payment_recovery() -> None:
+        svc = _setup_service()
+        svc.create_subscription("SUB-1", "CUST-1", "STARTER", seats=2)
+        inv = svc.generate_invoice("INV-1", "SUB-1")
+        assert inv.status == "OPEN"
+
+        # 3 failures -> PAST_DUE
+        svc.record_failed_payment("INV-1")
+        svc.record_failed_payment("INV-1")
+        sub = svc.record_failed_payment("INV-1")
+        assert sub.status == "PAST_DUE"
+        assert sub.consecutive_failures == 3
+
+        # 5 failures -> SUSPENDED
+        svc.record_failed_payment("INV-1")
+        sub = svc.record_failed_payment("INV-1")
+        assert sub.status == "SUSPENDED"
+        assert sub.consecutive_failures == 5
+
+        # Suspended subscription cannot change plan
+        with pytest.raises(ValueError):
+            svc.change_plan_prorated("SUB-1", "ENTERPRISE", 4, days_remaining=10)
+
+        # Payment restores ACTIVE and is idempotent on tx_id
+        paid_inv = svc.record_payment("INV-1", "TX-999")
+        assert paid_inv.status == "PAID"
+        assert paid_inv.paid_tx_ids == ["TX-999"]
+        paid_again = svc.record_payment("INV-1", "TX-999")
+        assert paid_again.paid_tx_ids == ["TX-999"]
+
+        sub_after = svc.repo.get_subscription("SUB-1")
+        assert sub_after.status == "ACTIVE"
+        assert sub_after.consecutive_failures == 0
+
+    def test_ac6_customer_summary_aggregation() -> None:
+        svc = _setup_service()
+        svc.create_subscription("SUB-1", "CUST-1", "STARTER", seats=2)  # 3000/cycle
+        svc.generate_invoice("INV-1", "SUB-1")
+        svc.record_payment("INV-1", "TX-1")
+        svc.generate_invoice("INV-2", "SUB-1", extra_charge_cents=500)
+        summary = svc.get_customer_summary("SUB-1")
+        assert summary["sub_id"] == "SUB-1"
+        assert summary["status"] == "ACTIVE"
+        assert summary["open_invoices_cents"] == 3500
+        assert summary["paid_invoices_count"] == 1
+hidden_pass_to_pass_commands:
+  - "{python} -m pytest tests/test_platform_regression.py tests/test_subscription_public.py -q"
+hidden_fail_to_pass_commands:
+  - "{python} -m pytest hidden_tests/test_hidden_subscription_acceptance.py -v"

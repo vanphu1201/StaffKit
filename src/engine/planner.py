@@ -36,7 +36,7 @@ _MD_HEADING_RE = re.compile(r"^\s*#{2,3}\s+\S")
 _MD_BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\S")
 
 
-def synthesize_deterministic_contract(prd_text: str, tasks: list[TaskSpec], max_lines: int = 44) -> str:
+def synthesize_deterministic_contract(prd_text: str, tasks: list[TaskSpec], max_lines: int = 55) -> str:
     """Build a 0-token shared Architecture, Module Ownership & Acceptance Contract for multi-task DAG sprints."""
     if len(tasks) < 2:
         return ""
@@ -53,22 +53,22 @@ def synthesize_deterministic_contract(prd_text: str, tasks: list[TaskSpec], max_
         if not s:
             continue
         if re.match(r"^(?:[-*+]\s*)?AC-\d+\b", s, re.IGNORECASE):
-            ac_lines.append(s[:160])
+            ac_lines.append(s[:380])
             continue
         if (
             s.startswith("|")
             or "`" in s
             or any(k in s.lower() for k in ("schema", "api", "endpoint", "route", "model", "return", "->"))
         ):
-            spec_lines.append(s[:160])
-            if len(spec_lines) >= 16:
+            spec_lines.append(s[:380])
+            if len(spec_lines) >= 24:
                 break
     if spec_lines:
         lines.append("\n## Shared Interfaces & Data Contracts")
         lines.extend(spec_lines)
     if ac_lines:
         lines.append("\n## Acceptance & Edge-Case Checklist")
-        lines.extend(ac_lines[:10])
+        lines.extend(ac_lines[:12])
     return "\n".join(lines[:max_lines]) + "\n"
 
 
@@ -94,7 +94,7 @@ def should_use_fast_path(
     if len(real_files) <= 8:
         return len(cleaned) <= 2200 and headings <= 2 and bullets <= 10
     if located_targets and 1 <= len(located_targets) <= max_fast_path_targets:
-        return len(cleaned) <= 3500 and headings <= 4 and bullets <= 20
+        return len(cleaned) <= 6500 and headings <= 4 and bullets <= 45
     return False
 
 
@@ -625,6 +625,9 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
             )
             if errors:
                 raise PlannerError("Planner failed deterministic DAG/file validation:\n" + "\n".join(errors))
+
+        if len(ordered) == 1 and len(ordered[0].objective) < len(prd_text.strip()) * 0.85:
+            ordered[0].objective = prd_text.strip()
 
         self._persist_plan(ordered, auto_approve=auto_approve, prd_text=prd_text)
         return PlanOutput(status="READY", tasks=ordered)
