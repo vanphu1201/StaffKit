@@ -15,7 +15,7 @@ from engine.bridges.agy_cli_executor import smoke_test_agy
 from engine.bridges.mcp_server import run_mcp_server
 from engine.compiler import PromptCompiler
 from engine.database import StateDB
-from engine.evaluator import ArmName, Evaluator, load_eval_cases
+from engine.evaluator import ArmName, Evaluator, audit_historical_commits, load_eval_cases
 from engine.git_guard import GitGuard
 from engine.indexer import RepoIndexer
 from engine.models import EngineConfig
@@ -339,6 +339,43 @@ def eval_suite(
     if report_obj.token_savings_pct is not None:
         console.print(f"Token Savings: [bold]{report_obj.token_savings_pct:+.1f}%[/bold]")
     console.print(f"[green]Reports written:[/green] {output} & {json_out}")
+
+
+@app.command(name="audit-repo")
+def audit_repo(
+    repo: Path = typer.Option(Path("."), "--repo", help="Path to local Git repository to replay commits on"),
+    limit: int = typer.Option(20, "--limit", min=1, max=200, help="Number of historical non-merge commits to replay"),
+    output: Optional[Path] = typer.Option(None, "--output", help="Optional Markdown report path"),
+) -> None:
+    """Run 0-token historical commit replay audit (Recall, Precision, Window Hit, Prompt Tokens, Soft-Scope)."""
+    target_repo = repo.resolve()
+    if not (target_repo / ".git").exists():
+        console.print(f"[red]Not a Git working repository:[/red] {target_repo}")
+        raise typer.Exit(code=2)
+
+    console.print(f"[cyan]Replaying up to {limit} historical commits in {target_repo.name} (0 LLM tokens)...[/cyan]")
+    report = audit_historical_commits(target_repo, limit=limit)
+    if report.commits_evaluated == 0:
+        console.print("[yellow]No qualifying multi/single code commits found in git history.[/yellow]")
+        raise typer.Exit(code=1)
+
+    table = Table(title=f"0-Token Historical Replay Scorecard ({report.repo_name})")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value")
+    table.add_row("Commits Evaluated", str(report.commits_evaluated))
+    table.add_row("Target Hit Rate", f"{report.target_hit_rate * 100:.1f}%")
+    table.add_row("Neighborhood Hit Rate", f"{report.neighborhood_hit_rate * 100:.1f}%")
+    table.add_row("Avg Recall / Precision", f"{report.avg_recall * 100:.1f}% / {report.avg_precision * 100:.1f}%")
+    table.add_row("Avg Targets / Commit", f"{report.avg_targets_count:.2f}")
+    table.add_row("Window Hit Rate (>300L files)", f"{report.window_hit_rate * 100:.1f}%")
+    table.add_row("Avg / Max Prompt Tokens", f"{report.avg_prompt_tokens:,} / {report.max_prompt_tokens:,}")
+    table.add_row("Soft-Scope Pass Rate", f"{report.soft_scope_pass_rate * 100:.1f}%")
+    console.print(table)
+
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(report.to_markdown(), encoding="utf-8")
+        console.print(f"[green]Audit report written:[/green] {output}")
 
 
 if __name__ == "__main__":

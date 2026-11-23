@@ -10,6 +10,7 @@ from engine.cli import app
 from engine.evaluator import (
     EvalCase,
     Evaluator,
+    audit_historical_commits,
     grade_with_hidden_tests,
     load_eval_cases,
     setup_isolated_case_repo,
@@ -292,3 +293,37 @@ def test_real_world_git_repo_and_hidden_patch_grading(tmp_path: Path) -> None:
     (sandbox / "pkg" / "calc.py").write_text("def add(a: int, b: int) -> int:\n    return a + b\n", encoding="utf-8")
     res_pass, reg_ok2, err2 = grade_with_hidden_tests(case, sandbox, timeout_sec=30)
     assert reg_ok2 is True and res_pass is True, err2
+
+
+def test_audit_historical_commits_on_git_repo(tmp_path: Path) -> None:
+    import subprocess
+
+    repo = tmp_path / "hist_repo"
+    repo.mkdir(parents=True)
+    for args in (
+        ["init", "-b", "main"],
+        ["config", "user.name", "Author"],
+        ["config", "user.email", "author@example.com"],
+    ):
+        subprocess.run(["git", *args], cwd=str(repo), check=True, capture_output=True)
+
+    (repo / "src").mkdir()
+    (repo / "src" / "alpha.py").write_text("def alpha_calc(x: int) -> int:\n    return x\n", encoding="utf-8")
+    (repo / "src" / "beta.py").write_text("def beta_calc(x: int) -> int:\n    return x\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=str(repo), check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init repo modules"], cwd=str(repo), check=True, capture_output=True)
+
+    (repo / "src" / "alpha.py").write_text("def alpha_calc(x: int) -> int:\n    return x + 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=str(repo), check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Fix alpha_calc off-by-one bug in src/alpha.py"],
+        cwd=str(repo),
+        check=True,
+        capture_output=True,
+    )
+
+    report = audit_historical_commits(repo, limit=5)
+    assert report.commits_evaluated >= 1
+    assert report.target_hit_rate == 1.0
+    assert report.soft_scope_pass_rate == 1.0
+    assert "0-Token Historical Replay Audit" in report.to_markdown()

@@ -451,17 +451,35 @@ class AgyCliExecutor:
             latest_usage = TokenUsage()
             verdict_override: str | None = None
             err_msg = ""
-            deadline = start + self.config.executor.timeout_seconds
+            base_timeout = self.config.executor.timeout_seconds
+            deadline = start + base_timeout
+            hard_deadline = start + int(base_timeout * 1.4)
+            idle_limit = (
+                max(self.config.executor.idle_timeout_seconds, base_timeout)
+                if base_timeout < 30
+                else min(self.config.executor.idle_timeout_seconds, base_timeout)
+            )
+            last_activity = start
 
             while True:
-                remaining = deadline - time.monotonic()
+                now = time.monotonic()
+                remaining = deadline - now
                 if remaining <= 0:
+                    if tool_calls > 0 and (now - last_activity) < 25.0 and deadline < hard_deadline:
+                        deadline = min(hard_deadline, now + 60.0)
+                        remaining = deadline - now
+                    else:
+                        kill_process_tree(proc)
+                        verdict_override = "TIMEOUT"
+                        err_msg = f"agy CLI timed out after {base_timeout}s"
+                        break
+                if base_timeout >= 60 and (now - last_activity) >= idle_limit:
                     kill_process_tree(proc)
                     verdict_override = "TIMEOUT"
-                    err_msg = f"agy CLI timed out after {self.config.executor.timeout_seconds}s"
+                    err_msg = f"agy CLI stalled with no output for {int(idle_limit)}s"
                     break
                 try:
-                    item = line_queue.get(timeout=min(0.5, remaining))
+                    item = line_queue.get(timeout=min(0.5, max(0.05, remaining)))
                 except queue.Empty:
                     if proc.poll() is not None and not reader_thread.is_alive():
                         break
@@ -474,6 +492,7 @@ class AgyCliExecutor:
                 line = item.strip()
                 if not line:
                     continue
+                last_activity = time.monotonic()
                 raw_lines.append(line)
 
                 try:

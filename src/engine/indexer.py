@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import math
 import os
 import posixpath
 import re
@@ -391,40 +392,84 @@ def locate_relevant_files(
         else:
             content_scan_set = set(path_scores.keys()) | set(candidate_pool[:250])
 
-    scored: list[tuple[int, str]] = []
+    scored: list[tuple[float, str]] = []
     file_texts: dict[str, str] = {}
+    matched_by_file: dict[str, set[str]] = {}
+    doc_freq: dict[str, int] = defaultdict(int)
     iter_files = (
         sorted(content_scan_set - guarded_paths)
         if content_scan_set is not None
         else candidate_pool
     )
+    high_spec_lower = (
+        stem_matched_ids
+        | {t.lower() for block in _BACKTICK_RE.findall(active_prd) for t in _IDENT_RE.findall(block)}
+        | {t.lower() for t in _CAMEL_RE.findall(active_prd)}
+        | {t.lower() for t in _SNAKE_RE.findall(active_prd)}
+    )
+    total_scanned = max(1, len(iter_files))
+
     for rel in iter_files:
         if rel in guarded_paths or _is_test_path(rel):
             continue
-        score = path_scores.get(rel, 0)
         if repo_path is not None and ident_regex is not None:
             full_path = repo_path / rel
             if full_path.is_file() and full_path.stat().st_size <= 262_144:
                 text = full_path.read_text(encoding="utf-8", errors="replace")
                 file_texts[rel] = text
-                matched_unique = len(set(ident_regex.findall(text)))
-                score += min(40, matched_unique * 8)
-                if matched_unique >= 1 and _STUB_MARKER_RE.search(text):
-                    score += 20
+                matched = set(ident_regex.findall(text))
+                if matched:
+                    matched_by_file[rel] = matched
+                    for ident in matched:
+                        doc_freq[ident] += 1
 
-        if score >= 20:
-            scored.append((score, rel))
+    all_candidates = sorted((set(path_scores.keys()) | set(file_texts.keys())) - guarded_paths)
+    for rel in all_candidates:
+        if _is_test_path(rel):
+            continue
+        score = float(path_scores.get(rel, 0))
+        matched = matched_by_file.get(rel, set())
+        content_pts = 0.0
+        for ident in matched:
+            idf = 1.0 + math.log((total_scanned + 1.0) / (doc_freq.get(ident, 1) + 1.0))
+            mult = 1.6 if (ident.lower() in high_spec_lower or "_" in ident or any(c.isupper() for c in ident[1:])) else 0.9
+            content_pts += 5.5 * idf * mult
+        score += min(65.0, content_pts)
+        if matched and _STUB_MARKER_RE.search(file_texts.get(rel, "")):
+            score += 20.0
+
+        if score >= 20.0:
+            scored.append((round(score, 2), rel))
 
     scored.sort(key=lambda item: (-item[0], item[1]))
-    top = scored[:max_targets]
-    target_files = [rel for _sc, rel in top]
+    top_pool = scored[:max_targets]
+    target_files: list[str] = []
+    demoted_runners_up: list[str] = []
+    if top_pool:
+        top_score = top_pool[0][0]
+        cutoff = max(22.0, top_score * 0.55)
+        target_files.append(top_pool[0][1])
+        for sc, rel in top_pool[1:]:
+            if path_scores.get(rel, 0) >= 45 or sc >= cutoff:
+                target_files.append(rel)
+            else:
+                demoted_runners_up.append(rel)
+    else:
+        top_score = 0.0
+
     candidate_files = [rel for _sc, rel in scored[:60]]
-    top_score = top[0][0] if top else 0
-    confident = bool(target_files) and (top_score >= 60 or top_score >= 36)
+    confident = bool(target_files) and top_score >= 36.0
 
     readonly_files: list[str] = []
     seen_ro = set(target_files) | set(test_files)
-    if repo_path is not None:
+    for rel in demoted_runners_up:
+        if rel not in seen_ro:
+            seen_ro.add(rel)
+            readonly_files.append(rel)
+            if len(readonly_files) >= max_readonly:
+                break
+
+    if repo_path is not None and len(readonly_files) < max_readonly:
         for rel in target_files:
             content = file_texts.get(rel)
             if content is None:
@@ -560,6 +605,23 @@ def extract_fast_skeleton(
     return "\n".join(out)
 
 
+def _python_function_spans(text: str) -> list[tuple[int, int]]:
+    """Return 0-based (start_idx, end_idx) line spans for Python functions/methods sorted tightest first."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return []
+    spans: list[tuple[int, int]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            dec_lines = [getattr(d, "lineno", node.lineno) for d in getattr(node, "decorator_list", [])]
+            start_idx = max(0, min([node.lineno, *dec_lines]) - 1)
+            end_idx = max(start_idx, (getattr(node, "end_lineno", None) or node.lineno) - 1)
+            spans.append((start_idx, end_idx))
+    spans.sort(key=lambda sp: (sp[1] - sp[0], sp[0]))
+    return spans
+
+
 def extract_symbol_windows(
     file_path: Path,
     identifiers: list[str],
@@ -567,13 +629,14 @@ def extract_symbol_windows(
     radius: int = 25,
     max_total_lines: int = 180,
 ) -> str:
-    """Extract focused line-numbered windows around PRD identifiers inside huge files."""
+    """Extract complete AST function scopes or declaration-aligned windows around PRD identifiers."""
     if not file_path.is_file():
         return ""
     try:
-        lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        text = file_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
+    lines = text.splitlines()
     if not lines:
         return ""
 
@@ -590,10 +653,29 @@ def extract_symbol_windows(
             head.extend(f"L{i + 1}: {_clip_line(lines[i])}" for i in range(max(40, len(lines) - 20), len(lines)))
         return "\n".join(head)
 
-    intervals: list[list[int]] = []
+    py_spans = _python_function_spans(text) if file_path.suffix.lower() == ".py" else []
+    raw_intervals: list[list[int]] = []
     for h in hits:
-        start = max(0, h - radius)
-        end = min(len(lines) - 1, h + radius)
+        enclosing = next((sp for sp in py_spans if sp[0] <= h <= sp[1]), None)
+        if enclosing is not None:
+            fn_start, fn_end = enclosing
+            if (fn_end - fn_start) <= 80:
+                raw_intervals.append([fn_start, fn_end])
+            else:
+                raw_intervals.append([fn_start, min(fn_end, fn_start + 4)])
+                raw_intervals.append([max(fn_start, h - radius), min(fn_end, h + radius)])
+        else:
+            start = max(0, h - radius)
+            end = min(len(lines) - 1, h + radius)
+            for back in range(start - 1, max(-1, start - 13), -1):
+                if _DECL_LINE_RE.match(lines[back]):
+                    start = back
+                    break
+            raw_intervals.append([start, end])
+
+    raw_intervals.sort(key=lambda iv: (iv[0], iv[1]))
+    intervals: list[list[int]] = []
+    for start, end in raw_intervals:
         if intervals and start <= intervals[-1][1] + 2:
             intervals[-1][1] = max(intervals[-1][1], end)
         else:

@@ -14,7 +14,7 @@ import tempfile
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterator, Literal
 
 import yaml
@@ -27,11 +27,18 @@ from engine.bridges.agy_cli_executor import (
     encode_stream_user_message,
     kill_process_tree,
 )
-from engine.compiler import PromptCompiler
+from engine.compiler import PromptCompiler, PromptTooLargeError
 from engine.database import StateDB
 from engine.git_guard import GitGuard
-from engine.indexer import RepoIndexer
-from engine.models import EngineConfig, TokenUsage
+from engine.indexer import (
+    RepoIndexer,
+    _is_doc_or_meta_path,
+    _is_test_path,
+    extract_symbol_windows,
+    list_real_files,
+    locate_relevant_files,
+)
+from engine.models import EngineConfig, ProjectConfig, TaskSpec, TokenUsage, normalize_posix_path
 from engine.orchestrator import Orchestrator
 from engine.planner import Planner
 from engine.verifier import Verifier
@@ -184,6 +191,234 @@ class EvalReport(BaseModel):
                 f"{r.completion_tokens:,} | {r.duration_sec:.2f}s | {r.files_changed} | {note} |"
             )
         return "\n".join(lines) + "\n"
+
+
+class CommitAuditRow(BaseModel):
+    """Zero-token historical replay measurement for one ground-truth git commit."""
+
+    commit_sha: str
+    subject: str
+    actual_files: list[str] = Field(default_factory=list)
+    located_targets: list[str] = Field(default_factory=list)
+    located_readonly: list[str] = Field(default_factory=list)
+    target_hit: bool = False
+    neighborhood_hit: bool = False
+    recall: float = 0.0
+    precision: float = 0.0
+    window_hit: bool | None = None
+    prompt_tokens: int = 0
+    soft_scope_ok: bool = False
+
+
+class RepoAuditReport(BaseModel):
+    """Aggregated 0-token historical replay audit report across real repository commits."""
+
+    repo_name: str
+    commits_evaluated: int = 0
+    target_hit_rate: float = 0.0
+    neighborhood_hit_rate: float = 0.0
+    avg_recall: float = 0.0
+    avg_precision: float = 0.0
+    avg_targets_count: float = 0.0
+    window_hit_rate: float = 1.0
+    avg_prompt_tokens: int = 0
+    max_prompt_tokens: int = 0
+    soft_scope_pass_rate: float = 0.0
+    rows: list[CommitAuditRow] = Field(default_factory=list)
+
+    def to_markdown(self) -> str:
+        lines = [
+            f"# Auto-Prompt Engine 0-Token Historical Replay Audit: `{self.repo_name}`",
+            f"- Commits Evaluated: `{self.commits_evaluated}`",
+            f"- Target Hit Rate (`actual in targets`): `{self.target_hit_rate * 100:.1f}%`",
+            f"- Neighborhood Hit Rate (`actual in targets+readonly`): `{self.neighborhood_hit_rate * 100:.1f}%`",
+            f"- Avg Recall / Precision: `{self.avg_recall * 100:.1f}%` / `{self.avg_precision * 100:.1f}%`",
+            f"- Avg Located Targets / Commit: `{self.avg_targets_count:.2f}`",
+            f"- Window Hit Rate (files > 300 lines): `{self.window_hit_rate * 100:.1f}%`",
+            f"- Avg / Max Prompt Tokens: `{self.avg_prompt_tokens:,}` / `{self.max_prompt_tokens:,}`",
+            f"- Soft-Scope Pass Rate: `{self.soft_scope_pass_rate * 100:.1f}%`",
+            "",
+            "## Commit Breakdown",
+            "| SHA | Subject | Actual | Located Targets | Recall | Precision | Window | Prompt Tok | Soft-Scope |",
+            "|---|---|---:|---:|---:|---:|---|---:|---|",
+        ]
+        for r in self.rows:
+            win_str = "-" if r.window_hit is None else ("HIT" if r.window_hit else "MISS")
+            lines.append(
+                f"| `{r.commit_sha[:8]}` | {r.subject[:52].replace('|', '/')} | {len(r.actual_files)} | "
+                f"{len(r.located_targets)} | {r.recall * 100:.0f}% | {r.precision * 100:.0f}% | "
+                f"{win_str} | {r.prompt_tokens:,} | {'PASS' if r.soft_scope_ok else 'FAIL'} |"
+            )
+        return "\n".join(lines) + "\n"
+
+
+def audit_historical_commits(
+    repo_path: Path,
+    *,
+    limit: int = 20,
+    config: EngineConfig | None = None,
+) -> RepoAuditReport:
+    """Replay up to `limit` historical non-merge commits (0 LLM tokens) to score Locator, Windows, Compiler & Scope."""
+    resolved_repo = repo_path.resolve()
+    real_files = list_real_files(resolved_repo)
+    cfg = (config.model_copy(deep=True) if config is not None else EngineConfig())
+    cfg.project.target_repo = str(resolved_repo)
+    compiler = PromptCompiler(cfg)
+
+    log_proc = subprocess.run(
+        ["git", "log", "--no-merges", "-n", str(max(10, limit * 5)), "--pretty=format:%H%x09%s%x09%b%x1e"],
+        cwd=str(resolved_repo),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=True,
+    )
+
+    root_manifests = {
+        "package.json", "package-lock.json", "pyproject.toml",
+        "uv.lock", "tsconfig.json", "requirements.txt",
+    }
+    rows: list[CommitAuditRow] = []
+    for raw_rec in log_proc.stdout.split("\x1e"):
+        if len(rows) >= limit:
+            break
+        rec = raw_rec.strip()
+        if not rec:
+            continue
+        parts = rec.split("\t", 2)
+        sha = parts[0].strip()
+        subject = parts[1].strip() if len(parts) > 1 else ""
+        body = parts[2].strip() if len(parts) > 2 else ""
+        commit_msg = f"{subject}\n\n{body}".strip() if body else subject
+        if len(commit_msg) < 20:
+            continue
+
+        diff_proc = subprocess.run(
+            ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", sha],
+            cwd=str(resolved_repo),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if diff_proc.returncode != 0:
+            continue
+        actual_code = [
+            normalize_posix_path(f)
+            for f in diff_proc.stdout.splitlines()
+            if f.strip()
+            and normalize_posix_path(f) in real_files
+            and not _is_test_path(f)
+            and not _is_doc_or_meta_path(f)
+        ]
+        if not (1 <= len(actual_code) <= 6):
+            continue
+
+        located = locate_relevant_files(commit_msg, real_files, resolved_repo)
+        actual_set = set(actual_code)
+        targets_set = set(located.target_files)
+        nbr_set = targets_set | set(located.readonly_files)
+
+        target_hit = bool(actual_set & targets_set)
+        neighborhood_hit = bool(actual_set & nbr_set)
+        recall = len(actual_set & nbr_set) / len(actual_set)
+        precision = (len(actual_set & targets_set) / len(targets_set)) if targets_set else 0.0
+
+        win_hits: list[bool] = []
+        for f_rel in actual_code:
+            full_p = resolved_repo / f_rel
+            if not full_p.is_file():
+                continue
+            line_cnt = len(full_p.read_text(encoding="utf-8", errors="replace").splitlines())
+            if line_cnt <= cfg.limits.inline_file_max_lines:
+                continue
+            show_proc = subprocess.run(
+                ["git", "show", "--unified=0", sha, "--", f_rel],
+                cwd=str(resolved_repo),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            touched_lines: set[int] = set()
+            for m in re.finditer(r"@@\s*-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s*@@", show_proc.stdout):
+                s_ln = int(m.group(1))
+                cnt = int(m.group(2)) if m.group(2) is not None else 1
+                touched_lines.update(range(s_ln, s_ln + max(1, cnt)))
+            if touched_lines:
+                win_txt = extract_symbol_windows(
+                    full_p,
+                    located.identifiers,
+                    radius=25,
+                    max_total_lines=160,
+                )
+                covered = {int(n) for n in re.findall(r"^L(\d+):", win_txt, flags=re.MULTILINE)}
+                win_hits.append(bool(covered & touched_lines))
+        window_hit = any(win_hits) if win_hits else None
+
+        task = TaskSpec(
+            task_id=f"AUDIT-{sha[:7]}",
+            title=subject[:80] or sha[:8],
+            objective=commit_msg,
+            allowed_write_files=located.target_files,
+            readonly_context_files=located.readonly_files,
+            protected_test_files=located.protected_tests[:25],
+            strict_scope=False,
+        )
+        try:
+            _, est_tok = compiler.compile(task)
+        except PromptTooLargeError:
+            est_tok = cfg.limits.max_prompt_tokens_per_call + 1
+
+        allowed_dirs = {
+            PurePosixPath(p).parent.as_posix()
+            for p in targets_set
+            if PurePosixPath(p).parent.as_posix() != "."
+        }
+        soft_scope_ok = all(
+            (f in targets_set or f in root_manifests or PurePosixPath(f).parent.as_posix() in allowed_dirs)
+            for f in actual_code
+        )
+
+        rows.append(
+            CommitAuditRow(
+                commit_sha=sha,
+                subject=subject,
+                actual_files=actual_code,
+                located_targets=located.target_files,
+                located_readonly=located.readonly_files,
+                target_hit=target_hit,
+                neighborhood_hit=neighborhood_hit,
+                recall=round(recall, 4),
+                precision=round(precision, 4),
+                window_hit=window_hit,
+                prompt_tokens=est_tok,
+                soft_scope_ok=soft_scope_ok,
+            )
+        )
+
+    n = len(rows)
+    if n == 0:
+        return RepoAuditReport(repo_name=resolved_repo.name)
+    win_rows = [r for r in rows if r.window_hit is not None]
+    toks = [r.prompt_tokens for r in rows]
+    return RepoAuditReport(
+        repo_name=resolved_repo.name,
+        commits_evaluated=n,
+        target_hit_rate=round(sum(1 for r in rows if r.target_hit) / n, 4),
+        neighborhood_hit_rate=round(sum(1 for r in rows if r.neighborhood_hit) / n, 4),
+        avg_recall=round(sum(r.recall for r in rows) / n, 4),
+        avg_precision=round(sum(r.precision for r in rows) / n, 4),
+        avg_targets_count=round(sum(len(r.located_targets) for r in rows) / n, 2),
+        window_hit_rate=round((sum(1 for r in win_rows if r.window_hit) / len(win_rows)), 4) if win_rows else 1.0,
+        avg_prompt_tokens=round(sum(toks) / n),
+        max_prompt_tokens=max(toks),
+        soft_scope_pass_rate=round(sum(1 for r in rows if r.soft_scope_ok) / n, 4),
+        rows=rows,
+    )
 
 
 def load_eval_cases(

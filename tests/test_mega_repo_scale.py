@@ -9,6 +9,7 @@ from engine.indexer import (
     RepoIndexer,
     compact_repo_map_for_planner,
     extract_fast_skeleton,
+    extract_symbol_windows,
     list_real_files,
     locate_relevant_files,
 )
@@ -169,3 +170,66 @@ def test_prose_locator_excludes_docs_and_skeleton_clips_giant_data_lines(tmp_pat
 
     skel = extract_fast_skeleton(repo / "pkg" / "_emoji_data.py")
     assert all(len(line) <= 225 for line in skel.splitlines())
+
+
+def test_idf_and_dropoff_cutoff_demotes_low_score_files_to_readonly(tmp_path: Path) -> None:
+    repo = tmp_path / "idf_repo"
+    (repo / "src").mkdir(parents=True, exist_ok=True)
+    # Write 10 files with common identifier, 2 runner-up files with 2 shared identifiers, and 1 core file with rare symbol + basename match.
+    for idx in range(10):
+        (repo / "src" / f"common_{idx}.py").write_text(
+            f"def fn_{idx}(config_option: str) -> str:\n    return config_option\n",
+            encoding="utf-8",
+        )
+    for idx in range(2):
+        (repo / "src" / f"runner_{idx}.py").write_text(
+            f"def aux_{idx}(config_option: str, fallback_mode: bool) -> str:\n    return config_option\n",
+            encoding="utf-8",
+        )
+    (repo / "src" / "core_handler.py").write_text(
+        "def unique_show_envvar(config_option: str, fallback_mode: bool) -> str:\n    return config_option\n",
+        encoding="utf-8",
+    )
+
+    real_files = {p.relative_to(repo).as_posix() for p in repo.rglob("*.py")}
+    located = locate_relevant_files(
+        "Fix `unique_show_envvar` in `core_handler.py` when `config_option` uses `fallback_mode`.",
+        real_files,
+        repo,
+    )
+    assert located.target_files == ["src/core_handler.py"]
+    assert any(p.startswith("src/runner_") for p in located.readonly_files)
+    assert not any(p.startswith("src/common_") for p in located.target_files)
+
+
+def test_ast_function_window_extracts_complete_enclosing_method(tmp_path: Path) -> None:
+    src = tmp_path / "large_mod.py"
+    lines = ["class Handler:"]
+    for i in range(40):
+        lines.append(f"    def filler_{i}(self) -> int:")
+        lines.append(f"        return {i}")
+    # Enclosing method >5 lines away from the hit line should still be captured from its header to return
+    lines.extend(
+        [
+            "    @property",
+            "    def compute_special_discount(self) -> int:",
+            "        a = 10",
+            "        b = 20",
+            "        c = 30",
+            "        target_formula_symbol = a + b + c",
+            "        d = target_formula_symbol * 2",
+            "        return d",
+        ]
+    )
+    for i in range(40, 80):
+        lines.append(f"    def trailing_{i}(self) -> int:")
+        lines.append(f"        return {i}")
+    src.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    window = extract_symbol_windows(src, ["target_formula_symbol"], radius=2, max_total_lines=80)
+    assert "@property" in window
+    assert "def compute_special_discount(self) -> int:" in window
+    assert "target_formula_symbol = a + b + c" in window
+    assert "return d" in window
+    assert "filler_0" not in window
+    assert "trailing_79" not in window
