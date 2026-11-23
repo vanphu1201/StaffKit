@@ -668,6 +668,25 @@ def extract_fast_skeleton(
     return "\n".join(out)
 
 
+_BRACE_EXTS = {
+    ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+    ".go", ".rs", ".java", ".kt", ".cs", ".c", ".cc", ".cpp", ".h", ".hpp",
+    ".swift", ".php", ".dart", ".scala",
+}
+
+_BRACE_BLOCK_START_RE = re.compile(
+    r"^\s*(?:export\s+)?(?:default\s+)?(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:static\s+)?"
+    r"(?:inline\s+)?(?:virtual\s+)?(?:override\s+)?(?:public\s+|private\s+|protected\s+)?"
+    r"(?:function\b|func\b|fn\b|def\b|class\b|struct\b|interface\b|enum\b|impl\b|"
+    r"(?:const|let|var)\s+[A-Za-z_]\w*\s*(?::[^=]+)?=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_]\w*)\s*(?::[^=]+)?=>|"
+    r"[A-Za-z_~]\w*(?:\s*<[^>]+>)?\s*\([^;]*\)\s*(?:const\s*)?(?:->\s*[^{;]+|:\s*[^{;]+)?\{)"
+)
+
+_STRIP_STR_COMMENT_RE = re.compile(
+    r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|`(?:\\.|[^`\\])*`'
+)
+
+
 def _python_function_spans(text: str) -> list[tuple[int, int]]:
     """Return 0-based (start_idx, end_idx) line spans for Python functions/methods sorted tightest first."""
     try:
@@ -680,6 +699,49 @@ def _python_function_spans(text: str) -> list[tuple[int, int]]:
             dec_lines = [getattr(d, "lineno", node.lineno) for d in getattr(node, "decorator_list", [])]
             start_idx = max(0, min([node.lineno, *dec_lines]) - 1)
             end_idx = max(start_idx, (getattr(node, "end_lineno", None) or node.lineno) - 1)
+            spans.append((start_idx, end_idx))
+    spans.sort(key=lambda sp: (sp[1] - sp[0], sp[0]))
+    return spans
+
+
+def _brace_block_spans(lines: list[str], max_scan_lines: int = 220) -> list[tuple[int, int]]:
+    """Return 0-based (start_idx, end_idx) spans for brace-delimited functions/methods/components sorted tightest first."""
+    cleaned_lines = [_STRIP_STR_COMMENT_RE.sub("", ln) for ln in lines]
+    spans: list[tuple[int, int]] = []
+    n = len(lines)
+    for idx, line in enumerate(lines):
+        if not (_DECL_LINE_RE.match(line) or _BRACE_BLOCK_START_RE.match(line)):
+            continue
+        start_idx = idx
+        while start_idx > 0 and (idx - start_idx) < 3:
+            prev_s = lines[start_idx - 1].strip()
+            if prev_s.startswith(("@", "#[")):
+                start_idx -= 1
+            else:
+                break
+
+        depth = 0
+        opened = False
+        end_idx = -1
+        limit = min(n, idx + max_scan_lines)
+        for cur in range(idx, limit):
+            cl = cleaned_lines[cur]
+            if not opened and (cur - idx) > 5:
+                break
+            if not opened and ";" in cl and "{" not in cl:
+                break
+            for ch in cl:
+                if ch == "{":
+                    depth += 1
+                    opened = True
+                elif ch == "}" and opened:
+                    depth -= 1
+                    if depth == 0:
+                        end_idx = cur
+                        break
+            if opened and depth == 0 and end_idx >= idx:
+                break
+        if end_idx >= idx:
             spans.append((start_idx, end_idx))
     spans.sort(key=lambda sp: (sp[1] - sp[0], sp[0]))
     return spans
@@ -723,10 +785,16 @@ def extract_symbol_windows(
             head.extend(f"L{i + 1}: {_clip_line(lines[i])}" for i in range(max(30, len(lines) - 15), len(lines)))
         return "\n".join(head)
 
-    py_spans = _python_function_spans(text) if file_path.suffix.lower() == ".py" else []
+    suffix = file_path.suffix.lower()
+    if suffix == ".py":
+        block_spans = _python_function_spans(text)
+    elif suffix in _BRACE_EXTS:
+        block_spans = _brace_block_spans(lines)
+    else:
+        block_spans = []
     raw_intervals: list[list[int]] = []
     for h in hits:
-        enclosing = next((sp for sp in py_spans if sp[0] <= h <= sp[1]), None)
+        enclosing = next((sp for sp in block_spans if sp[0] <= h <= sp[1]), None)
         if enclosing is not None:
             fn_start, fn_end = enclosing
             if (fn_end - fn_start) <= 65:

@@ -53,6 +53,7 @@ class PromptCompiler:
             verify_rule,
             "- KHÔNG lách luật bằng `@ts-ignore`, `eslint-disable`, `# type: ignore`, `# noqa`, `.skip()`, `.only()`, hoặc xóa bỏ assertion trong test.",
             "- Ưu tiên sửa gọn trực tiếp (targeted edit), không viết lại phần code không liên quan.",
+            "- Kiểm tra và xử lý đầy đủ toàn bộ Acceptance Criteria cùng các nhánh biên (edge cases / input validation) nêu trong TASK và ARCHITECTURE CONTRACT để vượt qua cả kiểm thử đơn vị lẫn kiểm thử tích hợp cuối.",
             "- Thực thi sản phẩm thật, sạch sẽ theo đặc tả TASK; KHÔNG tạo tài khoản/dữ liệu demo, stub giữ chỗ hay bỏ qua chức năng thật.",
             "- Nếu thiếu thông tin hoặc tài nguyên thật từ người dùng (API key, cấu hình DB, tài khoản, file media/dữ liệu, hoặc quyết định nghiệp vụ) mà không thể suy ra an toàn, hãy dừng và xuất dòng `NEED_USER_INPUT: <câu hỏi cụ thể bằng tiếng Việt>` — hệ thống sẽ hỏi người dùng và truyền câu trả lời thật cho bạn ngay.",
         ]
@@ -263,6 +264,31 @@ class PromptCompiler:
                     return "\n".join(c_lines)
         return ""
 
+    def _load_handoff_text(self, current_task_id: str, max_lines: int = 28) -> str:
+        """Load 0-token episodic handoff memory from upstream completed tasks (`.auto-engine/handoff.md`)."""
+        handoff_path = self.config.auto_engine_dir / "handoff.md"
+        if not handoff_path.is_file():
+            return ""
+        try:
+            raw = handoff_path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            return ""
+        if not raw:
+            return ""
+        blocks = [b.strip() for b in raw.split("\n### ") if b.strip()]
+        kept: list[str] = []
+        for idx, b in enumerate(blocks):
+            header = b if (idx == 0 and b.startswith("### ")) else f"### {b}"
+            if header.startswith(f"### {current_task_id}:") or header.startswith(f"### {current_task_id} "):
+                continue
+            kept.append(header)
+        if not kept:
+            return ""
+        merged = "\n\n".join(kept[-6:]).splitlines()
+        if len(merged) > max_lines:
+            return "\n".join(merged[-max_lines:])
+        return "\n".join(merged)
+
     def _format_repo_file_tree(self, task: TaskSpec) -> str:
         """Build a relevant-first paths/folder tree so mega-repos stay compact while skipping list_dir exploration."""
         try:
@@ -325,6 +351,7 @@ class PromptCompiler:
         user_answers_text: str = "",
         repo_tree_text: str = "",
         contract_text: str = "",
+        handoff_text: str = "",
     ) -> str:
         verify_cmds = task.verify_commands or self.config.executor.default_verify_commands
         payload_lines = [
@@ -342,6 +369,14 @@ class PromptCompiler:
         ]
         if contract_text:
             payload_lines.extend(["", "# ARCHITECTURE & INTERFACE CONTRACT (Shared Across All Tasks)", contract_text])
+        if handoff_text:
+            payload_lines.extend(
+                [
+                    "",
+                    "# UPSTREAM COMPLETED TASKS HANDOFF (0-Token Memory — Files & Signatures Already Built)",
+                    handoff_text,
+                ]
+            )
         payload_lines.extend(
             [
                 "",
@@ -379,6 +414,7 @@ class PromptCompiler:
         targets_text, all_inlined = self._format_target_files(task, skeletons)
         user_answers_text = self._load_user_answers_text()
         contract_text = self._load_contract_text(max_lines=40)
+        handoff_text = self._load_handoff_text(task.task_id, max_lines=28)
         repo_tree_text = self._format_repo_file_tree(task)
         feedback_text = self._format_retry_feedback(
             attempt=attempt,
@@ -402,6 +438,7 @@ class PromptCompiler:
             user_answers_text=user_answers_text,
             repo_tree_text=repo_tree_text,
             contract_text=contract_text,
+            handoff_text=handoff_text,
         )
         tokens = estimate_tokens(prompt)
 

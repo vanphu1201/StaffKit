@@ -20,8 +20,8 @@ from engine.bridges.cli_executor import CliFallbackExecutor
 from engine.compiler import PromptCompiler, PromptTooLargeError
 from engine.database import StateDB
 from engine.git_guard import GitGuard
-from engine.indexer import IndexerError, list_real_files, locate_relevant_files
-from engine.models import EngineConfig, ExecutionResult, TaskSpec, TokenUsage
+from engine.indexer import IndexerError, extract_fast_skeleton, list_real_files, locate_relevant_files
+from engine.models import EngineConfig, ExecutionResult, TaskSpec, TokenUsage, normalize_posix_path
 from engine.verifier import Verifier, extract_error_locations
 
 
@@ -146,6 +146,50 @@ class Orchestrator:
             json.dumps(merged, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+
+    def _record_task_handoff(self, task: TaskSpec) -> None:
+        """Persist 0-token episodic handoff summary (`.auto-engine/handoff.md`) after a task completes."""
+        repo = self.config.target_repo_path
+        touched = [
+            normalize_posix_path(p)
+            for p in dict.fromkeys(task.create_new_files + task.allowed_write_files)
+            if p.strip()
+        ][:4]
+        entry_lines = [f"### {task.task_id}: {task.title}"]
+        if touched:
+            entry_lines.append(f"- Touched files: {', '.join(f'`{p}`' for p in touched)}")
+        for rel in touched[:3]:
+            fp = repo / rel
+            if not fp.is_file():
+                continue
+            skel = extract_fast_skeleton(fp, max_lines=5)
+            if skel:
+                compact_sigs = " | ".join(
+                    ln.strip() for ln in skel.splitlines()[:4] if ln.strip() and not ln.startswith("...")
+                )
+                if compact_sigs:
+                    entry_lines.append(f"- `{rel}` signatures: `{compact_sigs[:220]}`")
+        entry_block = "\n".join(entry_lines)
+
+        auto_dir = self.config.auto_engine_dir
+        auto_dir.mkdir(parents=True, exist_ok=True)
+        handoff_path = auto_dir / "handoff.md"
+        existing_blocks: list[str] = []
+        if handoff_path.is_file():
+            try:
+                raw = handoff_path.read_text(encoding="utf-8", errors="replace").strip()
+                if raw:
+                    for idx, b in enumerate(raw.split("\n### ")):
+                        b_clean = b.strip()
+                        if not b_clean:
+                            continue
+                        hdr = b_clean if (idx == 0 and b_clean.startswith("### ")) else f"### {b_clean}"
+                        if not hdr.startswith(f"### {task.task_id}:"):
+                            existing_blocks.append(hdr)
+            except OSError:
+                pass
+        existing_blocks.append(entry_block)
+        handoff_path.write_text("\n\n".join(existing_blocks[-8:]) + "\n", encoding="utf-8")
 
     def _prompt_user_for_task(
         self,
@@ -422,6 +466,7 @@ class Orchestrator:
                     if not defer_done:
                         self.db.update_task_status(task.task_id, "DONE", commit_sha=commit_sha, retry_count=attempt)
                 if not defer_done:
+                    self._record_task_handoff(task)
                     self._emit("success", f"[{task.task_id}] PASS -> Committed {commit_sha[:8]}")
                 return True, False, commit_sha
 
@@ -555,6 +600,9 @@ class Orchestrator:
             contracts_src = self.config.auto_engine_dir / "contracts.md"
             if contracts_src.is_file():
                 shutil.copyfile(contracts_src, wt_auto / "contracts.md")
+            handoff_src = self.config.auto_engine_dir / "handoff.md"
+            if handoff_src.is_file():
+                shutil.copyfile(handoff_src, wt_auto / "handoff.md")
 
             wt_guard = GitGuard(
                 wt_dir,
@@ -610,6 +658,7 @@ class Orchestrator:
                     merged_sha = self.guard.create_checkpoint()
                     with self._db_lock:
                         self.db.update_task_status(task.task_id, "DONE", commit_sha=merged_sha)
+                    self._record_task_handoff(task)
                     self._emit("success", f"[{task.task_id}] Parallel PASS -> Merged {merged_sha[:8]}")
                     passed_cnt += 1
                 else:

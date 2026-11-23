@@ -262,15 +262,16 @@ Câu trả lời của người dùng:
 Yêu cầu:
 1. `product_title`: Tên sản phẩm tiếng Việt ngắn gọn, chuyên nghiệp.
 2. `features_vi`: 4–7 gạch đầu dòng mô tả tính năng dùng thật bằng tiếng Việt đời thường để người dùng đọc và bấm duyệt.
-3. `prd_markdown`: Tài liệu PRD chuẩn sản phẩm thật (Markdown) gồm:
+3. `acceptance_criteria`: 4–8 tiêu chí nghiệm thu cụ thể, kiểm thử được, đánh mã `AC-1: ...`, `AC-2: ...` (bao phủ cả luồng nghiệp vụ chính, xử lý lỗi/dữ liệu biên, và trạng thái khởi tạo ban đầu để mở sản phẩm lên dùng được ngay).
+4. `prd_markdown`: Tài liệu PRD chuẩn sản phẩm thật (Markdown) gồm:
    - Mục tiêu sản phẩm & phạm vi người dùng thật
-   - Kiến trúc kỹ thuật, lưu trữ dữ liệu & tích hợp thật phù hợp nhất với loại sản phẩm (tránh tạo tài khoản/dữ liệu demo giả lập; nếu có giao diện thì thiết kế chuyên nghiệp, tiết chế, dễ dùng; nếu thiếu thông tin/API key/tài nguyên thật từ người dùng thì thiết kế để hệ thống hỏi qua `user_questions` / `NEED_USER_INPUT`){bp_rules}
-   - Tiêu chí kiểm thử tự động & build/chạy thật phù hợp với công nghệ đã chọn.
-4. `architecture_contract`: Bản hợp đồng kiến trúc kỹ thuật ngắn gọn (<= 35 dòng Markdown) khóa cứng:
+   - Kiến trúc kỹ thuật, lưu trữ dữ liệu, xử lý lỗi đầu vào (validation/error boundary), trạng thái giao diện đầy đủ & tích hợp thật phù hợp nhất với loại sản phẩm (nếu thiếu thông tin/API key/tài nguyên thật từ người dùng thì thiết kế để hệ thống hỏi qua `user_questions` / `NEED_USER_INPUT`){bp_rules}
+   - Danh sách tiêu chí nghiệm thu (`AC-1..AC-N`) và kịch bản kiểm thử tự động (unit/integration/acceptance test) chứng minh từng tính năng hoạt động đúng.
+5. `architecture_contract`: Bản hợp đồng kiến trúc kỹ thuật ngắn gọn (<= 35 dòng Markdown) khóa cứng:
    - Schema dữ liệu / bảng DB / kiểu dữ liệu dùng chung
    - Giao diện API / chữ ký hàm liên module (input, output, mã lỗi)
    - Ranh giới file/module chính để các task chạy song song khớp tuyệt đối 100%.
-5. `verify_commands`, `runtime_verify_commands`, `preview_command`, `quality_rules`: Nếu sản phẩm dùng công nghệ mới ngoài các blueprint có sẵn (vd: Go, Rust, Flutter, Mobile, Game, Desktop, Chrome Extension, C#/.NET...), hãy điền các lệnh kiểm tra build/test chuẩn vào `verify_commands`, lệnh smoke test runtime vào `runtime_verify_commands`, lệnh chạy thử vào `preview_command`, và quy tắc chất lượng riêng vào `quality_rules` để hệ thống tự động tạo `.auto-engine/blueprint.yaml` cho dự án.
+6. `verify_commands`, `runtime_verify_commands`, `preview_command`, `quality_rules`: Nếu sản phẩm dùng công nghệ mới ngoài các blueprint có sẵn (vd: Go, Rust, Flutter, Mobile, Game, Desktop, Chrome Extension, C#/.NET...), hãy điền các lệnh kiểm tra build/test chuẩn vào `verify_commands`, lệnh smoke test runtime vào `runtime_verify_commands`, lệnh chạy thử vào `preview_command`, và quy tắc chất lượng riêng vào `quality_rules` để hệ thống tự động tạo `.auto-engine/blueprint.yaml` cho dự án.
 """
         raw = self._call_agy_no_tools(
             prompt,
@@ -288,8 +289,21 @@ Yêu cầu:
 
 def persist_project_contracts(project_dir: Path, spec: ProductSpec | None = None, contract_markdown: str = "") -> Path | None:
     """Persist `.auto-engine/contracts.md` so all DAG and parallel worktree tasks share one immutable technical contract."""
-    text = (spec.architecture_contract if spec is not None else "") or contract_markdown
-    cleaned = text.strip()
+    parts: list[str] = []
+    base_contract = ((spec.architecture_contract if spec is not None else "") or contract_markdown).strip()
+    if base_contract:
+        parts.append(base_contract)
+    if spec is not None and spec.acceptance_criteria:
+        ac_lines = ["## Acceptance Criteria (Must Pass Before Completion)"]
+        for idx, ac in enumerate(spec.acceptance_criteria[:10], start=1):
+            ac_str = ac.strip()
+            if not ac_str:
+                continue
+            prefix = "" if ac_str.upper().startswith("AC-") else f"AC-{idx}: "
+            ac_lines.append(f"- {prefix}{ac_str}")
+        if len(ac_lines) > 1:
+            parts.append("\n".join(ac_lines))
+    cleaned = "\n\n".join(parts).strip()
     if not cleaned:
         return None
     auto_dir = project_dir / ".auto-engine"

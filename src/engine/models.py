@@ -346,6 +346,7 @@ class ProductSpec(BaseModel):
 
     product_title: str
     features_vi: list[str] = Field(default_factory=list)
+    acceptance_criteria: list[str] = Field(default_factory=list)
     prd_markdown: str
     architecture_contract: str = ""
     verify_commands: list[str] = Field(default_factory=list)

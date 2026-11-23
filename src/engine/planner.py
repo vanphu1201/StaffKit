@@ -36,8 +36,8 @@ _MD_HEADING_RE = re.compile(r"^\s*#{2,3}\s+\S")
 _MD_BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\S")
 
 
-def synthesize_deterministic_contract(prd_text: str, tasks: list[TaskSpec], max_lines: int = 40) -> str:
-    """Build a 0-token shared Architecture & Module Ownership Contract for multi-task DAG sprints."""
+def synthesize_deterministic_contract(prd_text: str, tasks: list[TaskSpec], max_lines: int = 44) -> str:
+    """Build a 0-token shared Architecture, Module Ownership & Acceptance Contract for multi-task DAG sprints."""
     if len(tasks) < 2:
         return ""
     lines: list[str] = ["## Module & File Ownership Map"]
@@ -47,9 +47,13 @@ def synthesize_deterministic_contract(prd_text: str, tasks: list[TaskSpec], max_
         lines.append(f"- `{t.task_id}` ({t.title}): `{writes}`{deps}")
 
     spec_lines: list[str] = []
+    ac_lines: list[str] = []
     for raw_ln in prd_text.splitlines():
         s = raw_ln.strip()
         if not s:
+            continue
+        if re.match(r"^(?:[-*+]\s*)?AC-\d+\b", s, re.IGNORECASE):
+            ac_lines.append(s[:160])
             continue
         if (
             s.startswith("|")
@@ -57,11 +61,14 @@ def synthesize_deterministic_contract(prd_text: str, tasks: list[TaskSpec], max_
             or any(k in s.lower() for k in ("schema", "api", "endpoint", "route", "model", "return", "->"))
         ):
             spec_lines.append(s[:160])
-            if len(spec_lines) >= 18:
+            if len(spec_lines) >= 16:
                 break
     if spec_lines:
         lines.append("\n## Shared Interfaces & Data Contracts")
         lines.extend(spec_lines)
+    if ac_lines:
+        lines.append("\n## Acceptance & Edge-Case Checklist")
+        lines.extend(ac_lines[:10])
     return "\n".join(lines[:max_lines]) + "\n"
 
 

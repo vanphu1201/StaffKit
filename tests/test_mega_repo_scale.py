@@ -408,3 +408,135 @@ def test_pillar_2_contract_first_and_pillar_3_final_gate_auto_repair(tmp_path: P
     assert summary["final_verify_passed"] is True
     assert summary["summary"]["counts"]["DONE"] == 2
 
+
+def test_multi_lang_brace_windowing_and_cross_task_handoff_and_acceptance_contract(tmp_path: Path) -> None:
+    import sys
+    from engine.database import StateDB
+    from engine.git_guard import GitGuard
+    from engine.interviewer import persist_project_contracts
+    from engine.models import ExecutionResult, ProductSpec, TokenUsage
+    from engine.orchestrator import Orchestrator
+    from engine.verifier import Verifier
+
+    # 1. Multi-Language Brace-Balanced Block Windowing (.tsx / .go / .rs)
+    tsx_file = tmp_path / "OrderBoard.tsx"
+    tsx_lines = [f"// header padding {i}" for i in range(1, 40)]
+    tsx_lines.extend(
+        [
+            "export function OrderCard({ orderId, amount }: { orderId: string; amount: number }) {",
+            "  const formatted = `$${amount.toFixed(2)}`;",
+            "  const statusLabel = amount > 100 ? 'VIP' : 'Standard';",
+            "  if (!orderId) {",
+            "    return <div className='empty'>Missing order</div>;",
+            "  }",
+            "  return (",
+            "    <section data-testid='order-card'>",
+            "      <h3>{orderId}</h3>",
+            "      <span>{formatted} - {statusLabel}</span>",
+            "    </section>",
+            "  );",
+            "}",
+        ]
+    )
+    tsx_lines.extend([f"// footer padding {i}" for i in range(1, 40)])
+    tsx_file.write_text("\n".join(tsx_lines) + "\n", encoding="utf-8")
+
+    win = extract_symbol_windows(tsx_file, ["statusLabel"], radius=5, max_total_lines=60)
+    # Brace-balanced block extractor must capture the entire OrderCard component from declaration to closing brace
+    assert "export function OrderCard" in win
+    assert "<section data-testid='order-card'>" in win
+    assert "L52: }" in win
+
+    # 2. Acceptance Criteria Contract + 0-Token Cross-Task Episodic Handoff Memory
+    repo = tmp_path / "handoff_repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    for args in (
+        ["init", "-b", "main"],
+        ["config", "user.name", "Bot"],
+        ["config", "user.email", "bot@example.com"],
+    ):
+        subprocess.run(["git", *args], cwd=str(repo), check=True, capture_output=True)
+
+    (repo / "src").mkdir(parents=True, exist_ok=True)
+    (repo / "src" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "src" / "pricing.py").write_text("def calc_price(x: int) -> int:\n    return x\n", encoding="utf-8")
+    (repo / "src" / "checkout.py").write_text("from src.pricing import calc_price\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo), check=True, capture_output=True)
+
+    spec = ProductSpec(
+        product_title="Smart Checkout",
+        prd_markdown="# PRD\n- AC-1: Apply discount tier\n- AC-2: Validate negative input",
+        architecture_contract="### Contract\n- `calc_price(x: int) -> int`",
+        acceptance_criteria=[
+            "AC-1: Apply discount tier accurately",
+            "AC-2: Reject negative numbers with ValueError",
+        ],
+    )
+    persist_project_contracts(repo, spec)
+
+    t1 = TaskSpec(
+        task_id="T-001",
+        title="Build pricing engine",
+        objective="Implement calc_price and apply_coupon in src/pricing.py",
+        allowed_write_files=["src/pricing.py"],
+        verify_commands=[f'"{sys.executable}" -c "import src.pricing"'],
+    )
+    t2 = TaskSpec(
+        task_id="T-002",
+        title="Wire checkout flow",
+        depends_on=["T-001"],
+        objective="Use apply_coupon in src/checkout.py",
+        allowed_write_files=["src/checkout.py"],
+        verify_commands=[f'"{sys.executable}" -c "import src.checkout"'],
+    )
+
+    cfg = EngineConfig(project=ProjectConfig(target_repo=str(repo)))
+    db = StateDB(cfg.state_db_path)
+    db.replace_plan([t1, t2], plan_hash="h_handoff", approved=True)
+
+    t2_prompts: list[str] = []
+
+    class HandoffCheckingExecutor:
+        def execute(self, prompt: str, task: TaskSpec, model: str, effort: str) -> ExecutionResult:
+            if task.task_id == "T-001":
+                (repo / "src" / "pricing.py").write_text(
+                    "def calc_price(x: int) -> int:\n    return x * 2\n\ndef apply_coupon(code: str) -> int:\n    return 10\n",
+                    encoding="utf-8",
+                )
+            elif task.task_id == "T-002":
+                t2_prompts.append(prompt)
+                (repo / "src" / "checkout.py").write_text(
+                    "from src.pricing import apply_coupon, calc_price\n\ndef checkout_total(x: int) -> int:\n    return calc_price(x) - apply_coupon('VIP')\n",
+                    encoding="utf-8",
+                )
+            return ExecutionResult(
+                success=True,
+                model_used=model or "mock",
+                exit_code=0,
+                stdout="ok",
+                stderr="",
+                duration_seconds=0.1,
+                token_usage=TokenUsage(prompt_tokens=80, completion_tokens=40, total_tokens=120),
+            )
+
+    guard = GitGuard(repo)
+    orch = Orchestrator(
+        cfg,
+        db=db,
+        guard=guard,
+        verifier=Verifier(cfg, guard),
+        compiler=PromptCompiler(cfg),
+        executor=HandoffCheckingExecutor(),
+    )
+    res = orch.run_sprint()
+    assert res["summary"]["counts"]["DONE"] == 2
+    assert len(t2_prompts) == 1
+    # Verify T-002 automatically received both Acceptance Criteria contract and 0-token T-001 Handoff signatures
+    assert "## Acceptance Criteria (Must Pass Before Completion)" in t2_prompts[0]
+    assert "AC-2: Reject negative numbers with ValueError" in t2_prompts[0]
+    assert "# UPSTREAM COMPLETED TASKS HANDOFF" in t2_prompts[0]
+    assert "### T-001: Build pricing engine" in t2_prompts[0]
+    assert "def apply_coupon(code: str) -> int:" in t2_prompts[0]
+
+
