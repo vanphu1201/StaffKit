@@ -354,6 +354,55 @@ def _find_reverse_importers(
     return importers
 
 
+def _find_git_cochange_files(
+    repo_path: Path,
+    target_files: list[str],
+    norm_real: set[str],
+    *,
+    max_commits: int = 45,
+    max_results: int = 3,
+) -> list[str]:
+    """0-token Git Co-Change signal: find files frequently edited in the same commits as `target_files` (catches FE<->BE links)."""
+    if not target_files or not (repo_path / ".git").exists():
+        return []
+    try:
+        proc = subprocess.run(
+            ["git", "log", "--no-merges", f"-n{max_commits}", "--name-only", "--pretty=format:---"],
+            cwd=str(repo_path.resolve()),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0:
+        return []
+
+    target_set = set(target_files)
+    counts: dict[str, int] = defaultdict(int)
+    for block in proc.stdout.split("---"):
+        files = [
+            normalize_posix_path(ln)
+            for ln in block.splitlines()
+            if ln.strip()
+        ]
+        # Ignore giant bulk/init commits (> 12 files) that add co-change noise
+        if not (2 <= len(files) <= 12):
+            continue
+        file_set = set(files)
+        if not (file_set & target_set):
+            continue
+        for f in file_set - target_set:
+            if f in norm_real and not _is_test_path(f) and not _is_doc_or_meta_path(f):
+                counts[f] += 1
+
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [f for f, cnt in ranked if cnt >= 2][:max_results]
+
+
 def _git_grep_candidate_files(
     repo_path: Path,
     identifiers: list[str],
@@ -652,6 +701,15 @@ def locate_relevant_files(
             if caller not in seen_ro and not _is_test_path(caller):
                 seen_ro.add(caller)
                 readonly_files.append(caller)
+                if len(readonly_files) >= max_readonly:
+                    break
+
+    # Priority 2.5: 0-token Git Co-Change neighbors (catches FE<->BE / API<->Schema links without direct imports)
+    if repo_path is not None and target_files and len(readonly_files) < max_readonly:
+        for co_file in _find_git_cochange_files(repo_path, target_files[:3], norm_set, max_results=3):
+            if co_file not in seen_ro and not _is_test_path(co_file):
+                seen_ro.add(co_file)
+                readonly_files.append(co_file)
                 if len(readonly_files) >= max_readonly:
                     break
 

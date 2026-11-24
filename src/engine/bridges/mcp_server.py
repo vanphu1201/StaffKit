@@ -292,9 +292,9 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
         run_smoke: bool = True,
         smoke_url: str = "",
         expected_status: int = 200,
-        generate_delivery_pack: bool = True,
+        generate_delivery_pack: bool = False,
     ) -> str:
-        """Run 0-token independent verification (build/tests + live HTTP endpoint or runtime smoke + Delivery Pack)."""
+        """Run 0-token independent verification (diff sanity + build/tests + live HTTP/runtime smoke; optional Delivery Pack)."""
         t0 = time.monotonic()
         repo = _resolve_repo_path(repo_path, config.target_repo_path)
         det_stack, det_vc, det_fc, _ = detect_existing_stack(repo)

@@ -24,7 +24,7 @@ def _init_git_repo(repo_dir: Path) -> None:
 def test_plugin_manifest_and_always_on_overhead_under_1000_tokens() -> None:
     plugin_root = Path(__file__).resolve().parents[1] / "antigravity-plugin" / "auto-prompt-architect"
     manifest = json.loads((plugin_root / "plugin.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "2.1.0"
+    assert manifest["version"] == "2.2.0"
     assert (plugin_root / manifest["logo"]).is_file()
 
     rules_text = (plugin_root / "rules" / "AGENTS.md").read_text(encoding="utf-8")
@@ -238,3 +238,46 @@ def test_modular_locator_and_ast_scanner_and_plugin_stats_cli(tmp_path: Path) ->
     assert "load_project_memory" in res.output
     assert "locate_context" in res.output
     assert "2 calls" in res.output
+
+
+def test_pro_hardening_git_cochange_security_xray_and_clean_default_verify(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    (tmp_path / "server").mkdir()
+    (tmp_path / "web").mkdir()
+    (tmp_path / "server" / "billingRoute.ts").write_text("export function chargeInvoice() { return 1; }\n", encoding="utf-8")
+    (tmp_path / "web" / "BillingPanel.tsx").write_text("export const BillingPanel = () => 'v1';\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("SECRET_KEY=supersecret\n", encoding="utf-8")
+    (tmp_path / "server" / "db.ts").write_text(
+        "export const DB_URL = 'postgresql://admin:hunter2@db.internal:5432/prod';\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "-A"], cwd=str(tmp_path), check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=str(tmp_path), check=True, capture_output=True)
+
+    # 2 commits touching FE & BE together (NO direct import between them)
+    for i in (2, 3):
+        (tmp_path / "server" / "billingRoute.ts").write_text(f"export function chargeInvoice() {{ return {i}; }}\n", encoding="utf-8")
+        (tmp_path / "web" / "BillingPanel.tsx").write_text(f"export const BillingPanel = () => 'v{i}';\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=str(tmp_path), check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", f"update billing v{i}"], cwd=str(tmp_path), check=True, capture_output=True)
+
+    real_files = list_real_files(tmp_path)
+    located = locate_relevant_files("fix chargeInvoice rounding bug", real_files, tmp_path)
+    assert "server/billingRoute.ts" in located.target_files
+    # Caught purely via 0-token Git Co-Change!
+    assert "web/BillingPanel.tsx" in located.readonly_files
+
+    mcp = mcp_server.create_mcp_server(None)
+
+    async def _check() -> tuple[str, str]:
+        mem = (await mcp.get_tool("load_project_memory")).fn(repo_path=str(tmp_path), include_audit=True)
+        ver = (await mcp.get_tool("verify_and_smoke")).fn(repo_path=str(tmp_path), commands=[], run_smoke=False)
+        return mem, ver
+
+    mem_out, ver_out = asyncio.run(_check())
+    assert ".env" in mem_out
+    assert "server/db.ts" in mem_out
+    assert "**OVERALL: PASS**" in ver_out
+    # Default verify_and_smoke MUST NOT pollute pro repos with .bat / .md delivery pack files
+    assert not (tmp_path / "CHAY_SAN_PHAM.bat").exists()
+    assert not (tmp_path / "HUONG_DAN_SU_DUNG.md").exists()

@@ -299,19 +299,38 @@ def extract_symbol_windows(
 
 
 _SECRET_SCAN_RE = re.compile(
-    r"""(?:\b(?:sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})\b)"""
+    r"(?:"
+    r"\b(?:sk-[A-Za-z0-9_-]{20,}|sk_live_[A-Za-z0-9]{16,}|AIza[0-9A-Za-z_-]{20,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})\b"
+    r"|-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"
+    r"|\b(?:postgres|postgresql|mysql|mongodb(?:\+srv)?|redis)://[^:\s/'\"]+:[^@\s/'\"]+@"
+    r")"
 )
+_REAL_STUB_COMMENT_RE = re.compile(
+    r"(?:(?:#|//|/\*)\s*(?:TODO|FIXME)\b|\braise\s+NotImplementedError\b)"
+)
+_ENV_SAFE_SUFFIXES = (".example", ".sample", ".template", ".dist")
 _CODE_EXTS = {
     ".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
     ".go", ".rs", ".java", ".kt", ".cs", ".cpp", ".c", ".h", ".php", ".rb", ".swift", ".dart",
 }
 
 
+def _is_tracked_secret_env_file(rel_path: str) -> bool:
+    name = rel_path.rsplit("/", 1)[-1].lower()
+    if name == ".env":
+        return True
+    if name.startswith(".env.") and not any(name.endswith(s) for s in _ENV_SAFE_SUFFIXES):
+        return True
+    return False
+
+
 def scan_repo_tech_debt(repo_path: Path, *, max_files: int = 250) -> str:
-    """0-token static X-Ray for `/audit-and-evolve`: bloated files, TODO/mock markers, hardcoded secrets & test ratio."""
+    """0-token static X-Ray for `/audit-and-evolve`: bloated files, real TODO/stubs, tracked .env/secrets & test ratio."""
     try:
         all_files = sorted(list_real_files(repo_path))
+        is_git = True
     except IndexerError:
+        is_git = False
         ignore_dirs = {".git", ".auto-engine", "node_modules", ".venv", "__pycache__", "dist", "build"}
         all_files = []
         for root, dirs, files in os.walk(repo_path):
@@ -320,6 +339,7 @@ def scan_repo_tech_debt(repo_path: Path, *, max_files: int = 250) -> str:
                 all_files.append((Path(root) / f).relative_to(repo_path).as_posix())
         all_files.sort()
 
+    tracked_env_files = [rel for rel in all_files if is_git and _is_tracked_secret_env_file(rel)]
     code_files = [
         rel for rel in all_files
         if not _is_doc_or_meta_path(rel) and Path(rel).suffix.lower() in _CODE_EXTS
@@ -329,7 +349,7 @@ def scan_repo_tech_debt(repo_path: Path, *, max_files: int = 250) -> str:
 
     bloated: list[tuple[int, str]] = []
     stub_hits: list[tuple[int, str]] = []
-    secret_hits: list[str] = []
+    secret_hits: list[str] = list(tracked_env_files)
 
     for rel in src_files[:max_files]:
         fp = repo_path / rel
@@ -345,10 +365,10 @@ def scan_repo_tech_debt(repo_path: Path, *, max_files: int = 250) -> str:
         line_cnt = text.count("\n") + (1 if text and not text.endswith("\n") else 0)
         if line_cnt >= 450:
             bloated.append((line_cnt, rel))
-        markers = len(_STUB_MARKER_RE.findall(text))
+        markers = len(_REAL_STUB_COMMENT_RE.findall(text))
         if markers > 0:
             stub_hits.append((markers, rel))
-        if _SECRET_SCAN_RE.search(text):
+        if _SECRET_SCAN_RE.search(text) and rel not in secret_hits:
             secret_hits.append(rel)
 
     bloated.sort(key=lambda item: (-item[0], item[1]))
@@ -368,7 +388,7 @@ def scan_repo_tech_debt(repo_path: Path, *, max_files: int = 250) -> str:
     else:
         lines.append("- TODO/FIXME/Stub Markers: None")
     if secret_hits:
-        lines.append(f"- Potential Hardcoded Secrets: {', '.join(f'`{r}`' for r in secret_hits[:5])}")
+        lines.append(f"- Security Alert (Tracked `.env` / Hardcoded Secrets): {', '.join(f'`{r}`' for r in secret_hits[:5])}")
     else:
-        lines.append("- Potential Hardcoded Secrets: None detected")
+        lines.append("- Security Alert (Tracked `.env` / Hardcoded Secrets): None detected")
     return "\n".join(lines)

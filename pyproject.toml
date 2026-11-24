@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "auto-prompt-architect"
-version = "2.1.0"
+version = "2.2.0"
 description = "Zero-token Antigravity IDE Native Plugin: 6-tool MCP exoskeleton, 1-hop AST/import context locator, behavioral smoke verifier, and Cross-Project Playbook."
 readme = "README.md"
 requires-python = ">=3.11"
