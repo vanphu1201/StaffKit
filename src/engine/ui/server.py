@@ -566,6 +566,27 @@ class DesktopAppController:
                 forbid_demo_patterns=cfg.guards.forbid_demo_patterns,
                 enforce_production_only=cfg.guards.enforce_production_only,
             )
+            guard.ensure_git_exclude()
+            if guard.has_changes():
+                tracked, untracked = guard.get_changed_files()
+                all_dirty = tracked + untracked
+                if all_dirty:
+                    subprocess.run(
+                        ["git", "add", "--", *all_dirty],
+                        cwd=str(cfg.target_repo_path),
+                        capture_output=True,
+                        check=False,
+                    )
+                    subprocess.run(
+                        ["git", "commit", "-m", "chore: snapshot partial progress before resume"],
+                        cwd=str(cfg.target_repo_path),
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.emit_log(
+                        "info",
+                        f"📦 Đã tự động lưu snapshot tiến độ làm dở ({len(all_dirty)} file) để Antigravity chạy tiếp mượt mà.",
+                    )
             verifier = Verifier(cfg, guard)
             compiler = PromptCompiler(cfg)
             orch = Orchestrator(

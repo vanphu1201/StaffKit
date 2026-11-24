@@ -1363,10 +1363,15 @@
       const counts = sum.counts || {};
       const doneCnt = counts.DONE || 0;
       const blockedCnt = counts.BLOCKED || 0;
+      const pendingCnt = counts.PENDING || 0;
       const totCnt = tasks.length || sum.total_tasks || 0;
       document.getElementById("taskProgressLabel").textContent = `${doneCnt} / ${totCnt}`;
       document.getElementById("taskProgressFill").style.width = totCnt ? `${Math.round((doneCnt / totCnt) * 100)}%` : "0%";
-      document.getElementById("btnRetryBlocked").style.display = blockedCnt > 0 ? "inline-flex" : "none";
+      const retryBtn = document.getElementById("btnRetryBlocked");
+      if (retryBtn) {
+        retryBtn.style.display = (!busy && (blockedCnt > 0 || pendingCnt > 0)) ? "inline-flex" : "none";
+        retryBtn.textContent = blockedCnt > 0 ? "🔄 Thử lại phần lỗi" : "▶️ Chạy tiếp";
+      }
 
       const tBox = document.getElementById("taskListContainer");
       if (!tasks.length) {
