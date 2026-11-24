@@ -6,14 +6,22 @@
 
 ---
 
-## Cài đặt nhanh (2 bước)
+## Cài đặt 1 chạm (Khuyên dùng)
+
+- **Linux / macOS / Remote SSH Server:**
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/vanphu1201/automatic-promt/main/install.sh | bash
+  ```
+- **Windows (PowerShell):**
+  ```powershell
+  irm https://raw.githubusercontent.com/vanphu1201/automatic-promt/main/install.ps1 | iex
+  ```
+
+### Hoặc cài thủ công từ mã nguồn (2 bước)
 
 ```bash
-# 1. Cài package vào virtualenv cục bộ
 python -m venv .venv
 .venv/Scripts/python.exe -m pip install -e ".[dev]"   # Linux/macOS: .venv/bin/python -m pip install -e ".[dev]"
-
-# 2. Cài/đồng bộ plugin vào ~/.gemini/config/plugins/auto-prompt-architect
 .venv/Scripts/python.exe -m engine.cli install-plugin
 ```
 
@@ -54,6 +62,9 @@ Sau đó mở **Plugins Manager** trong Antigravity IDE để kiểm tra **Auto-
 # 2. Chạy bộ Micro-Eval 3 kịch bản end-to-end (0 token, < 3 giây)
 .venv/Scripts/python.exe -m engine.cli plugin-eval
 
-# 3. Chạy toàn bộ unit & integration tests
+# 3. Xem thống kê telemetry dùng thật (lượt gọi, độ trễ, token đầu ra)
+.venv/Scripts/python.exe -m engine.cli plugin-stats --repo .
+
+# 4. Chạy toàn bộ unit & integration tests
 .venv/Scripts/pytest.exe -q
 ```

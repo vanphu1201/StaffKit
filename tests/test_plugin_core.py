@@ -24,7 +24,7 @@ def _init_git_repo(repo_dir: Path) -> None:
 def test_plugin_manifest_and_always_on_overhead_under_1000_tokens() -> None:
     plugin_root = Path(__file__).resolve().parents[1] / "antigravity-plugin" / "auto-prompt-architect"
     manifest = json.loads((plugin_root / "plugin.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "2.0.0"
+    assert manifest["version"] == "2.1.0"
     assert (plugin_root / manifest["logo"]).is_file()
 
     rules_text = (plugin_root / "rules" / "AGENTS.md").read_text(encoding="utf-8")
@@ -208,3 +208,33 @@ def test_load_project_memory_include_audit_tech_debt_xray(tmp_path: Path) -> Non
     assert "0-Token Tech-Debt & Health X-Ray" in out
     assert "bloated.py" in out
     assert "TODO/FIXME/Stub Markers" in out
+
+
+def test_modular_locator_and_ast_scanner_and_plugin_stats_cli(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from engine.ast_scanner import extract_fast_skeleton, extract_symbol_windows, scan_repo_tech_debt
+    from engine.cli import app
+    from engine.locator import locate_relevant_files
+
+    assert callable(locate_relevant_files)
+    assert callable(extract_fast_skeleton)
+    assert callable(extract_symbol_windows)
+    assert callable(scan_repo_tech_debt)
+
+    auto_dir = tmp_path / ".auto-engine"
+    auto_dir.mkdir(parents=True)
+    (auto_dir / "plugin_telemetry.jsonl").write_text(
+        json.dumps({"ts": "2026-11-24T10:00:00", "tool": "load_project_memory", "latency_ms": 42.5, "output_tokens": 450, "ok": True})
+        + "\n"
+        + json.dumps({"ts": "2026-11-24T10:01:00", "tool": "locate_context", "latency_ms": 88.0, "output_tokens": 820, "ok": True})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    res = runner.invoke(app, ["plugin-stats", "--repo", str(tmp_path)])
+    assert res.exit_code == 0, res.output
+    assert "load_project_memory" in res.output
+    assert "locate_context" in res.output
+    assert "2 calls" in res.output

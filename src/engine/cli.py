@@ -191,5 +191,60 @@ def plugin_eval() -> None:
         raise typer.Exit(code=1)
 
 
+@app.command(name="plugin-stats")
+def plugin_stats(
+    repo: Path = typer.Option(Path("."), "--repo", help="Target repo containing .auto-engine/plugin_telemetry.jsonl"),
+) -> None:
+    """Analyze real MCP usage telemetry (calls, success rate, avg latency, output tokens) from `.auto-engine/plugin_telemetry.jsonl`."""
+    repo_path = repo.expanduser().resolve()
+    tel_path = repo_path / ".auto-engine" / "plugin_telemetry.jsonl"
+    if not tel_path.is_file():
+        console.print(f"[yellow]No telemetry recorded yet at {tel_path.as_posix()}. Use the plugin in Antigravity IDE first.[/yellow]")
+        return
+
+    stats: dict[str, dict[str, float]] = {}
+    total_calls = 0
+    for ln in tel_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            obj = json.loads(ln)
+            name = str(obj.get("tool") or "unknown")
+            row = stats.setdefault(name, {"calls": 0.0, "ok": 0.0, "latency_ms": 0.0, "tokens": 0.0})
+            row["calls"] += 1
+            if obj.get("ok", True):
+                row["ok"] += 1
+            row["latency_ms"] += float(obj.get("latency_ms", 0.0))
+            row["tokens"] += float(obj.get("output_tokens", 0.0))
+            total_calls += 1
+        except Exception:
+            continue
+
+    if total_calls == 0:
+        console.print("[yellow]Telemetry file is empty.[/yellow]")
+        return
+
+    table = Table(title=f"Auto-Prompt Architect — Live Telemetry Stats ({repo_path.name}, {total_calls} calls)")
+    table.add_column("MCP Tool", style="cyan", no_wrap=True)
+    table.add_column("Calls", justify="right")
+    table.add_column("Success", justify="right")
+    table.add_column("Avg Latency", justify="right")
+    table.add_column("Avg Output Tok", justify="right")
+    table.add_column("Total Output Tok", justify="right")
+
+    for name, r in sorted(stats.items(), key=lambda kv: (-kv[1]["calls"], kv[0])):
+        cnt = int(r["calls"])
+        ok_pct = (r["ok"] / cnt) * 100.0
+        avg_ms = r["latency_ms"] / cnt
+        avg_tok = r["tokens"] / cnt
+        table.add_row(
+            name,
+            str(cnt),
+            f"{ok_pct:.0f}%",
+            f"{avg_ms:.1f} ms",
+            f"~{avg_tok:.0f}",
+            f"~{int(r['tokens']):,}",
+        )
+    console.print(table)
+
+
 if __name__ == "__main__":
     app()
