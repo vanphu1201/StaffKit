@@ -485,3 +485,68 @@ def test_five_power_upgrades_lessons_fastpath_cost_and_smoke(tmp_path: Path) -> 
     # 4. Lightweight Web Runtime Smoke gracefully skips non-Node repos
     ok, msg = run_web_runtime_smoke(repo)
     assert ok is True and "Skipped" in msg
+
+
+def test_antigravity_plugin_mcp_amplifier_tools(tmp_path: Path) -> None:
+    import asyncio
+    from engine.bridges.mcp_server import create_mcp_server
+
+    repo = tmp_path / "ide_repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "auth.py").write_text("def login(user: str) -> bool:\n    return bool(user)\n", encoding="utf-8")
+
+    mcp = create_mcp_server(None)
+
+    async def _exercise() -> None:
+        listed = await mcp.list_tools()
+        tool_names = {t.name for t in listed}
+        for expected in (
+            "load_project_memory",
+            "locate_context",
+            "save_project_spec",
+            "record_lesson",
+            "verify_and_smoke",
+            "snapshot_or_undo",
+            "get_next_task",
+            "submit_and_verify",
+        ):
+            assert expected in tool_names, f"Missing MCP tool: {expected}"
+
+        save_fn = (await mcp.get_tool("save_project_spec")).fn
+        res_save = save_fn(
+            repo_path=str(repo),
+            constitution_md="# Constitution\n- Real data only.",
+            contracts_md="# Contract\n- login(user) -> bool",
+            prd_md="# PRD\nLogin feature.",
+            acceptance_criteria=["AC-1: Valid user logs in"],
+        )
+        assert "SAVED_SPEC" in res_save
+        assert (repo / ".auto-engine" / "constitution.md").is_file()
+        assert (repo / ".auto-engine" / "contracts.md").is_file()
+        assert (repo / "openspec" / "prd.md").is_file()
+
+        lesson_fn = (await mcp.get_tool("record_lesson")).fn
+        res_les = lesson_fn(title="Auth Quirk", summary="Always trim whitespace on user input", repo_path=str(repo))
+        assert "RECORDED_LESSON" in res_les
+
+        mem_fn = (await mcp.get_tool("load_project_memory")).fn
+        mem_out = mem_fn(repo_path=str(repo))
+        assert "Real data only." in mem_out
+        assert "Always trim whitespace on user input" in mem_out
+
+        loc_fn = (await mcp.get_tool("locate_context")).fn
+        loc_out = loc_fn(query="fix login auth", repo_path=str(repo))
+        assert "src/auth.py" in loc_out
+
+    asyncio.run(_exercise())
+
+    # Validate bundled Antigravity plugin JSON files
+    plugin_root = Path(__file__).resolve().parents[1] / "antigravity-plugin" / "auto-prompt-architect"
+    manifest = json.loads((plugin_root / "plugin.json").read_text(encoding="utf-8"))
+    assert manifest["name"] == "auto-prompt-architect"
+    assert len(manifest["suggestedPrompts"]) == 3
+    mcp_cfg = json.loads((plugin_root / "mcp_config.json").read_text(encoding="utf-8"))
+    assert "auto-prompt-architect" in mcp_cfg["mcpServers"]
+    assert (plugin_root / "skills" / "brainstorm-to-product" / "SKILL.md").is_file()
+    assert (plugin_root / "skills" / "deep-fix" / "SKILL.md").is_file()
+    assert (plugin_root / "rules" / "AGENTS.md").is_file()

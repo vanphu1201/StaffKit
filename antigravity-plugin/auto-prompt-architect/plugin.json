@@ -1,0 +1,12 @@
+{
+  "name": "auto-prompt-architect",
+  "displayName": "Auto-Prompt Architect",
+  "version": "1.0.0",
+  "description": "Biến ý tưởng mơ hồ thành sản phẩm hoàn chỉnh không lỗi ngay trong Antigravity IDE: Phỏng vấn đa vòng + Gợi ý nâng tầm + Hiến pháp dự án + Trí nhớ bài học 0-token + Kiểm chứng thực tế.",
+  "repository": "https://github.com/vanphu1201/automatic-promt",
+  "suggestedPrompts": [
+    "Brainstorm và xây dựng cho tôi một sản phẩm công nghệ hoàn chỉnh từ ý tưởng này...",
+    "Đọc ngữ cảnh dự án hiện tại và điều tra sửa dứt điểm lỗi này (kèm kiểm chứng thực tế)",
+    "Kiểm định độc lập dự án hiện tại (build, test, runtime smoke) và ghi nhớ bài học"
+  ]
+}

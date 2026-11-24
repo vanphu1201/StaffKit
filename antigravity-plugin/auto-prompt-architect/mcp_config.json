@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "auto-prompt-architect": {
+      "command": "d:/code/automatic-promt/.venv/Scripts/python.exe",
+      "args": [
+        "-m",
+        "engine.cli",
+        "serve-mcp",
+        "--config",
+        "d:/code/automatic-promt/config.yaml"
+      ]
+    }
+  }
+}

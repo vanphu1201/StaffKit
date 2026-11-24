@@ -1,18 +1,22 @@
-"""Mode B: Minimal 4-tool FastMCP Server for Antigravity IDE / App (logs strictly to stderr)."""
+"""Mode B (Primary IDE Amplifier): FastMCP Server powering Antigravity IDE with 0-token Context, Memory, Spec & Verification."""
 
 from __future__ import annotations
 
+import json
 import logging
+import subprocess
 import sys
 from pathlib import Path
 
 from fastmcp import FastMCP
 
+from engine.bootstrapper import detect_existing_stack
 from engine.compiler import PromptCompiler
 from engine.database import StateDB
 from engine.git_guard import GitGuard
-from engine.models import EngineConfig, TokenUsage
-from engine.verifier import Verifier
+from engine.indexer import extract_fast_skeleton, extract_symbol_windows, list_real_files, locate_relevant_files
+from engine.models import EngineConfig, ProjectConfig, TokenUsage
+from engine.verifier import Verifier, run_web_runtime_smoke
 
 # Ensure stdio MCP transport remains completely clean by routing all logs to stderr.
 logging.basicConfig(
@@ -23,19 +27,275 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def create_mcp_server(config_path: Path) -> FastMCP:
-    """Instantiate FastMCP server bound to config_path with exactly 4 minimal tools."""
-    config = EngineConfig.load(config_path)
-    db = StateDB(config.state_db_path)
-    guard = GitGuard(config.target_repo_path, ignore_artifacts=config.guards.ignore_artifacts)
-    verifier = Verifier(config, guard)
-    compiler = PromptCompiler(config)
+def _resolve_repo_path(repo_path: str, fallback: Path) -> Path:
+    cleaned = (repo_path or "").strip()
+    if cleaned:
+        p = Path(cleaned).expanduser().resolve()
+        if p.is_dir():
+            return p
+    return fallback.resolve()
 
-    mcp = FastMCP("auto-prompt-engine")
+
+def _read_optional(path: Path, max_chars: int = 4000) -> str:
+    if not path.is_file():
+        return ""
+    try:
+        txt = path.read_text(encoding="utf-8", errors="replace").strip()
+        return txt[:max_chars] + ("\n... [trimmed]" if len(txt) > max_chars else "")
+    except OSError:
+        return ""
+
+
+def create_mcp_server(config_path: Path | None = None) -> FastMCP:
+    """Instantiate FastMCP server exposing 0-token IDE Amplifier tools + Sprint tools."""
+    if config_path is not None and config_path.is_file():
+        config = EngineConfig.load(config_path)
+    else:
+        config = EngineConfig(project=ProjectConfig(target_repo=str(Path.cwd())))
+
+    mcp = FastMCP("auto-prompt-architect")
+
+    # =========================================================================
+    # TIER 1: 0-TOKEN ANTIGRAVITY IDE AMPLIFIER TOOLS (Work on ANY repo_path)
+    # =========================================================================
+
+    @mcp.tool()
+    def load_project_memory(repo_path: str = "") -> str:
+        """0-token X-ray briefing of a project: stack, verify/run commands, constitution, contracts, lessons, handoff & recent git log."""
+        repo = _resolve_repo_path(repo_path, config.target_repo_path)
+        auto_dir = repo / ".auto-engine"
+        det_stack, det_vc, det_fc, det_prev = detect_existing_stack(repo)
+
+        commits = ""
+        if (repo / ".git").exists():
+            proc = subprocess.run(
+                ["git", "log", "-n", "10", "--date=short", "--pretty=format:- [%h] %ad %s"],
+                cwd=str(repo),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            commits = proc.stdout.strip()
+
+        constitution = _read_optional(auto_dir / "constitution.md", 2500)
+        contracts = _read_optional(auto_dir / "contracts.md", 2500)
+        lessons = _read_optional(auto_dir / "lessons.md", 2500)
+        handoff = _read_optional(auto_dir / "handoff.md", 2000)
+
+        sections = [
+            f"# PROJECT MEMORY BRIEFING: `{repo.name}`",
+            f"- Path: `{repo.as_posix()}`",
+            f"- Detected Stack: `{det_stack}`",
+            f"- Verify Commands: `{det_vc}` | Final Gate: `{det_fc}` | Preview: `{det_prev or '(auto)'}`",
+        ]
+        if commits:
+            sections.append(f"\n## Recent Git Commits\n{commits}")
+        if constitution:
+            sections.append(f"\n## Project Constitution (`.auto-engine/constitution.md`)\n{constitution}")
+        if contracts:
+            sections.append(f"\n## Architecture Contract (`.auto-engine/contracts.md`)\n{contracts}")
+        if lessons:
+            sections.append(f"\n## Lessons Learned & Verified Discoveries (`.auto-engine/lessons.md`)\n{lessons}")
+        if handoff:
+            sections.append(f"\n## Module Handoff Memory (`.auto-engine/handoff.md`)\n{handoff}")
+        return "\n".join(sections)
+
+    @mcp.tool()
+    def locate_context(query: str, repo_path: str = "", max_files: int = 5) -> str:
+        """0-token AST & brace-block locator: returns the most relevant starting files, signatures & symbol windows to save exploration tokens."""
+        import os
+
+        repo = _resolve_repo_path(repo_path, config.target_repo_path)
+        try:
+            real_files = list_real_files(repo)
+        except Exception:
+            ignore_dirs = {".git", ".auto-engine", "node_modules", ".venv", "__pycache__", "dist", "build"}
+            real_files = set()
+            for root, dirs, files in os.walk(repo):
+                dirs[:] = [d for d in dirs if d not in ignore_dirs]
+                for f in files:
+                    real_files.add((Path(root) / f).relative_to(repo).as_posix())
+        if not real_files:
+            return f"No source files found in `{repo.as_posix()}`."
+
+        located = locate_relevant_files(query, real_files, repo, max_targets=max(1, min(10, max_files)))
+        lines = [
+            f"# 0-TOKEN CONTEXT LOCATOR (`{repo.name}` — {len(real_files)} tracked files)",
+            f"- Suggested Starting Points: {located.target_files}",
+            f"- Readonly Context / Interfaces: {located.readonly_files}",
+            f"- Protected Test Files: {located.protected_tests[:10]}",
+        ]
+        for rel in located.target_files[:max_files]:
+            fp = repo / rel
+            if not fp.is_file():
+                continue
+            skel = extract_fast_skeleton(fp, max_lines=22, priority_identifiers=located.identifiers)
+            win = extract_symbol_windows(fp, located.identifiers, radius=12, max_total_lines=45)
+            lines.append(f"\n## {rel}")
+            if skel:
+                lines.append(f"```\n{skel}\n```")
+            if win:
+                lines.append(f"// Matched symbol windows:\n```\n{win}\n```")
+        return "\n".join(lines)
+
+    @mcp.tool()
+    def save_project_spec(
+        repo_path: str = "",
+        constitution_md: str = "",
+        contracts_md: str = "",
+        prd_md: str = "",
+        acceptance_criteria: list[str] | None = None,
+    ) -> str:
+        """Persist agreed Brainstorm outputs (Constitution, Architecture Contract, OpenSpec PRD & AC-1..AC-N) to the repo."""
+        repo = _resolve_repo_path(repo_path, config.target_repo_path)
+        auto_dir = repo / ".auto-engine"
+        auto_dir.mkdir(parents=True, exist_ok=True)
+        saved: list[str] = []
+
+        if constitution_md.strip():
+            p = auto_dir / "constitution.md"
+            p.write_text(constitution_md.strip() + "\n", encoding="utf-8")
+            saved.append(p.as_posix())
+
+        contract_parts: list[str] = []
+        if contracts_md.strip():
+            contract_parts.append(contracts_md.strip())
+        if acceptance_criteria:
+            ac_lines = ["## Acceptance Criteria (Must Pass Before Completion)"]
+            for idx, ac in enumerate(acceptance_criteria, start=1):
+                s = str(ac).strip()
+                if s:
+                    prefix = "" if s.upper().startswith("AC-") else f"AC-{idx}: "
+                    ac_lines.append(f"- {prefix}{s}")
+            if len(ac_lines) > 1:
+                contract_parts.append("\n".join(ac_lines))
+        if contract_parts:
+            p = auto_dir / "contracts.md"
+            p.write_text("\n\n".join(contract_parts) + "\n", encoding="utf-8")
+            saved.append(p.as_posix())
+
+        if prd_md.strip():
+            os_dir = repo / "openspec"
+            os_dir.mkdir(parents=True, exist_ok=True)
+            p = os_dir / "prd.md"
+            p.write_text(prd_md.strip() + "\n", encoding="utf-8")
+            saved.append(p.as_posix())
+
+        if (repo / ".git").exists():
+            GitGuard(repo, ignore_artifacts=config.guards.ignore_artifacts).ensure_git_exclude()
+
+        return "SAVED_SPEC:\n" + "\n".join(f"- `{s}`" for s in saved) if saved else "NO_CONTENT_PROVIDED"
+
+    @mcp.tool()
+    def record_lesson(title: str, summary: str, repo_path: str = "") -> str:
+        """Persist a verified root-cause discovery or runtime quirk into `.auto-engine/lessons.md` so future sessions never regress."""
+        repo = _resolve_repo_path(repo_path, config.target_repo_path)
+        auto_dir = repo / ".auto-engine"
+        auto_dir.mkdir(parents=True, exist_ok=True)
+        lessons_path = auto_dir / "lessons.md"
+
+        clean_lines = [ln.strip() for ln in summary.strip().splitlines() if ln.strip()][:6]
+        entry = f"### {title.strip()}\n" + "\n".join(f"- {ln.lstrip('-* ')}" for ln in clean_lines)
+        blocks: list[str] = []
+        if lessons_path.is_file():
+            raw = lessons_path.read_text(encoding="utf-8", errors="replace").strip()
+            if raw:
+                for idx, b in enumerate(raw.split("\n### ")):
+                    bc = b.strip()
+                    if not bc:
+                        continue
+                    hdr = bc if (idx == 0 and bc.startswith("### ")) else f"### {bc}"
+                    if hdr != entry:
+                        blocks.append(hdr)
+        blocks.append(entry)
+        lessons_path.write_text("\n\n".join(blocks[-12:]) + "\n", encoding="utf-8")
+        return f"RECORDED_LESSON -> `{lessons_path.as_posix()}` ({len(blocks[-12:])} lessons stored)"
+
+    @mcp.tool()
+    def verify_and_smoke(repo_path: str = "", commands: list[str] | None = None, run_smoke: bool = True) -> str:
+        """Run 0-token independent verification (auto-detected build/typecheck/tests + live Web runtime smoke probe)."""
+        repo = _resolve_repo_path(repo_path, config.target_repo_path)
+        det_stack, det_vc, det_fc, _ = detect_existing_stack(repo)
+        cmds = [c.strip() for c in (commands or []) if str(c).strip()] or det_fc or det_vc
+        local_cfg = config.model_copy(deep=True)
+        local_cfg.project.target_repo = repo.as_posix()
+        guard = GitGuard(repo, ignore_artifacts=local_cfg.guards.ignore_artifacts)
+        verifier = Verifier(local_cfg, guard)
+
+        report: list[str] = [f"# INDEPENDENT VERIFICATION (`{repo.name}`, stack=`{det_stack}`)"]
+        all_ok = True
+        if cmds:
+            res = verifier.run_commands(cmds)
+            all_ok = all_ok and res.passed
+            report.append(f"- Static/Test Gate ({cmds}): **{'PASS' if res.passed else 'FAIL'}**")
+            if res.trimmed_error_log:
+                report.append(f"```\n{res.trimmed_error_log}\n```")
+        else:
+            report.append("- Static/Test Gate: (no commands detected; pass `commands=[...]` to run specific checks)")
+
+        if all_ok and run_smoke and det_stack in ("web_react", "fullstack_web") and (repo / "package.json").is_file():
+            smoke_ok, smoke_msg = run_web_runtime_smoke(repo)
+            all_ok = all_ok and smoke_ok
+            report.append(f"- Runtime Smoke Probe: **{'PASS' if smoke_ok else 'FAIL'}** — {smoke_msg}")
+
+        report.append(f"\n**OVERALL: {'PASS' if all_ok else 'FAIL'}**")
+        return "\n".join(report)
+
+    @mcp.tool()
+    def snapshot_or_undo(action: str = "snapshot", message: str = "", repo_path: str = "") -> str:
+        """Create a safe Git snapshot commit before major edits (`action='snapshot'`) or rollback to the previous snapshot (`action='undo'`)."""
+        repo = _resolve_repo_path(repo_path, config.target_repo_path)
+        if not (repo / ".git").exists():
+            return f"ERROR: `{repo.as_posix()}` is not a Git repository."
+        guard = GitGuard(repo, ignore_artifacts=config.guards.ignore_artifacts)
+        guard.ensure_git_exclude()
+
+        act = action.strip().lower()
+        if act == "snapshot":
+            tracked, untracked = guard.get_changed_files()
+            dirty = tracked + untracked
+            if dirty:
+                subprocess.run(["git", "add", "--", *dirty], cwd=str(repo), capture_output=True, check=False)
+                msg = message.strip() or "chore: auto-prompt-architect safety snapshot"
+                subprocess.run(["git", "commit", "-m", msg], cwd=str(repo), capture_output=True, check=False)
+            sha = guard.create_checkpoint()
+            (repo / ".auto-engine").mkdir(parents=True, exist_ok=True)
+            (repo / ".auto-engine" / "last_snapshot.json").write_text(
+                json.dumps({"sha": sha, "message": message.strip()}, indent=2),
+                encoding="utf-8",
+            )
+            return f"SNAPSHOT_SAVED: `{sha[:8]}` ({len(dirty)} files committed)"
+
+        if act == "undo":
+            snap_file = repo / ".auto-engine" / "last_snapshot.json"
+            sha = ""
+            if snap_file.is_file():
+                try:
+                    sha = str(json.loads(snap_file.read_text(encoding="utf-8")).get("sha") or "")
+                except Exception:
+                    sha = ""
+            if not sha:
+                return "ERROR: No saved snapshot found to undo."
+            guard.hard_rollback(sha)
+            return f"UNDONE: Rolled back `{repo.name}` cleanly to `{sha[:8]}`."
+
+        return f"ERROR: Unknown action `{action}`. Use `snapshot` or `undo`."
+
+    # =========================================================================
+    # TIER 2: LEGACY SPRINT ORCHESTRATION TOOLS (100% Backward Compatible)
+    # =========================================================================
+
+    def _sprint_deps() -> tuple[StateDB, GitGuard, Verifier, PromptCompiler]:
+        db = StateDB(config.state_db_path)
+        guard = GitGuard(config.target_repo_path, ignore_artifacts=config.guards.ignore_artifacts)
+        return db, guard, Verifier(config, guard), PromptCompiler(config)
 
     @mcp.tool()
     def get_next_task() -> str:
         """Pull the next READY task, create a clean Git checkpoint, and return a Surgical Prompt."""
+        db, guard, _verifier, compiler = _sprint_deps()
         approved = db.get_meta("plan_approved", "0")
         if config.sprint.require_plan_approval and approved != "1":
             return "BLOCKED: Plan is not approved yet. Run `engine approve` first."
@@ -70,6 +330,7 @@ def create_mcp_server(config_path: Path) -> FastMCP:
     @mcp.tool()
     def submit_and_verify(task_id: str) -> str:
         """Verify task changes (Empty Diff -> Scope -> Anti-Gaming -> rtk Commands) and commit or return trimmed error."""
+        db, guard, verifier, _compiler = _sprint_deps()
         task = db.get_task_spec(task_id)
         row = db.get_task_row(task_id)
         if not task or not row:
@@ -124,6 +385,7 @@ def create_mcp_server(config_path: Path) -> FastMCP:
     @mcp.tool()
     def get_sprint_status() -> str:
         """Return summary of DONE / PENDING / BLOCKED tasks and token consumption."""
+        db, _guard, _verifier, _compiler = _sprint_deps()
         summary = db.get_sprint_summary()
         return (
             f"Sprint Status: {summary['counts']} | "
@@ -134,6 +396,7 @@ def create_mcp_server(config_path: Path) -> FastMCP:
     @mcp.tool()
     def rollback_current_task(task_id: str, reason: str) -> str:
         """Rollback task to its clean checkpoint SHA and mark it BLOCKED."""
+        db, guard, _verifier, _compiler = _sprint_deps()
         row = db.get_task_row(task_id)
         if not row:
             return f"ERROR: Unknown task_id `{task_id}`."
@@ -146,8 +409,8 @@ def create_mcp_server(config_path: Path) -> FastMCP:
     return mcp
 
 
-def run_mcp_server(config_path: Path) -> None:
+def run_mcp_server(config_path: Path | None = None) -> None:
     """Start the FastMCP server on stdio transport."""
     server = create_mcp_server(config_path)
-    logger.info("Starting auto-prompt-engine FastMCP server (stdio)")
+    logger.info("Starting auto-prompt-architect FastMCP server (stdio)")
     server.run(transport="stdio")
