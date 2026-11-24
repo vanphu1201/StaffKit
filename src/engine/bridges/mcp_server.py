@@ -6,6 +6,8 @@ import json
 import logging
 import subprocess
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 
 from fastmcp import FastMCP
@@ -46,6 +48,24 @@ def _read_optional(path: Path, max_chars: int = 4000) -> str:
         return ""
 
 
+def _record_telemetry(repo: Path, tool_name: str, started: float, output_text: str, ok: bool = True) -> None:
+    """Append 1 lightweight 0-token telemetry row to `.auto-engine/plugin_telemetry.jsonl`."""
+    try:
+        auto_dir = repo / ".auto-engine"
+        auto_dir.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "tool": tool_name,
+            "latency_ms": round((time.monotonic() - started) * 1000, 1),
+            "output_tokens": max(1, int(len(output_text) / 3.5)) if output_text else 0,
+            "ok": ok,
+        }
+        with (auto_dir / "plugin_telemetry.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 def create_mcp_server(config_path: Path | None = None, *, ide_only: bool = False) -> FastMCP:
     """Instantiate FastMCP server exposing 6 lean 0-token IDE Amplifier tools (+ optional legacy Sprint tools)."""
     if config_path is not None and config_path.is_file():
@@ -62,6 +82,7 @@ def create_mcp_server(config_path: Path | None = None, *, ide_only: bool = False
     @mcp.tool()
     def load_project_memory(repo_path: str = "") -> str:
         """0-token X-ray briefing of a project: stack, verify/run commands, constitution, contracts, lessons, handoff & recent git log."""
+        t0 = time.monotonic()
         repo = _resolve_repo_path(repo_path, config.target_repo_path)
         auto_dir = repo / ".auto-engine"
         det_stack, det_vc, det_fc, det_prev = detect_existing_stack(repo)
@@ -100,13 +121,16 @@ def create_mcp_server(config_path: Path | None = None, *, ide_only: bool = False
             sections.append(f"\n## Lessons Learned & Verified Discoveries (`.auto-engine/lessons.md`)\n{lessons}")
         if handoff:
             sections.append(f"\n## Module Handoff Memory (`.auto-engine/handoff.md`)\n{handoff}")
-        return "\n".join(sections)
+        out = "\n".join(sections)
+        _record_telemetry(repo, "load_project_memory", t0, out, ok=True)
+        return out
 
     @mcp.tool()
     def locate_context(query: str, repo_path: str = "", max_files: int = 5) -> str:
         """0-token AST & brace-block locator: returns the most relevant starting files, signatures & symbol windows to save exploration tokens."""
         import os
 
+        t0 = time.monotonic()
         repo = _resolve_repo_path(repo_path, config.target_repo_path)
         try:
             real_files = list_real_files(repo)
@@ -138,7 +162,9 @@ def create_mcp_server(config_path: Path | None = None, *, ide_only: bool = False
                 lines.append(f"```\n{skel}\n```")
             if win:
                 lines.append(f"// Matched symbol windows:\n```\n{win}\n```")
-        return "\n".join(lines)
+        out = "\n".join(lines)
+        _record_telemetry(repo, "locate_context", t0, out, ok=True)
+        return out
 
     @mcp.tool()
     def save_project_spec(
@@ -256,6 +282,7 @@ def create_mcp_server(config_path: Path | None = None, *, ide_only: bool = False
         generate_delivery_pack: bool = True,
     ) -> str:
         """Run 0-token independent verification (build/typecheck/tests + live Web runtime smoke + non-tech Delivery Pack)."""
+        t0 = time.monotonic()
         repo = _resolve_repo_path(repo_path, config.target_repo_path)
         det_stack, det_vc, det_fc, _ = detect_existing_stack(repo)
         cmds = [c.strip() for c in (commands or []) if str(c).strip()] or det_fc or det_vc
@@ -293,7 +320,9 @@ def create_mcp_server(config_path: Path | None = None, *, ide_only: bool = False
                 pass
 
         report.append(f"\n**OVERALL: {'PASS' if all_ok else 'FAIL'}**")
-        return "\n".join(report)
+        out = "\n".join(report)
+        _record_telemetry(repo, "verify_and_smoke", t0, out, ok=all_ok)
+        return out
 
     @mcp.tool()
     def snapshot_or_undo(action: str = "snapshot", message: str = "", repo_path: str = "") -> str:

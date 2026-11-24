@@ -280,6 +280,124 @@ def install_plugin(
     console.print(f"[cyan]MCP Python: {py_exe} (-m engine.cli serve-mcp --ide-only)[/cyan]")
 
 
+@app.command(name="plugin-health")
+def plugin_health(
+    repo: Path = typer.Option(Path("."), "--repo", help="Target git repo to benchmark locate_context & memory"),
+    commits: int = typer.Option(10, "--commits", help="Number of historical commits to replay (0-token)"),
+) -> None:
+    """0-token Plugin Health Scorecard: manifest check, token overhead, live MCP latency, commit replay recall & telemetry."""
+    import asyncio
+    import json
+    import time
+
+    from engine.bridges.mcp_server import create_mcp_server
+    from engine.compiler import estimate_tokens
+    from engine.evaluator import audit_historical_commits
+
+    plugin_dir = Path.home() / ".gemini" / "config" / "plugins" / "auto-prompt-architect"
+    repo_path = repo.expanduser().resolve()
+    issues: list[str] = []
+
+    # 1. Manifest & Install integrity
+    installed = plugin_dir.is_dir() and (plugin_dir / "plugin.json").is_file()
+    mcp_py_ok = False
+    version = "missing"
+    rules_tok = 0
+    skill_toks: dict[str, int] = {}
+    if installed:
+        manifest = json.loads((plugin_dir / "plugin.json").read_text(encoding="utf-8"))
+        version = str(manifest.get("version", "?"))
+        if manifest.get("logo") and not (plugin_dir / manifest["logo"]).is_file():
+            issues.append(f"Logo missing: {manifest['logo']}")
+        mcp_cfg_p = plugin_dir / "mcp_config.json"
+        if mcp_cfg_p.is_file():
+            mcp_cfg = json.loads(mcp_cfg_p.read_text(encoding="utf-8"))
+            srv = (mcp_cfg.get("mcpServers") or {}).get("auto-prompt-architect") or {}
+            cmd = str(srv.get("command", ""))
+            mcp_py_ok = Path(cmd).is_file() if ("/" in cmd or "\\" in cmd) else True
+            if not mcp_py_ok:
+                issues.append(f"MCP python binary not found: {cmd}")
+            if "--ide-only" not in (srv.get("args") or []):
+                issues.append("MCP args missing `--ide-only` (legacy sprint tools add schema bloat).")
+        rules_p = plugin_dir / "rules" / "AGENTS.md"
+        if rules_p.is_file():
+            rules_tok = estimate_tokens(rules_p.read_text(encoding="utf-8"))
+        for sk in (plugin_dir / "skills").glob("*/SKILL.md"):
+            skill_toks[sk.parent.name] = estimate_tokens(sk.read_text(encoding="utf-8"))
+    else:
+        issues.append(f"Plugin not installed at {plugin_dir}")
+
+    # 2. Live MCP 6-tool schema overhead + real execution latency
+    mcp = create_mcp_server(None, ide_only=True)
+
+    async def _probe_mcp() -> tuple[int, int, float, int, float, int]:
+        tools = await mcp.list_tools()
+        schema_str = json.dumps(
+            [{"name": t.name, "desc": t.description, "params": getattr(t, "parameters", {})} for t in tools],
+            ensure_ascii=False,
+        )
+        schema_tok = estimate_tokens(schema_str)
+
+        t0 = time.monotonic()
+        mem_out = (await mcp.get_tool("load_project_memory")).fn(repo_path=str(repo_path))
+        mem_ms = round((time.monotonic() - t0) * 1000, 1)
+        mem_tok = estimate_tokens(mem_out)
+
+        t1 = time.monotonic()
+        loc_out = (await mcp.get_tool("locate_context")).fn(query="fix bug in server or compiler", repo_path=str(repo_path))
+        loc_ms = round((time.monotonic() - t1) * 1000, 1)
+        loc_tok = estimate_tokens(loc_out)
+        return len(tools), schema_tok, mem_ms, mem_tok, loc_ms, loc_tok
+
+    tool_cnt, schema_tok, mem_ms, mem_tok, loc_ms, loc_tok = asyncio.run(_probe_mcp())
+    always_on_tok = rules_tok + schema_tok
+    if always_on_tok > 1200:
+        issues.append(f"Always-on overhead ({always_on_tok} tok) > 1200 tok target.")
+    if mem_tok > 2500:
+        issues.append(f"load_project_memory output ({mem_tok} tok) is large; trim constitution/lessons/handoff.")
+
+    # 3. 0-Token Historical Commit Replay
+    replay_str = "N/A (not a git repo)"
+    if (repo_path / ".git").exists():
+        rep = audit_historical_commits(repo_path, limit=max(1, min(30, commits)))
+        replay_str = (
+            f"{rep.commits_evaluated} commits | Recall={rep.avg_recall:.1%} | "
+            f"Neighborhood={rep.neighborhood_hit_rate:.1%} | WindowHit={rep.window_hit_rate:.1%}"
+        )
+        if rep.commits_evaluated > 0 and rep.avg_recall < 0.65:
+            issues.append(f"locate_context recall ({rep.avg_recall:.1%}) < 65% on `{repo_path.name}` — consider improving identifier extraction.")
+
+    # 4. Telemetry summary
+    tel_path = repo_path / ".auto-engine" / "plugin_telemetry.jsonl"
+    tel_counts: dict[str, int] = {}
+    if tel_path.is_file():
+        for ln in tel_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                obj = json.loads(ln)
+                tel_counts[obj["tool"]] = tel_counts.get(obj["tool"], 0) + 1
+            except Exception:
+                continue
+
+    table = Table(title=f"Auto-Prompt Architect v{version} — 0-Token Health Scorecard ({repo_path.name})")
+    table.add_column("Check", style="cyan")
+    table.add_column("Result", style="green")
+    table.add_row("Plugin Installed & MCP Python", f"{'OK' if (installed and mcp_py_ok) else 'FAIL'} ({tool_cnt} IDE tools)")
+    table.add_row("Always-On Overhead / Turn", f"{always_on_tok} tok (rules={rules_tok} + 6 MCP schemas={schema_tok})")
+    table.add_row("On-Demand Skills Size", ", ".join(f"{k}={v} tok" for k, v in sorted(skill_toks.items())) or "none")
+    table.add_row("Live `load_project_memory`", f"{mem_ms} ms | ~{mem_tok} tok")
+    table.add_row("Live `locate_context`", f"{loc_ms} ms | ~{loc_tok} tok")
+    table.add_row("0-Token Commit Replay Accuracy", replay_str)
+    table.add_row("Recorded Telemetry Calls", json.dumps(tel_counts) if tel_counts else "(new — accumulates as you use IDE)")
+    console.print(table)
+
+    if issues:
+        console.print("[yellow]Detected Weaknesses / Recommendations:[/yellow]")
+        for iss in issues:
+            console.print(f"  - [yellow]{iss}[/yellow]")
+    else:
+        console.print("[bold green]ALL CHECKS HEALTHY (0 weaknesses detected on static + live MCP + replay audit).[/bold green]")
+
+
 def _print_report_table(summary: dict, halted_reason: str | None = None, final_ok: bool = True) -> None:
     table = Table(title="Sprint Token & Execution Report")
     table.add_column("Metric", style="cyan")
