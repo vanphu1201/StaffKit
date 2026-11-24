@@ -420,6 +420,11 @@ class StateDB:
             ).fetchall()
             verdicts = {r["verdict"]: int(r["cnt"]) for r in verdict_rows}
 
+            dur_row = conn.execute(
+                "SELECT COALESCE(SUM(duration_sec), 0.0) AS total_duration_sec FROM runs"
+            ).fetchone()
+            total_duration_sec = float(dur_row["total_duration_sec"]) if dur_row else 0.0
+
             meta_rows = conn.execute(
                 "SELECT key, value FROM sprint_meta WHERE key LIKE 'phase_%'"
             ).fetchall()
@@ -434,5 +439,6 @@ class StateDB:
             "planning_prompt_tokens": phase_prompt,
             "planning_completion_tokens": phase_completion,
             "cost_usd": float(totals["cost_usd"]) if totals else 0.0,
+            "duration_sec": round(total_duration_sec, 1),
             "verdicts": verdicts,
         }

@@ -215,6 +215,7 @@ class ProductInterviewer:
         previous_qa: dict[str, str] | None = None,
         selected_suggestions: list[str] | None = None,
         user_notes: str = "",
+        attachments: list[str] | None = None,
         round_number: int = 1,
     ) -> InterviewOutput:
         """Adaptive multi-round elicitation (BMAD + Superpowers brainstorming): scales depth by complexity & offers suggestions."""
@@ -240,6 +241,14 @@ class ProductInterviewer:
             if user_notes.strip():
                 hist_parts.append(f"Ghi chú / mong muốn bổ sung tự do của người dùng:\n{user_notes.strip()}")
             history_section = "\n".join(hist_parts) + "\n"
+        if attachments:
+            att_lines = "\n".join(f"- `{a}`" for a in attachments if str(a).strip())
+            if att_lines:
+                history_section += (
+                    "\nTệp ảnh / tài liệu người dùng đã dán/đính kèm kèm theo yêu cầu "
+                    "(sẽ được chuyển cho Antigravity đọc trực tiếp khi lập trình):\n"
+                    f"{att_lines}\n"
+                )
 
         round_guidance = (
             "4. Đánh giá `complexity_level` (`simple` / `standard` / `complex`) dựa trên quy mô thực tế của ý tưởng:\n"
@@ -291,6 +300,7 @@ Yêu cầu chi tiết:
         *,
         selected_suggestions: list[str] | None = None,
         user_notes: str = "",
+        attachments: list[str] | None = None,
     ) -> ProductSpec:
         """Turn idea + multi-round answers + chosen suggestions into features, Constitution, Contract & OpenSpec PRD."""
         self._emit("info", "Đang tổng hợp Danh sách tính năng, Hiến pháp dự án (Constitution), Hợp đồng Kiến trúc & PRD...")
@@ -307,6 +317,13 @@ Yêu cầu chi tiết:
             or "- (Không chọn thêm gợi ý phụ)"
         )
         notes_block = f"\nGhi chú bổ sung từ người dùng:\n{user_notes.strip()}\n" if user_notes.strip() else ""
+        if attachments:
+            att_lines = "\n".join(f"- `{a}`" for a in attachments if str(a).strip())
+            if att_lines:
+                notes_block += (
+                    "\nẢnh / tài liệu đính kèm từ người dùng (nhắc rõ trong PRD để Antigravity dùng `read_file` đọc trực tiếp):\n"
+                    f"{att_lines}\n"
+                )
         prompt = f"""Bạn là Product Manager & Software Architect xây dựng SẢN PHẨM CÔNG NGHỆ CHẠY THẬT (KHÔNG làm bản demo hay dữ liệu giả), kết hợp chuẩn `github/spec-kit` (Constitution) + `Fission-AI/OpenSpec` (Executable PRD & Contracts).
 QUY TẮC BẮT BUỘC: TUYỆT ĐỐI KHÔNG gọi bất kỳ tool nào. Chỉ trả về JSON đúng schema `ProductSpec` trong 1 lượt duy nhất.
 

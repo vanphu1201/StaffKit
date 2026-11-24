@@ -157,7 +157,8 @@ def test_ui_wizard_endpoints_and_reset(tmp_path: Path) -> None:
 
     home = client.get("/")
     assert home.status_code == 200
-    assert "Đơn giản (Tạo sản phẩm)" in home.text
+    assert "Tạo sản phẩm mới" in home.text
+    assert "Prompt Sửa nhanh" in home.text
 
     st = client.get("/api/state").json()
     assert st["wizard"]["step"] == 1

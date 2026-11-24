@@ -343,6 +343,30 @@ class PromptCompiler:
         lines = [f"- {k}: {v}" for k, v in data.items() if str(v).strip()]
         return "\n".join(lines)
 
+    def _load_user_attachments_text(self) -> str:
+        """Load paths of user-pasted images & documents so Antigravity can inspect them via `read_file`."""
+        manifest_path = self.config.auto_engine_dir / "user_attachments" / "manifest.json"
+        if not manifest_path.is_file():
+            return ""
+        try:
+            items = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return ""
+        if not isinstance(items, list) or not items:
+            return ""
+        lines: list[str] = [
+            "Người dùng đã dán/đính kèm ảnh hoặc tài liệu thật bên dưới. Hãy dùng tool `read_file` với đường dẫn tuyệt đối để xem trực tiếp nội dung ảnh/tài liệu trước khi thiết kế hoặc sửa code:"
+        ]
+        for item in items[-10:]:
+            if not isinstance(item, dict):
+                continue
+            fpath = str(item.get("path") or "").strip()
+            name = str(item.get("name") or Path(fpath).name)
+            mime = str(item.get("mime_type") or "")
+            if fpath and Path(fpath).is_file():
+                lines.append(f"- `{fpath}` ({name}, {mime or 'file'})")
+        return "\n".join(lines) if len(lines) > 1 else ""
+
     def _load_constitution_text(self, max_lines: int = 28) -> str:
         """Load `.auto-engine/constitution.md` (spec-kit style immutable project principles)."""
         for candidate in (
@@ -468,6 +492,7 @@ class PromptCompiler:
         contract_text: str = "",
         handoff_text: str = "",
         constitution_text: str = "",
+        attachments_text: str = "",
         objective_override: str | None = None,
     ) -> str:
         verify_cmds = task.verify_commands or self.config.executor.default_verify_commands
@@ -541,6 +566,16 @@ class PromptCompiler:
             payload_lines.extend(["", "<repo_tree>", "# REPO FILE TREE (paths only)", repo_tree_text, "</repo_tree>"])
         if user_answers_text:
             payload_lines.extend(["", "<user_answers>", "# USER ANSWERS & REAL ASSETS", user_answers_text, "</user_answers>"])
+        if attachments_text:
+            payload_lines.extend(
+                [
+                    "",
+                    "<user_attachments>",
+                    "# USER ATTACHED IMAGES & DOCUMENTS (Read via `read_file`)",
+                    attachments_text,
+                    "</user_attachments>",
+                ]
+            )
         if feedback_text:
             payload_lines.extend(["", "<retry_feedback>", feedback_text, "</retry_feedback>"])
         return f"{static_prefix}\n\n" + "\n".join(payload_lines)
@@ -565,6 +600,7 @@ class PromptCompiler:
         compact_objective = compress_and_offload_objective(task, self.config.auto_engine_dir)
         targets_text, all_inlined = self._format_target_files(task, skeletons)
         user_answers_text = self._load_user_answers_text()
+        attachments_text = self._load_user_attachments_text()
         constitution_text = self._load_constitution_text(max_lines=28)
         contract_text = self._load_contract_text(max_lines=40)
         handoff_text = self._load_handoff_text(task.task_id, max_lines=28)
@@ -593,6 +629,7 @@ class PromptCompiler:
             contract_text=contract_text,
             handoff_text=handoff_text,
             constitution_text=constitution_text,
+            attachments_text=attachments_text,
             objective_override=compact_objective,
         )
         tokens = estimate_tokens(prompt)

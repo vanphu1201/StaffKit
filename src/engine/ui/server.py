@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import mimetypes
 import os
+import re
 import shutil
 import subprocess
 import threading
+import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -16,7 +20,7 @@ from typing import Any
 import yaml
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, StreamingResponse
+from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from engine.blueprints import get_blueprint, load_blueprints
@@ -148,9 +152,12 @@ class DesktopAppController:
         self.wizard_selected_suggestions: list[str] = []
         self.wizard_user_notes: str = ""
         self.wizard_round: int = 1
+        self.wizard_attachments: list[dict[str, Any]] = []
         self.wizard_spec: dict[str, Any] | None = None
         self.wizard_preview_cmd: str = ""
         self.wizard_done_message: str = ""
+        self.worker_started_at: float | None = None
+        self.last_quick_update_snapshot: str = ""
 
         self._logs: deque[dict[str, str]] = deque(maxlen=400)
         self._traces: deque[dict[str, Any]] = deque(maxlen=400)
@@ -281,6 +288,7 @@ class DesktopAppController:
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "cost_usd": 0.0,
+            "duration_sec": 0.0,
             "verdicts": {},
         }
         plan_approved = False
@@ -307,6 +315,7 @@ class DesktopAppController:
                 )
             runs_out = list(reversed(db.list_runs()))[:100]
 
+        constitution_md = ""
         contracts_md = ""
         handoff_md = ""
         custom_bp_yaml = ""
@@ -328,6 +337,10 @@ class DesktopAppController:
                 }
             except Exception:
                 pass
+            for con_path in (cfg.auto_engine_dir / "constitution.md", repo_dir / "openspec" / "constitution.md"):
+                if con_path.is_file():
+                    constitution_md = con_path.read_text(encoding="utf-8", errors="replace")
+                    break
             for c_path in (cfg.auto_engine_dir / "contracts.md", repo_dir / "openspec" / "contracts.md"):
                 if c_path.is_file():
                     contracts_md = c_path.read_text(encoding="utf-8", errors="replace")
@@ -343,7 +356,16 @@ class DesktopAppController:
                 audit_report_md = aud_path.read_text(encoding="utf-8", errors="replace")
 
         with self._lock:
-            worker = {"status": self.worker_status, "message": self.worker_message}
+            live_elapsed = (
+                round(time.monotonic() - self.worker_started_at, 1)
+                if (self.worker_status != "idle" and self.worker_started_at is not None)
+                else 0.0
+            )
+            worker = {
+                "status": self.worker_status,
+                "message": self.worker_message,
+                "elapsed_sec": live_elapsed,
+            }
             questions = list(self.clarifying_questions)
             pending_interaction = dict(self.pending_interaction) if self.pending_interaction else None
             logs = list(self._logs)
@@ -359,9 +381,11 @@ class DesktopAppController:
                 "selected_suggestions": list(self.wizard_selected_suggestions),
                 "user_notes": self.wizard_user_notes,
                 "round": self.wizard_round,
+                "attachments": list(self.wizard_attachments),
                 "spec": self.wizard_spec,
                 "preview_cmd": preview_cmd,
                 "done_message": self.wizard_done_message,
+                "can_undo": bool(self.last_quick_update_snapshot),
             }
 
         delivery_guide: dict[str, Any] | None = None
@@ -373,6 +397,7 @@ class DesktopAppController:
 
         engine_insights = {
             "detected": detected_info,
+            "constitution_md": constitution_md,
             "contracts_md": contracts_md,
             "handoff_md": handoff_md,
             "custom_blueprint_yaml": custom_bp_yaml,
@@ -426,6 +451,7 @@ class DesktopAppController:
             self.stop_event.clear()
             self.worker_status = status_name
             self.worker_message = label
+            self.worker_started_at = time.monotonic()
 
             def _runner() -> None:
                 try:
@@ -436,6 +462,7 @@ class DesktopAppController:
                     with self._lock:
                         self.worker_status = "idle"
                         self.worker_message = "Sẵn sàng"
+                        self.worker_started_at = None
 
             self._worker_thread = threading.Thread(target=_runner, daemon=True)
             self._worker_thread.start()
@@ -618,6 +645,7 @@ class DesktopAppController:
         stack_hint: str = "auto",
         parent_dir: str = "",
         selected_model: str = "",
+        attachments: list[str] | None = None,
     ) -> bool:
         def _job() -> None:
             cfg = self.load_config()
@@ -626,6 +654,7 @@ class DesktopAppController:
                     cfg.agy.tiers[tier_key].model = selected_model.strip()
                 self.save_config(cfg.model_dump())
 
+            clean_atts = [str(a).strip() for a in (attachments or []) if str(a).strip()]
             with self._lock:
                 self.wizard_idea = idea
                 self.wizard_stack_hint = stack_hint
@@ -645,7 +674,12 @@ class DesktopAppController:
                 stop_event=self.stop_event,
                 on_trace=self.emit_trace,
             )
-            out = interviewer.generate_interview(idea, stack_hint=stack_hint, round_number=1)  # type: ignore[arg-type]
+            out = interviewer.generate_interview(
+                idea,
+                stack_hint=stack_hint,  # type: ignore[arg-type]
+                attachments=clean_atts,
+                round_number=1,
+            )
             with self._lock:
                 self.wizard_interview = out.model_dump()
                 self.wizard_round = out.round_number
@@ -663,6 +697,7 @@ class DesktopAppController:
         answers: dict[str, str],
         selected_suggestions: list[str] | None = None,
         user_notes: str = "",
+        attachments: list[str] | None = None,
     ) -> bool:
         """Run an additional deep-dive interview round until the user feels requirements are crystal clear."""
         def _job() -> None:
@@ -702,6 +737,7 @@ class DesktopAppController:
                 previous_qa=qa_snapshot,
                 selected_suggestions=merged_sugg,
                 user_notes=notes_snapshot,
+                attachments=[str(a).strip() for a in (attachments or []) if str(a).strip()],
                 round_number=next_round,
             )
             with self._lock:
@@ -723,6 +759,7 @@ class DesktopAppController:
         *,
         selected_suggestions: list[str] | None = None,
         user_notes: str = "",
+        attachments: list[str] | None = None,
     ) -> bool:
         def _job() -> None:
             cfg = self.load_config()
@@ -758,6 +795,7 @@ class DesktopAppController:
                 stack,
                 selected_suggestions=merged_sugg,
                 user_notes=combined_notes,
+                attachments=[str(a).strip() for a in (attachments or []) if str(a).strip()],
             )
             with self._lock:
                 self.wizard_spec = spec.model_dump()
@@ -987,6 +1025,7 @@ class DesktopAppController:
         request_text: str,
         target_dir: str = "",
         selected_model: str = "",
+        attachments: list[str] | None = None,
     ) -> bool:
         """1-Click non-tech upgrade/bugfix on the current or chosen project using a single plain-Vietnamese sentence."""
         def _job() -> None:
@@ -1021,8 +1060,15 @@ class DesktopAppController:
 
             cfg.auto_engine_dir.mkdir(parents=True, exist_ok=True)
             update_prd = cfg.auto_engine_dir / "quick_update_prd.md"
+            att_block = ""
+            clean_atts = [str(a).strip() for a in (attachments or []) if str(a).strip()]
+            if clean_atts:
+                att_block = (
+                    "\n\n## Ảnh / Tài liệu người dùng đính kèm (hãy dùng `read_file` xem trực tiếp)\n"
+                    + "\n".join(f"- `{a}`" for a in clean_atts)
+                )
             update_prd.write_text(
-                f"# Yêu cầu nâng cấp / chỉnh sửa sản phẩm\n\n{request_text.strip()}\n",
+                f"# Yêu cầu nâng cấp / chỉnh sửa sản phẩm\n\n{request_text.strip()}{att_block}\n",
                 encoding="utf-8",
             )
             self.emit_log("info", f"✨ Đang định vị file 0-token & lập kế hoạch nâng cấp trên {repo_path.name} ({det_stack})...")
@@ -1046,6 +1092,8 @@ class DesktopAppController:
                         check=False,
                     )
                     self.emit_log("info", f"📦 Đã tự động lưu điểm khôi phục (Git snapshot) cho {len(all_dirty)} file thay đổi trước khi nâng cấp.")
+            with self._lock:
+                self.last_quick_update_snapshot = guard.create_checkpoint()
             indexer = RepoIndexer(cfg)
             planner = Planner(
                 cfg,
@@ -1144,6 +1192,7 @@ class DesktopAppController:
     def save_contracts_and_memory(
         self,
         *,
+        constitution_md: str | None = None,
         contracts_md: str | None = None,
         handoff_md: str | None = None,
         custom_blueprint_yaml: str | None = None,
@@ -1152,13 +1201,131 @@ class DesktopAppController:
         if not cfg.target_repo_path.is_dir():
             raise ValueError(f"Thư mục target_repo không tồn tại: {cfg.target_repo_path}")
         cfg.auto_engine_dir.mkdir(parents=True, exist_ok=True)
+        if constitution_md is not None:
+            (cfg.auto_engine_dir / "constitution.md").write_text(
+                constitution_md.strip() + "\n" if constitution_md.strip() else "", encoding="utf-8"
+            )
         if contracts_md is not None:
             (cfg.auto_engine_dir / "contracts.md").write_text(contracts_md.strip() + "\n" if contracts_md.strip() else "", encoding="utf-8")
         if handoff_md is not None:
             (cfg.auto_engine_dir / "handoff.md").write_text(handoff_md.strip() + "\n" if handoff_md.strip() else "", encoding="utf-8")
         if custom_blueprint_yaml is not None and custom_blueprint_yaml.strip():
             (cfg.auto_engine_dir / "blueprint.yaml").write_text(custom_blueprint_yaml.strip() + "\n", encoding="utf-8")
-        self.emit_log("success", "Đã lưu Hợp đồng Kiến trúc (`contracts.md`), Bộ nhớ (`handoff.md`) & Blueprint.")
+        self.emit_log("success", "Đã lưu Hiến pháp dự án (`constitution.md`), Hợp đồng (`contracts.md`) & Bộ nhớ.")
+        return self.get_state_payload()
+
+    def save_uploaded_attachment(
+        self,
+        *,
+        filename: str,
+        mime_type: str,
+        data_base64: str,
+        target_dir: str = "",
+    ) -> dict[str, Any]:
+        """Persist a user-pasted image or document under `.auto-engine/user_attachments/` so Antigravity can read it."""
+        cfg = self.load_config()
+        base_dir = Path(target_dir.strip()).expanduser().resolve() if target_dir.strip() else cfg.target_repo_path
+        if not base_dir.is_dir():
+            base_dir = Path.cwd()
+        att_dir = base_dir / ".auto-engine" / "user_attachments"
+        att_dir.mkdir(parents=True, exist_ok=True)
+
+        raw_b64 = data_base64.split(",", 1)[-1].strip()
+        raw_bytes = base64.b64decode(raw_b64)
+        if len(raw_bytes) > 20 * 1024 * 1024:
+            raise ValueError("Tệp đính kèm vượt quá 20MB.")
+
+        clean_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", Path(filename or "attachment.bin").name).strip("._") or "attachment"
+        if "." not in clean_name:
+            ext = mimetypes.guess_extension(mime_type or "") or ".bin"
+            clean_name = f"{clean_name}{ext}"
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:19]
+        saved_path = (att_dir / f"{stamp}_{clean_name}").resolve()
+        saved_path.write_bytes(raw_bytes)
+
+        is_image = (mime_type or "").lower().startswith("image/") or saved_path.suffix.lower() in {
+            ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp",
+        }
+        entry = {
+            "id": stamp,
+            "name": clean_name,
+            "path": saved_path.as_posix(),
+            "mime_type": mime_type or mimetypes.guess_type(clean_name)[0] or "application/octet-stream",
+            "is_image": is_image,
+            "size_bytes": len(raw_bytes),
+        }
+        manifest_path = att_dir / "manifest.json"
+        existing: list[dict[str, Any]] = []
+        if manifest_path.is_file():
+            try:
+                loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, list):
+                    existing = loaded
+            except (json.JSONDecodeError, OSError):
+                pass
+        existing.append(entry)
+        manifest_path.write_text(json.dumps(existing[-20:], indent=2, ensure_ascii=False), encoding="utf-8")
+        with self._lock:
+            self.wizard_attachments.append(entry)
+            self.wizard_attachments = self.wizard_attachments[-20:]
+        self.emit_log("info", f"📎 Đã đính kèm tệp cho Antigravity: `{clean_name}` ({len(raw_bytes) // 1024 or 1} KB)")
+        return entry
+
+    def set_selected_model(self, model_id: str) -> dict[str, Any]:
+        """Update all Antigravity tiers to use the dynamically chosen (or custom typed) model ID."""
+        cfg = self.load_config()
+        cleaned = model_id.strip()
+        for tier_key in cfg.agy.tiers:
+            cfg.agy.tiers[tier_key].model = cleaned
+        self.save_config(cfg.model_dump())
+        self.emit_log("info", f"🤖 Đã chọn model Antigravity: `{cleaned or 'Mặc định agy'}`")
+        return self.get_state_payload()
+
+    def set_target_repo(self, repo_path: str) -> dict[str, Any]:
+        """Switch active project directory from the top bar."""
+        target = Path(repo_path.strip()).expanduser().resolve()
+        if not target.is_dir():
+            raise ValueError(f"Thư mục dự án không tồn tại: {target}")
+        cfg = self.load_config()
+        cfg.project.target_repo = target.as_posix()
+        det_stack, det_vc, det_fc, det_prev = detect_existing_stack(target)
+        cfg.project.blueprint = det_stack
+        if det_vc:
+            cfg.executor.default_verify_commands = det_vc
+        if det_fc:
+            cfg.sprint.final_verify_commands = det_fc
+        self.save_config(cfg.model_dump())
+        with self._lock:
+            if det_prev:
+                self.wizard_preview_cmd = det_prev
+        return self.get_state_payload()
+
+    def undo_last_quick_update(self) -> dict[str, Any]:
+        """Rollback target repository to the snapshot commit taken right before the last quick update."""
+        cfg = self.load_config()
+        repo = cfg.target_repo_path
+        if not (repo / ".git").exists():
+            raise ValueError("Thư mục hiện tại không phải Git repo hợp lệ.")
+        snap_sha = self.last_quick_update_snapshot.strip()
+        if not snap_sha:
+            # Fallback: find previous commit if HEAD is an auto-engine commit
+            log_proc = subprocess.run(
+                ["git", "log", "-n", "2", "--format=%H|%s"],
+                cwd=str(repo),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            lines = [ln.strip() for ln in log_proc.stdout.splitlines() if ln.strip()]
+            if len(lines) >= 2 and "auto-engine" in lines[0].lower():
+                snap_sha = lines[1].split("|", 1)[0]
+        if not snap_sha:
+            raise ValueError("Chưa có điểm khôi phục gần đây để hoàn tác.")
+        guard = GitGuard(repo, ignore_artifacts=cfg.guards.ignore_artifacts)
+        guard.hard_rollback(snap_sha)
+        with self._lock:
+            self.last_quick_update_snapshot = ""
+        self.emit_log("warn", f"↩️ Đã hoàn tác dự án về điểm khôi phục `{snap_sha[:8]}`.")
         return self.get_state_payload()
 
     def start_repo_audit(self, max_commits: int = 10) -> bool:
@@ -1316,11 +1483,14 @@ def create_ui_app(config_path: Path) -> Starlette:
         idea = str(body.get("idea", "")).strip()
         if not idea:
             return JSONResponse({"error": "Vui lòng mô tả ngắn ý tưởng sản phẩm."}, status_code=400)
+        raw_atts = body.get("attachments")
+        atts = [str(x).strip() for x in raw_atts if str(x).strip()] if isinstance(raw_atts, list) else []
         ok = controller.start_wizard_interview(
             idea=idea,
             stack_hint=str(body.get("stack_hint", "auto")),
             parent_dir=str(body.get("parent_dir", "")),
             selected_model=str(body.get("selected_model", "")),
+            attachments=atts,
         )
         if not ok:
             return JSONResponse({"error": "Đang có tác vụ nền khác chạy."}, status_code=409)
@@ -1330,10 +1500,13 @@ def create_ui_app(config_path: Path) -> Starlette:
         body = await request.json()
         raw_sugg = body.get("selected_suggestions")
         sugg_list = [str(x).strip() for x in raw_sugg if str(x).strip()] if isinstance(raw_sugg, list) else []
+        raw_atts = body.get("attachments")
+        atts = [str(x).strip() for x in raw_atts if str(x).strip()] if isinstance(raw_atts, list) else []
         ok = controller.start_wizard_interview_followup(
             answers=dict(body.get("answers") or {}),
             selected_suggestions=sugg_list,
             user_notes=str(body.get("user_notes", "")),
+            attachments=atts,
         )
         if not ok:
             return JSONResponse({"error": "Đang có tác vụ nền khác chạy."}, status_code=409)
@@ -1343,12 +1516,15 @@ def create_ui_app(config_path: Path) -> Starlette:
         body = await request.json()
         raw_sugg = body.get("selected_suggestions")
         sugg_list = [str(x).strip() for x in raw_sugg if str(x).strip()] if isinstance(raw_sugg, list) else []
+        raw_atts = body.get("attachments")
+        atts = [str(x).strip() for x in raw_atts if str(x).strip()] if isinstance(raw_atts, list) else []
         ok = controller.start_wizard_synthesize(
             idea=str(body.get("idea", "")),
             answers=dict(body.get("answers") or {}),
             stack=str(body.get("stack", "web_react")),
             selected_suggestions=sugg_list,
             user_notes=str(body.get("user_notes", "")),
+            attachments=atts,
         )
         if not ok:
             return JSONResponse({"error": "Đang có tác vụ nền khác chạy."}, status_code=409)
@@ -1392,14 +1568,60 @@ def create_ui_app(config_path: Path) -> Starlette:
         req_txt = str(body.get("request_text", "")).strip()
         if not req_txt:
             return JSONResponse({"error": "Vui lòng nhập nội dung bạn muốn nâng cấp hoặc sửa lỗi."}, status_code=400)
+        raw_atts = body.get("attachments")
+        atts = [str(x).strip() for x in raw_atts if str(x).strip()] if isinstance(raw_atts, list) else []
         ok = controller.start_wizard_quick_update(
             request_text=req_txt,
             target_dir=str(body.get("target_dir", "")),
             selected_model=str(body.get("selected_model", "")),
+            attachments=atts,
         )
         if not ok:
             return JSONResponse({"error": "Đang có tác vụ nền khác chạy."}, status_code=409)
         return JSONResponse({"started": True})
+
+    async def api_wizard_undo_last(_request: Request) -> JSONResponse:
+        try:
+            return JSONResponse(controller.undo_last_quick_update())
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    async def api_attachments_upload(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+            entry = controller.save_uploaded_attachment(
+                filename=str(body.get("filename", "pasted.png")),
+                mime_type=str(body.get("mime_type", "application/octet-stream")),
+                data_base64=str(body.get("data_base64", "")),
+                target_dir=str(body.get("target_dir", "")),
+            )
+            return JSONResponse(entry)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    async def api_attachments_preview(request: Request) -> Response:
+        raw_path = str(request.query_params.get("path", "")).strip()
+        if not raw_path:
+            return Response(status_code=404)
+        p = Path(raw_path).resolve()
+        if "user_attachments" not in p.parts or not p.is_file():
+            return Response(status_code=404)
+        mime = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+        return Response(content=p.read_bytes(), media_type=mime)
+
+    async def api_agy_set_model(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+            return JSONResponse(controller.set_selected_model(str(body.get("model", ""))))
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    async def api_project_select(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+            return JSONResponse(controller.set_target_repo(str(body.get("path", ""))))
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
 
     async def api_preview_launch(request: Request) -> JSONResponse:
         try:
@@ -1413,6 +1635,7 @@ def create_ui_app(config_path: Path) -> Starlette:
         try:
             body = await request.json()
             state = controller.save_contracts_and_memory(
+                constitution_md=body.get("constitution_md"),
                 contracts_md=body.get("contracts_md"),
                 handoff_md=body.get("handoff_md"),
                 custom_blueprint_yaml=body.get("custom_blueprint_yaml"),
@@ -1495,13 +1718,18 @@ def create_ui_app(config_path: Path) -> Starlette:
         Route("/api/wizard/build", api_wizard_build, methods=["POST"]),
         Route("/api/wizard/autopilot", api_wizard_autopilot, methods=["POST"]),
         Route("/api/wizard/quick-update", api_wizard_quick_update, methods=["POST"]),
+        Route("/api/wizard/undo-last", api_wizard_undo_last, methods=["POST"]),
         Route("/api/wizard/retry-blocked", api_wizard_retry_blocked, methods=["POST"]),
         Route("/api/wizard/reset", api_wizard_reset, methods=["POST"]),
+        Route("/api/attachments/upload", api_attachments_upload, methods=["POST"]),
+        Route("/api/attachments/preview", api_attachments_preview, methods=["GET"]),
         Route("/api/preview/launch", api_preview_launch, methods=["POST"]),
         Route("/api/contracts", api_save_contracts, methods=["POST"]),
         Route("/api/audit-repo", api_audit_repo, methods=["POST"]),
         Route("/api/open-folder", api_open_folder, methods=["POST"]),
+        Route("/api/project/select", api_project_select, methods=["POST"]),
         Route("/api/agy/models", api_agy_models, methods=["GET"]),
+        Route("/api/agy/model", api_agy_set_model, methods=["POST"]),
         Route("/api/agy/login", api_agy_login, methods=["POST"]),
         Route("/api/events", api_logs_stream, methods=["GET"]),
         Route("/api/logs/stream", api_logs_stream, methods=["GET"]),

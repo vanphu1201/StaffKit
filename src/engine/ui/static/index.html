@@ -3,1660 +3,1032 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Auto-Prompt Engine — Trợ lý tạo sản phẩm cùng Antigravity</title>
+  <title>Auto-Prompt Engine — Studio cùng Antigravity</title>
   <style>
     :root {
-      --bg: #0d1117;
-      --panel: #161b22;
-      --panel-2: #1f2630;
-      --border: #30363d;
-      --text: #e6edf3;
-      --muted: #8b949e;
-      --accent: #3b82f6;
-      --accent-hover: #2563eb;
-      --green: #22c55e;
-      --yellow: #eab308;
-      --red: #ef4444;
+      --bg: #0b1120;
+      --surface: #111827;
+      --surface-2: #162033;
+      --border: #1e293b;
+      --border-hi: #334155;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --primary: #3b82f6;
+      --primary-hi: #2563eb;
+      --success: #22c55e;
+      --warn: #f59e0b;
+      --danger: #ef4444;
       --cyan: #06b6d4;
-      --radius: 10px;
+      --radius: 12px;
+      --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+      --sans: "Segoe UI", system-ui, -apple-system, sans-serif;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       background: var(--bg);
       color: var(--text);
-      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      font-family: var(--sans);
       font-size: 14px;
+      line-height: 1.5;
+      min-height: 100vh;
       display: flex;
       flex-direction: column;
-      height: 100vh;
-      overflow: hidden;
     }
-    header {
+
+    /* ===== TOP BAR ===== */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 40;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 12px 20px;
-      background: var(--panel);
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 10px 16px;
+      background: rgba(11, 17, 32, 0.94);
+      backdrop-filter: blur(10px);
       border-bottom: 1px solid var(--border);
-      gap: 12px;
     }
-    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; }
-    .brand-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
-    .header-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-    .mode-switch {
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 15px;
+    }
+    .brand-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--primary);
+      box-shadow: 0 0 12px var(--primary);
+    }
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .pill {
       display: inline-flex;
-      background: #0b0f14;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 2px;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: var(--surface-2);
+      border: 1px solid var(--border-hi);
+      font-size: 12px;
+      color: var(--text);
+      white-space: nowrap;
     }
-    .mode-btn {
+    .pill.metrics {
+      border-color: rgba(56, 189, 248, 0.4);
+      color: #bae6fd;
+      font-family: var(--mono);
+      font-size: 11.5px;
+    }
+    .pill.status-idle { border-color: rgba(34, 197, 94, 0.4); color: #86efac; }
+    .pill.status-busy { border-color: rgba(59, 130, 246, 0.6); color: #93c5fd; }
+
+    .model-bar {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: var(--surface-2);
+      border: 1px solid var(--border-hi);
+      border-radius: 8px;
+      padding: 2px 4px;
+    }
+    .model-bar select, .model-bar input {
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-size: 12px;
+      padding: 4px 6px;
+      outline: none;
+      max-width: 210px;
+    }
+    .model-bar select option { background: #0f172a; color: var(--text); }
+
+    /* ===== BUTTONS & INPUTS ===== */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 7px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border-hi);
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .btn:hover:not(:disabled) { border-color: #64748b; background: #1e293b; }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn.sm { padding: 5px 9px; font-size: 12px; }
+    .btn.icon { padding: 4px 7px; font-size: 12px; border: none; background: transparent; }
+    .btn.icon:hover { background: rgba(148, 163, 184, 0.15); }
+    .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+    .btn.primary:hover:not(:disabled) { background: var(--primary-hi); }
+    .btn.success { background: #16a34a; border-color: #16a34a; color: #fff; }
+    .btn.success:hover:not(:disabled) { background: #15803d; }
+    .btn.danger { background: rgba(239, 68, 68, 0.14); border-color: rgba(239, 68, 68, 0.45); color: #fca5a5; }
+    .btn.danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.25); }
+    .btn.warn { background: rgba(245, 158, 11, 0.14); border-color: rgba(245, 158, 11, 0.45); color: #fcd34d; }
+
+    input[type="text"], textarea, select {
+      width: 100%;
+      background: #0f172a;
+      border: 1px solid var(--border-hi);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 9px 11px;
+      font-family: inherit;
+      font-size: 13.5px;
+      outline: none;
+    }
+    input[type="text"]:focus, textarea:focus, select:focus { border-color: var(--primary); }
+    .field { display: flex; flex-direction: column; gap: 5px; }
+    .field > span { font-size: 12px; color: var(--muted); font-weight: 600; }
+
+    /* ===== HITL BANNER ===== */
+    .hitl-banner {
+      display: none;
+      margin: 12px 16px 0;
+      padding: 14px 16px;
+      border-radius: var(--radius);
+      border: 1px solid rgba(250, 204, 21, 0.55);
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.14), rgba(15, 23, 42, 0.95));
+      flex-direction: column;
+      gap: 10px;
+    }
+    .hitl-banner.show { display: flex; }
+
+    /* ===== MAIN 2-COLUMN WORKSPACE ===== */
+    .workspace {
+      flex: 1;
+      display: grid;
+      grid-template-columns: minmax(420px, 1.15fr) minmax(380px, 0.85fr);
+      gap: 14px;
+      padding: 14px 16px 20px;
+      max-width: 1680px;
+      width: 100%;
+      margin: 0 auto;
+    }
+    @media (max-width: 1040px) {
+      .workspace { grid-template-columns: 1fr; }
+    }
+    .col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+    }
+    .card-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .card-hdr h3 { margin: 0; font-size: 15px; }
+
+    .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    @media (max-width: 680px) { .grid-2 { grid-template-columns: 1fr; } }
+
+    /* Mode Switcher */
+    .tab-bar {
+      display: inline-flex;
+      background: #0f172a;
+      border: 1px solid var(--border-hi);
+      border-radius: 10px;
+      padding: 3px;
+      gap: 4px;
+    }
+    .tab-btn {
       border: none;
       background: transparent;
       color: var(--muted);
-      padding: 5px 12px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 12px;
+      padding: 7px 14px;
+      border-radius: 7px;
       font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
     }
-    .mode-btn.active { background: var(--accent); color: #fff; }
-    .pill {
+    .tab-btn.active { background: var(--primary); color: #fff; }
+
+    /* Dropzone & Attachment Chips */
+    .composer-box {
+      border: 1px solid var(--border-hi);
+      border-radius: 10px;
+      background: #0f172a;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      overflow: hidden;
+    }
+    .composer-box.drag-over {
+      border-color: var(--cyan);
+      box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.25);
+    }
+    .composer-box textarea {
+      border: none;
+      border-radius: 0;
+      background: transparent;
+      resize: vertical;
+    }
+    .composer-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 6px 10px;
+      border-top: 1px solid var(--border);
+      background: rgba(15, 23, 42, 0.8);
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .att-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 8px 10px 0;
+    }
+    .att-strip:empty { display: none; }
+    .att-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      border-radius: 8px;
+      background: var(--surface-2);
+      border: 1px solid var(--border-hi);
+      font-size: 12px;
+      max-width: 240px;
+    }
+    .att-chip img {
+      width: 28px;
+      height: 28px;
+      object-fit: cover;
+      border-radius: 4px;
+    }
+    .att-chip .att-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .att-chip button {
+      background: none;
+      border: none;
+      color: #fca5a5;
+      cursor: pointer;
+      padding: 0 2px;
+      font-weight: 700;
+    }
+
+    /* Stepper */
+    .stepper { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+    .step-chip {
       padding: 4px 10px;
       border-radius: 999px;
       font-size: 12px;
-      font-weight: 600;
-      background: var(--panel-2);
-      border: 1px solid var(--border);
       color: var(--muted);
-    }
-    .pill.ok { color: var(--green); border-color: rgba(34,197,94,.4); }
-    .pill.warn { color: var(--yellow); border-color: rgba(234,179,8,.4); }
-    .pill.err { color: var(--red); border-color: rgba(239,68,68,.4); }
-    .pill.busy { color: var(--cyan); border-color: rgba(6,182,212,.5); animation: pulse 1.4s infinite; }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
-
-    .layout { display: flex; flex: 1; min-height: 0; }
-    nav {
-      width: 220px;
-      background: var(--panel);
-      border-right: 1px solid var(--border);
-      padding: 14px 10px;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-    .nav-btn {
-      background: transparent;
-      border: 1px solid transparent;
-      color: var(--muted);
-      text-align: left;
-      padding: 10px 12px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: 500;
-      transition: .15s;
-    }
-    .nav-btn:hover { background: var(--panel-2); color: var(--text); }
-    .nav-btn.active { background: rgba(59,130,246,.14); color: #93c5fd; border-color: rgba(59,130,246,.35); }
-
-    main { flex: 1; padding: 20px; overflow-y: auto; min-width: 0; }
-    .view { display: none; flex-direction: column; gap: 16px; }
-    .view.active { display: flex; }
-
-    .wizard-wrap {
-      flex: 1;
-      overflow-y: auto;
-      padding: 24px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-    }
-    .wizard-inner { width: 100%; max-width: 900px; display: flex; flex-direction: column; gap: 18px; }
-    .stepper {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 10px;
-    }
-    .step-chip {
-      background: var(--panel);
+      background: #0f172a;
       border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px 12px;
-      font-size: 12px;
-      color: var(--muted);
-      font-weight: 600;
     }
-    .step-chip.active { border-color: var(--accent); color: #93c5fd; background: rgba(59,130,246,.12); }
-    .step-chip.done { border-color: rgba(34,197,94,.45); color: var(--green); }
+    .step-chip.active { background: rgba(59, 130, 246, 0.18); border-color: var(--primary); color: #93c5fd; font-weight: 600; }
+    .step-chip.done { background: rgba(34, 197, 94, 0.14); border-color: rgba(34, 197, 94, 0.45); color: #86efac; }
 
-    .example-chip {
-      background: var(--panel-2);
-      border: 1px solid var(--border);
-      color: #cbd5e1;
-      padding: 6px 11px;
-      border-radius: 999px;
-      font-size: 12px;
-      cursor: pointer;
-    }
-    .example-chip:hover { border-color: var(--accent); color: #fff; }
+    /* Question Cards */
     .q-card {
-      background: var(--panel-2);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 14px;
+      background: #0f172a;
+      border: 1px solid var(--border-hi);
+      border-radius: 10px;
+      padding: 12px;
       display: flex;
       flex-direction: column;
       gap: 8px;
     }
     .opt-btn {
-      background: #0b0f14;
-      border: 1px solid var(--border);
-      color: var(--text);
       padding: 5px 10px;
-      border-radius: 6px;
+      border-radius: 7px;
+      border: 1px solid var(--border-hi);
+      background: var(--surface-2);
+      color: var(--text);
       font-size: 12px;
       cursor: pointer;
     }
-    .opt-btn.selected { border-color: var(--accent); background: rgba(59,130,246,.2); color: #93c5fd; }
-    .progress-bar-bg {
-      height: 12px;
-      background: #0b0f14;
-      border: 1px solid var(--border);
+    .opt-btn.selected { background: rgba(59, 130, 246, 0.25); border-color: var(--primary); color: #bfdbfe; }
+
+    /* Task List */
+    .progress-track {
+      height: 7px;
       border-radius: 999px;
+      background: #0f172a;
       overflow: hidden;
+      margin-bottom: 10px;
     }
-    .progress-bar-fill {
+    .progress-fill {
       height: 100%;
       width: 0%;
-      background: linear-gradient(90deg, var(--accent), var(--green));
-      transition: width .3s ease;
+      background: linear-gradient(90deg, var(--primary), var(--success));
+      transition: width 0.3s ease;
     }
-
-    .card {
-      background: var(--panel);
+    .task-list { display: flex; flex-direction: column; gap: 8px; max-height: 290px; overflow-y: auto; }
+    .task-item {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 9px;
+      background: #0f172a;
       border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 16px;
     }
-    .card h3 { margin: 0 0 12px; font-size: 15px; color: var(--text); }
-    .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-    @media (max-width: 980px) { .grid-4, .grid-2, .stepper { grid-template-columns: 1fr 1fr; } }
-    .kpi { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
-    .kpi-label { font-size: 12px; color: var(--muted); }
-    .kpi-value { font-size: 22px; font-weight: 700; margin-top: 4px; }
-
-    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-    .btn {
-      background: var(--panel-2);
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 8px 14px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-size: 13px;
-      font-weight: 600;
-      transition: .15s;
-    }
-    .btn:hover:not(:disabled) { border-color: #6e7681; background: #27303d; }
-    .btn:disabled { opacity: .45; cursor: not-allowed; }
-    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-    .btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
-    .btn.success { background: #16a34a; border-color: #16a34a; color: #fff; }
-    .btn.danger { background: #dc2626; border-color: #dc2626; color: #fff; }
-    .btn.sm { padding: 4px 9px; font-size: 12px; }
-
-    input[type="text"], input[type="number"], select, textarea {
-      width: 100%;
-      background: #0b0f14;
-      color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: 7px;
-      padding: 8px 10px;
-      font-family: inherit;
-      font-size: 13px;
-    }
-    textarea { font-family: Consolas, "Cascadia Code", monospace; resize: vertical; }
-    label.field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
-    .check-label { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
-
-    .log-box {
-      background: #080b10;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px;
-      height: 260px;
-      overflow-y: auto;
-      font-family: Consolas, "Cascadia Code", monospace;
-      font-size: 12px;
-      line-height: 1.5;
-    }
-    .log-line { white-space: pre-wrap; word-break: break-word; }
-    .log-info { color: #c9d1d9; }
-    .log-success { color: #4ade80; }
-    .log-warn { color: #facc15; }
-    .log-error { color: #f87171; }
-
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
-    th { color: var(--muted); font-weight: 600; font-size: 12px; }
+    .task-item.RUNNING, .task-item.VERIFYING { border-color: rgba(59, 130, 246, 0.65); }
+    .task-item.DONE { border-color: rgba(34, 197, 94, 0.35); }
+    .task-item.BLOCKED { border-color: rgba(239, 68, 68, 0.5); }
     .badge {
       display: inline-block;
       padding: 2px 8px;
       border-radius: 999px;
       font-size: 11px;
       font-weight: 700;
-      background: var(--panel-2);
-      border: 1px solid var(--border);
+      letter-spacing: 0.3px;
+      white-space: nowrap;
     }
-    .b-DONE, .b-PASS, .b-low { color: var(--green); border-color: rgba(34,197,94,.4); }
-    .b-PENDING, .b-medium { color: #93c5fd; border-color: rgba(59,130,246,.4); }
-    .b-RUNNING, .b-VERIFYING { color: var(--cyan); border-color: rgba(6,182,212,.5); }
-    .b-BLOCKED, .b-SCOPE_VIOLATION, .b-TEST_GAMING, .b-VERIFY_FAIL, .b-high { color: var(--red); border-color: rgba(239,68,68,.45); }
-    .b-EMPTY_DIFF, .b-IDENTICAL_ERROR, .b-MAX_TURNS_EXCEEDED, .b-TIMEOUT, .b-CRASH_RECOVERED { color: var(--yellow); border-color: rgba(234,179,8,.45); }
+    .b-DONE { background: rgba(34, 197, 94, 0.16); color: #86efac; }
+    .b-RUNNING, .b-VERIFYING { background: rgba(59, 130, 246, 0.2); color: #93c5fd; }
+    .b-PENDING { background: rgba(148, 163, 184, 0.15); color: #cbd5e1; }
+    .b-BLOCKED { background: rgba(239, 68, 68, 0.18); color: #fca5a5; }
 
-    .banner-warn {
-      background: rgba(234,179,8,.1);
-      border: 1px solid rgba(234,179,8,.4);
-      color: #fde047;
-      padding: 10px 14px;
-      border-radius: 8px;
-      display: none;
-    }
-    .toast {
-      position: fixed;
-      right: 20px;
-      bottom: 20px;
-      background: #1e293b;
-      border: 1px solid var(--accent);
-      color: #fff;
-      padding: 10px 16px;
-      border-radius: 8px;
-      display: none;
-      z-index: 99;
-    }
-    code { background: #0b0f14; padding: 1px 5px; border-radius: 4px; font-family: Consolas, monospace; font-size: 12px; }
-
-    .hitl-banner {
-      display: none;
-      background: #171c26;
-      border-bottom: 2px solid var(--yellow);
-      padding: 14px 20px;
-      gap: 10px;
-      flex-direction: column;
-      z-index: 40;
-      max-height: 45vh;
-      overflow-y: auto;
-    }
-    .hitl-banner.active { display: flex; }
+    /* Live Interaction Stream */
     .trace-box {
-      background: #080b10;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px;
-      height: 520px;
-      overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 10px;
-      font-size: 13px;
+      gap: 8px;
+      height: 430px;
+      overflow-y: auto;
+      padding-right: 4px;
     }
-    .trace-card {
-      background: #101620;
+    .trace-item {
+      background: #0f172a;
       border: 1px solid var(--border);
-      border-left: 3px solid var(--accent);
+      border-left: 3px solid var(--primary);
       border-radius: 8px;
-      padding: 10px 12px;
+      padding: 8px 10px;
+      font-size: 12.5px;
     }
-    .trace-card.kind-text_delta { border-left-color: #38bdf8; background: #0d1520; }
-    .trace-card.kind-tool_call { border-left-color: #a78bfa; padding: 7px 10px; }
-    .trace-card.kind-response_done { border-left-color: var(--green); }
-    .trace-card.kind-verify_result { border-left-color: var(--yellow); }
-    .trace-card.kind-verify_pass { border-left-color: var(--green); }
-    .trace-card.kind-verify_fail { border-left-color: var(--red); }
-    .trace-card.kind-user_question, .trace-card.kind-user_answer { border-left-color: var(--yellow); background: #19170f; }
-    .trace-head {
+    .trace-item.kind-tool_call { border-left-color: var(--cyan); }
+    .trace-item.kind-verify_result { border-left-color: var(--success); }
+    .trace-item.kind-user_question { border-left-color: var(--warn); }
+    .trace-item.kind-log-error { border-left-color: var(--danger); }
+    .trace-item.kind-log-warn { border-left-color: var(--warn); }
+    .trace-item.kind-log-success { border-left-color: var(--success); }
+    .trace-meta {
       display: flex;
       justify-content: space-between;
-      align-items: center;
       gap: 8px;
-      flex-wrap: wrap;
-      font-size: 12px;
+      font-size: 11px;
+      color: var(--muted);
       margin-bottom: 4px;
     }
-    .trace-pre {
-      margin: 6px 0 0;
+    .trace-content {
+      font-family: var(--mono);
+      font-size: 11.5px;
       white-space: pre-wrap;
       word-break: break-word;
-      font-family: Consolas, "Cascadia Code", monospace;
-      font-size: 12px;
-      color: #d1d5db;
-      line-height: 1.45;
-      max-height: 280px;
+      color: #cbd5e1;
+      max-height: 150px;
       overflow-y: auto;
-      background: #070a0f;
-      padding: 8px;
-      border-radius: 6px;
-      border: 1px solid #1f2937;
+      margin: 0;
     }
+
+    /* Slide-over Drawer for Constitution & Contracts */
+    .drawer-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(2, 6, 23, 0.65);
+      z-index: 80;
+      justify-content: flex-end;
+    }
+    .drawer-backdrop.open { display: flex; }
+    .drawer {
+      width: min(560px, 95vw);
+      height: 100%;
+      background: var(--surface);
+      border-left: 1px solid var(--border-hi);
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow-y: auto;
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 18px;
+      right: 18px;
+      background: #1e293b;
+      border: 1px solid var(--primary);
+      color: #fff;
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-size: 13px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+      z-index: 100;
+    }
+    .toast.show { opacity: 1; }
   </style>
 </head>
 <body>
-  <header>
+  <!-- ==================== TOP BAR (TỐI GIẢN) ==================== -->
+  <header class="topbar">
     <div class="brand">
       <span class="brand-dot"></span>
       <span>Auto-Prompt Engine</span>
-      <span class="pill" id="repoPill">Chưa kiểm tra repo</span>
+      <button class="pill" id="activeProjectBtn" onclick="pickActiveProject()" title="Bấm để đổi thư mục dự án hiện tại" style="cursor:pointer;">
+        📂 <span id="activeProjectLabel">Chưa chọn dự án</span>
+      </button>
     </div>
-    <div class="header-meta">
-      <div class="mode-switch">
-        <button class="mode-btn active" id="modeBtnSimple" onclick="setAppMode('simple')">Đơn giản (Tạo sản phẩm)</button>
-        <button class="mode-btn" id="modeBtnDev" onclick="setAppMode('dev')">Chuyên gia (Dev)</button>
+
+    <div class="topbar-right">
+      <!-- D: Chỉ số nhỏ gọn (Token + Số tiền đã tiêu + Thời gian chạy) -->
+      <span class="pill metrics" id="metricsPill" title="Tổng token, chi phí ước tính và thời gian thực thi">
+        ⚡ 0 tok · $0.0000 · 0s
+      </span>
+
+      <!-- Trạng thái worker -->
+      <span class="pill status-idle" id="workerPill">Sẵn sàng</span>
+
+      <!-- Chọn Model Antigravity ĐỘNG (không fix cứng) -->
+      <div class="model-bar" title="Danh sách model lấy trực tiếp từ Antigravity CLI (không fix cứng)">
+        <select id="modelSelect" onchange="onModelSelectChange(this.value)">
+          <option value="">Mặc định agy</option>
+        </select>
+        <input type="text" id="customModelInput" placeholder="Nhập tên model mới..." style="display:none; width:155px;" onkeydown="if(event.key==='Enter') applyCustomModel()" />
+        <button class="btn icon" id="btnApplyCustomModel" style="display:none;" onclick="applyCustomModel()" title="Áp dụng model vừa nhập">✔</button>
+        <button class="btn icon" onclick="toggleCustomModel()" title="Nhập tay tên model mới">✎</button>
+        <button class="btn icon" onclick="loadAgyModels(true)" title="Tải lại danh sách model mới nhất từ Antigravity">🔄</button>
       </div>
-      <span class="pill" id="modelPill" title="Model mặc định đang chọn">Model: Mặc định agy</span>
-      <span class="pill" id="workerPill">idle</span>
-      <button class="btn sm" onclick="openAgyLogin()">Đăng nhập agy</button>
-      <button class="btn sm" onclick="smokeAgy()">Smoke Test agy</button>
-      <button class="btn sm" onclick="refreshState()">Làm mới</button>
+
+      <!-- Đăng nhập Antigravity -->
+      <button class="btn sm" onclick="openAgyLogin()">🔐 Đăng nhập agy</button>
     </div>
   </header>
 
-  <!-- ==================== HỎI NGƯỜI DÙNG GIỮA SPRINT (HITL) ==================== -->
-  <div id="hitlBanner" class="hitl-banner">
+  <!-- ==================== HỎI LẠI NGƯỜI DÙNG (KEY / DỮ LIỆU THẬT) ==================== -->
+  <section id="hitlBanner" class="hitl-banner">
     <div class="row" style="justify-content:space-between;">
-      <div>
-        <span class="badge b-EMPTY_DIFF" id="hitlTaskBadge">TASK</span>
-        <b style="margin-left:8px; color:#fde047;" id="hitlTitle">Antigravity cần bạn cung cấp thêm thông tin thật để tiếp tục</b>
+      <div class="row">
+        <span class="badge b-RUNNING" id="hitlTaskBadge">TASK</span>
+        <b style="color:#fde047;" id="hitlTitle">Antigravity cần bạn cung cấp thêm thông tin / API key / dữ liệu thật để chạy tiếp</b>
       </div>
       <div class="row">
-        <button class="btn sm" onclick="submitDefaultHitlAnswers()" title="Tự động điền giá trị mặc định hợp lý và chạy tiếp ngay">⚡ Dùng mặc định &amp; Chạy tiếp ngay</button>
-        <button class="btn success sm" id="btnSubmitHitl" onclick="submitHitlAnswers()">Gửi câu trả lời &amp; Tiếp tục</button>
+        <button class="btn sm" onclick="attachFileToBox('hitl')">📎 Đính kèm tệp</button>
+        <button class="btn sm" onclick="submitDefaultHitlAnswers()">⚡ Dùng mặc định</button>
+        <button class="btn success sm" id="btnSubmitHitl" onclick="submitHitlAnswers()">✅ Gửi &amp; Tiếp tục</button>
       </div>
     </div>
     <div id="hitlQuestionsList" style="display:flex; flex-direction:column; gap:8px;"></div>
-  </div>
+    <div id="hitlAttStrip" class="att-strip"></div>
+  </section>
 
-  <!-- ==================== CHẾ ĐỘ ĐƠN GIẢN (NON-TECH WIZARD) ==================== -->
-  <div id="simpleContainer" class="wizard-wrap">
-    <div class="wizard-inner">
-      <div class="stepper">
-        <div class="step-chip active" id="stepChip1">1. Nhập ý tưởng</div>
-        <div class="step-chip" id="stepChip2">2. Trả lời vài câu hỏi</div>
-        <div class="step-chip" id="stepChip3">3. Duyệt tính năng &amp; Cam kết</div>
-        <div class="step-chip" id="stepChip4">4. Tự động tạo &amp; Dùng ngay</div>
+  <!-- ==================== MAIN WORKSPACE ==================== -->
+  <main class="workspace">
+    <!-- ========== CỘT TRÁI: NHẬN YÊU CẦU / PHÂN TÍCH / SỬA NHANH ========== -->
+    <div class="col">
+      <div class="row" style="justify-content:space-between;">
+        <div class="tab-bar">
+          <button class="tab-btn active" id="tabBtnCreate" onclick="switchWorkTab('create')">✨ Tạo sản phẩm mới</button>
+          <button class="tab-btn" id="tabBtnQuickFix" onclick="switchWorkTab('quickfix')">🔧 Prompt Sửa nhanh</button>
+        </div>
+        <button class="btn sm" onclick="resetWizard()" title="Bắt đầu yêu cầu mới">+ Yêu cầu mới</button>
       </div>
 
-      <!-- BANNER 4 TRỤ CỘT SỨC MẠNH TỰ ĐỘNG CHO NGƯỜI NON-TECH -->
-      <div class="card" style="padding:12px 16px; background:linear-gradient(135deg, rgba(59,130,246,.12), rgba(34,197,94,.08)); border-color:rgba(59,130,246,.35);">
-        <div class="row" style="justify-content:space-between;">
-          <div style="font-size:13px; font-weight:700; color:#93c5fd;">🚀 4 Công nghệ Tự động Đang Bảo vệ Sản phẩm của Bạn</div>
-          <span class="pill ok" id="wizActiveStackPill">Tự nhận diện mọi công nghệ</span>
+      <!-- ===== PANEL 1: TẠO SẢN PHẨM MỚI & PHÂN TÍCH ĐA VÒNG ===== -->
+      <div id="panelCreate">
+        <div class="stepper">
+          <span class="step-chip active" id="stepChip1">1. Nhập yêu cầu &amp; Ảnh/Tài liệu</span>
+          <span class="step-chip" id="stepChip2">2. Phân tích &amp; Hỏi chuyên sâu</span>
+          <span class="step-chip" id="stepChip3">3. Duyệt thiết kế</span>
+          <span class="step-chip" id="stepChip4">4. Triển khai &amp; Dùng ngay</span>
         </div>
-        <div class="grid-4" style="margin-top:8px; gap:8px;">
-          <div style="font-size:12px; color:#cbd5e1;">🎯 <b>Định vị 0-Token:</b> Cắt đúng hàm cần sửa (Python/React/Go/Rust...), tiết kiệm 30–50% chi phí.</div>
-          <div style="font-size:12px; color:#cbd5e1;">📐 <b>Hợp đồng &amp; Nghiệm thu:</b> Khóa cứng tiêu chí <code>AC-1..AC-N</code> để AI không làm thiếu tính năng.</div>
-          <div style="font-size:12px; color:#cbd5e1;">🧠 <b>Trí nhớ Bàn giao:</b> Các bước tự nhớ kết quả của nhau, không tốn thời gian đọc lại từ đầu.</div>
-          <div style="font-size:12px; color:#cbd5e1;">🛡️ <b>Tự kiểm thử &amp; Tự vá lỗi:</b> Tự chạy kiểm tra cuối và tự sinh bước vá lỗi nếu phát hiện trục trặc.</div>
+
+        <!-- STEP 1 -->
+        <div id="wizStep1" class="card">
+          <div class="card-hdr">
+            <h3>Bạn muốn xây dựng sản phẩm gì?</h3>
+            <span style="font-size:12px; color:var(--muted);">Hỗ trợ dán ảnh (Ctrl+V), kéo-thả ảnh/PDF/tài liệu</span>
+          </div>
+
+          <div class="composer-box" id="ideaComposer">
+            <div id="ideaAttStrip" class="att-strip"></div>
+            <textarea id="wizIdeaInput" rows="5" placeholder="Mô tả ý tưởng bằng tiếng Việt tự nhiên... Bạn có thể dán trực tiếp ảnh giao diện mẫu, sơ đồ (Ctrl+V) hoặc kéo-thả tài liệu PDF/Word/TXT vào đây để Antigravity đọc trực tiếp."></textarea>
+            <div class="composer-toolbar">
+              <span>📋 Dán ảnh (Ctrl+V) hoặc kéo-thả tệp vào khung trên</span>
+              <button class="btn sm" type="button" onclick="attachFileToBox('idea')">📎 Đính kèm ảnh / tài liệu</button>
+            </div>
+          </div>
+
+          <div class="grid-2" style="margin-top:12px;">
+            <label class="field">
+              <span>Thư mục lưu dự án</span>
+              <div class="row" style="flex-wrap:nowrap;">
+                <input type="text" id="wizParentDir" placeholder="C:/Users/.../AutoProjects" />
+                <button class="btn sm" type="button" onclick="pickWizardFolder()">Chọn...</button>
+              </div>
+            </label>
+            <label class="field">
+              <span>Loại sản phẩm</span>
+              <select id="wizStackHint">
+                <option value="auto">Tự động chọn công nghệ phù hợp nhất</option>
+                <option value="fullstack_web">Website Full-Stack (Giao diện + API + DB)</option>
+                <option value="web_react">Website giao diện React + TypeScript</option>
+                <option value="python_app">Ứng dụng / Tool tự động hóa Python</option>
+                <option value="generic">Khác (Mobile, Desktop, Bot, Extension, Go, Rust...)</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="row" style="justify-content:space-between; margin-top:14px;">
+            <label style="display:inline-flex; align-items:center; gap:6px; font-size:12.5px; color:var(--muted); cursor:pointer;">
+              <input type="checkbox" id="wizInstallDepsStep1" /> Tự cài thư viện (`npm install`)
+            </label>
+            <div class="row">
+              <button class="btn" id="btnWizAutopilot" onclick="submitWizardAutopilot()">⚡ Tạo nhanh 1-Chạm</button>
+              <button class="btn primary" id="btnWizInterview" onclick="submitWizardInterview()">💬 Phân tích &amp; Hỏi chuyên sâu →</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 2: PHỎNG VẤN ĐA VÒNG + GỢI Ý CHỦ ĐỘNG -->
+        <div id="wizStep2" class="card" style="display:none;">
+          <div class="card-hdr">
+            <h3>Phân tích chuyên sâu &amp; Gợi ý nâng tầm</h3>
+            <div class="row">
+              <span class="pill" id="wizRoundPill">Vòng 1</span>
+              <span class="pill status-idle" id="wizClarityPill">Độ rõ ràng: 60%</span>
+            </div>
+          </div>
+          <p id="wizSummaryVi" style="color:#93c5fd; margin:0 0 10px;"></p>
+
+          <details id="wizPrevQaBox" style="display:none; margin-bottom:10px;">
+            <summary style="cursor:pointer; color:var(--muted); font-size:12px;">📋 Các ý đã chốt ở các vòng trước (<span id="wizPrevQaCount">0</span> mục)</summary>
+            <ul id="wizPrevQaList" style="margin:6px 0 0 18px; color:var(--muted); font-size:12px;"></ul>
+          </details>
+
+          <div id="wizQuestionsList" style="display:flex; flex-direction:column; gap:10px;"></div>
+
+          <div id="wizSuggestionsWrap" style="display:none; margin-top:14px; padding:12px; border:1px solid rgba(56,189,248,.35); border-radius:10px; background:rgba(14,165,233,.06);">
+            <div style="font-weight:700; color:#7dd3fc; margin-bottom:8px;">✨ Gợi ý nâng tầm sản phẩm (tick chọn thêm những ý bạn thích):</div>
+            <div id="wizSuggestionsList" style="display:flex; flex-direction:column; gap:8px;"></div>
+          </div>
+
+          <div id="wizOpenGapsWrap" style="display:none; margin-top:10px; padding:9px 12px; border:1px dashed rgba(250,204,21,.35); border-radius:8px;">
+            <div style="font-size:12px; font-weight:600; color:#fde047; margin-bottom:4px;">💡 Điểm có thể đào sâu thêm nếu bấm "Hỏi sâu thêm":</div>
+            <ul id="wizOpenGapsList" style="margin:0 0 0 18px; color:var(--muted); font-size:12px;"></ul>
+          </div>
+
+          <div class="composer-box" id="notesComposer" style="margin-top:12px;">
+            <div id="notesAttStrip" class="att-strip"></div>
+            <textarea id="wizUserNotesInput" rows="2" placeholder="Ghi chú / yêu cầu bổ sung tự do của bạn (có thể dán thêm ảnh/tài liệu vào đây)..."></textarea>
+            <div class="composer-toolbar">
+              <span>✍️ Thêm yêu cầu hoặc dán ảnh bổ sung</span>
+              <button class="btn sm" type="button" onclick="attachFileToBox('notes')">📎 Đính kèm</button>
+            </div>
+          </div>
+
+          <div class="row" style="justify-content:space-between; margin-top:14px;">
+            <button class="btn" onclick="goWizardStep(1)">← Sửa ý tưởng</button>
+            <div class="row">
+              <button class="btn" id="btnWizFollowupRound" style="border-color:rgba(96,165,250,.55); color:#93c5fd;" onclick="submitWizardInterviewFollowup()">🔍 Hỏi sâu thêm (Vòng tiếp)</button>
+              <button class="btn success" id="btnWizSynthesize" onclick="submitWizardSynthesize()">✅ Đã đủ ý — Tạo PRD &amp; Hiến pháp →</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 3: DUYỆT THIẾT KẾ -->
+        <div id="wizStep3" class="card" style="display:none;">
+          <div class="card-hdr">
+            <h3 id="wizProductTitle">Duyệt tính năng &amp; Tiêu chí nghiệm thu</h3>
+          </div>
+          <div class="grid-2" style="margin-bottom:12px;">
+            <div class="q-card">
+              <div style="font-weight:700; color:#93c5fd;">✨ Tính năng sẽ xây dựng:</div>
+              <ul id="wizFeaturesList" style="margin:0 0 0 18px; line-height:1.65;"></ul>
+            </div>
+            <div class="q-card">
+              <div style="font-weight:700; color:#86efac;">🛡️ Tiêu chí nghiệm thu (AC-1..AC-N):</div>
+              <textarea id="wizAcceptanceInput" rows="6" style="font-size:12px;"></textarea>
+            </div>
+          </div>
+          <div class="grid-2" style="margin-bottom:12px;">
+            <label class="field">
+              <span>Tên thư mục dự án</span>
+              <input type="text" id="wizProjectName" />
+            </label>
+            <label class="field">
+              <span>Công nghệ dựng khung</span>
+              <select id="wizChosenStack">
+                <option value="generic">Mọi công nghệ (Antigravity tự tối ưu)</option>
+                <option value="fullstack_web">Website Full-Stack (React + Express + SQLite)</option>
+                <option value="web_react">Website React + TypeScript</option>
+                <option value="python_app">Ứng dụng Python + Pytest</option>
+              </select>
+            </label>
+          </div>
+          <details style="margin-bottom:12px;">
+            <summary style="cursor:pointer; color:var(--muted); font-size:12px;">Xem / chỉnh sửa PRD &amp; Hợp đồng kỹ thuật</summary>
+            <div class="grid-2" style="margin-top:8px;">
+              <textarea id="wizContractPreview" rows="6" style="font-family:var(--mono); font-size:11.5px;" placeholder="contracts.md"></textarea>
+              <textarea id="wizPrdPreview" rows="6" style="font-family:var(--mono); font-size:11.5px;" placeholder="openspec/prd.md"></textarea>
+            </div>
+          </details>
+          <div class="row" style="justify-content:space-between;">
+            <label style="display:inline-flex; align-items:center; gap:6px; font-size:12.5px; color:var(--muted); cursor:pointer;">
+              <input type="checkbox" id="wizInstallDeps" /> Tự cài thư viện (`npm install`)
+            </label>
+            <div class="row">
+              <button class="btn" onclick="goWizardStep(2)">← Quay lại hỏi đáp</button>
+              <button class="btn success" id="btnWizBuild" onclick="submitWizardBuild()">🚀 Đồng ý &amp; Bắt đầu tạo sản phẩm</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 4: HOÀN TẤT & HƯỚNG DẪN CHẠY -->
+        <div id="wizStep4" class="card" style="display:none;">
+          <div class="card-hdr">
+            <h3>Trạng thái triển khai sản phẩm</h3>
+          </div>
+          <div id="wizDoneBanner" style="padding:10px 12px; border-radius:9px; background:#0f172a; border:1px solid var(--border-hi); margin-bottom:12px; font-size:13.5px;">
+            Đang thực thi tự động qua Antigravity... Theo dõi tiến độ từng task và luồng tương tác trực tiếp ở cột bên phải.
+          </div>
+
+          <!-- B: Hướng dẫn chạy cho người dùng -->
+          <div id="deliveryGuideCard" style="display:none; padding:12px; border-radius:10px; border:1px solid rgba(34,197,94,.4); background:rgba(34,197,94,.06); margin-bottom:12px;">
+            <div style="font-weight:700; color:#86efac; margin-bottom:6px;">📖 Hướng dẫn mở &amp; sử dụng sản phẩm vừa tạo</div>
+            <div id="deliveryGuideBody" style="font-size:12.5px; color:#cbd5e1; line-height:1.6;"></div>
+          </div>
+
+          <div class="row" style="justify-content:space-between;">
+            <button class="btn" onclick="switchWorkTab('quickfix')">🔧 Chuyển sang Prompt Sửa nhanh</button>
+            <div class="row">
+              <button class="btn success" onclick="launchPreview()">▶️ Chạy thử sản phẩm</button>
+              <button class="btn" onclick="openTargetFolder()">📂 Mở thư mục dự án</button>
+            </div>
+          </div>
         </div>
       </div>
 
-      <!-- STEP 1 -->
-      <div id="wizStep1" class="card">
-        <h3>Bạn muốn tạo sản phẩm công nghệ gì hôm nay?</h3>
-        <p style="color:var(--muted); margin-top:0;">Chỉ cần gõ <b>1 câu bằng tiếng Việt đời thường</b>. Bạn có thể bấm <b>⚡ Tạo nhanh 1-Chạm</b> (hệ thống tự quyết mọi thứ từ A–Z) hoặc để hệ thống hỏi thêm vài câu trắc nghiệm dễ hiểu.</p>
-        <div class="row" style="margin-bottom:10px;">
-          <button class="example-chip" onclick="useIdeaSample('Tạo website quản lý nhân viên có AI gợi ý đánh giá hiệu suất và xuất báo cáo CSV')">Website quản lý nhân viên có AI</button>
-          <button class="example-chip" onclick="useIdeaSample('Tạo phần mềm quản lý bán hàng, tồn kho đa kho và xuất hóa đơn tự động')">Quản lý bán hàng &amp; tồn kho</button>
-          <button class="example-chip" onclick="useIdeaSample('Tạo app quản lý thu chi cá nhân thông minh tự phân loại hóa đơn và cảnh báo vượt ngân sách')">Quản lý thu chi cá nhân AI</button>
-          <button class="example-chip" onclick="useIdeaSample('Tạo công cụ tự động viết kịch bản và tổng hợp nội dung bằng Python CLI')">Công cụ tự động hóa Python</button>
-          <button class="example-chip" onclick="useIdeaSample('Tạo tiện ích Chrome Extension quản lý tab thông minh và ghi chú nhanh')">Chrome Extension thông minh</button>
-        </div>
-        <textarea id="wizIdeaInput" rows="4" style="font-family:inherit; font-size:14px;" placeholder="Ví dụ: Tạo cho tôi một phần mềm quản lý quán cafe có gọi món, tính tiền chiết khấu VIP và thống kê doanh thu..."></textarea>
+      <!-- ===== PANEL 2: PROMPT SỬA NHANH / NÂNG CẤP ===== -->
+      <div id="panelQuickFix" style="display:none;">
+        <div class="card">
+          <div class="card-hdr">
+            <h3>🔧 Prompt Sửa nhanh / Nâng cấp dự án đang có</h3>
+            <!-- C: Nút Hoàn tác lần sửa vừa rồi -->
+            <button class="btn warn sm" id="btnUndoQuickFix" onclick="undoLastQuickUpdate()" title="Quay lại đúng bản Git trước lần sửa vừa rồi">
+              ↩️ Hoàn tác lần sửa vừa rồi
+            </button>
+          </div>
+          <p style="margin:0 0 10px; color:var(--muted); font-size:13px;">
+            Mô tả lỗi cần sửa hoặc tính năng cần thêm. Bạn có thể <b>dán ảnh chụp màn hình lỗi (Ctrl+V)</b>, kéo-thả file log/tài liệu để Antigravity xem trực tiếp và tự kiểm chứng.
+          </p>
 
-        <div class="grid-2" style="margin-top:14px;">
-          <label class="field">
-            <span>Thư mục lưu sản phẩm trên máy của bạn</span>
+          <label class="field" style="margin-bottom:10px;">
+            <span>Dự án áp dụng</span>
             <div class="row" style="flex-wrap:nowrap;">
-              <input type="text" id="wizParentDir" />
-              <button class="btn" onclick="pickWizardFolder()">Chọn nơi lưu...</button>
+              <input type="text" id="quickFixRepoInput" readonly />
+              <button class="btn sm" type="button" onclick="pickActiveProject()">Đổi dự án...</button>
             </div>
           </label>
-          <label class="field">
-            <span>Loại sản phẩm (Hỗ trợ mọi ngôn ngữ &amp; công nghệ)</span>
-            <select id="wizStackHint">
-              <option value="auto">Để hệ thống tự chọn công nghệ phù hợp nhất</option>
-              <option value="generic">Mọi sản phẩm công nghệ (Mobile, Desktop, Rust, Go, Game, Extension...)</option>
-              <option value="fullstack_web">Website Full-Stack (Giao diện + Backend API + Cơ sở dữ liệu thật)</option>
-              <option value="web_react">Website giao diện hiện đại (React + TypeScript)</option>
-              <option value="python_app">Ứng dụng / Tool tự động hóa / AI (Python)</option>
-            </select>
-          </label>
-        </div>
 
-        <label class="field" style="margin-top:12px;">
-          <span>Trí tuệ nhân tạo Antigravity sử dụng (tùy chọn)</span>
-          <select id="wizModelSelect">
-            <option value="">Theo cấu hình hiện tại (Mặc định agy)</option>
-          </select>
-        </label>
-
-        <div class="row" style="justify-content:space-between; margin-top:16px;">
-          <label class="check-label"><input type="checkbox" id="wizAutopilotInstallDeps" /> Tự cài thư viện nếu là Web (`npm install`)</label>
-          <div class="row">
-            <button class="btn success" id="btnWizAutopilot" onclick="submitWizardAutopilot()" title="Hệ thống tự chọn cấu hình tối ưu, tự thiết kế, tự lập trình và tự kiểm thử từ A-Z không cần hỏi lại">⚡ Tạo nhanh 1-Chạm (Tự động từ A → Z)</button>
-            <button class="btn primary" id="btnWizInterview" onclick="submitWizardInterview()">💬 Hỏi tôi vài câu để tùy chỉnh kỹ hơn →</button>
+          <div class="composer-box" id="quickFixComposer">
+            <div id="quickFixAttStrip" class="att-strip"></div>
+            <textarea id="wizQuickUpdateInput" rows="6" placeholder="VD: Nút kết nối webchat2api báo chưa kết nối (xem ảnh chụp màn hình tôi vừa dán), hãy kiểm tra cổng 17841 và sửa dứt điểm..."></textarea>
+            <div class="composer-toolbar">
+              <span>📋 Dán ảnh lỗi (Ctrl+V) hoặc kéo-thả log/tài liệu vào đây</span>
+              <button class="btn sm" type="button" onclick="attachFileToBox('quickfix')">📎 Đính kèm ảnh / tài liệu</button>
+            </div>
           </div>
-        </div>
-      </div>
 
-      <!-- KHUNG NÂNG CẤP / SỬA LỖI NHANH SẢN PHẨM ĐANG CÓ CHO NGƯỜI NON-TECH -->
-      <div id="wizQuickUpdateCard" class="card" style="border-color:rgba(6,182,212,.35);">
-        <div class="row" style="justify-content:space-between;">
-          <h3 style="margin:0; color:#67e8f9;">✨ Bạn đã có sẵn sản phẩm và muốn Thêm tính năng / Sửa lỗi nhanh?</h3>
-          <span class="pill" id="wizCurrentTargetPill">Dự án hiện tại</span>
-        </div>
-        <p style="color:var(--muted); margin:6px 0 10px;">Không cần tạo lại từ đầu! Chỉ cần chọn thư mục sản phẩm đang có rồi gõ yêu cầu bằng tiếng Việt bình dân, hệ thống sẽ tự định vị đúng file code để nâng cấp và kiểm thử.</p>
-        <div class="row" style="flex-wrap:nowrap; margin-bottom:10px;">
-          <input type="text" id="wizQuickUpdateInput" style="font-family:inherit;" placeholder="Ví dụ: Thêm nút xuất báo cáo ra file Excel, đổi tông màu sang xanh đậm và kiểm tra không cho nhập số tiền âm..." />
-          <button class="btn" onclick="pickQuickUpdateRepo()">Chọn thư mục SP...</button>
-          <button class="btn primary" id="btnWizQuickUpdate" onclick="submitWizardQuickUpdate()">✨ Tự động Nâng cấp Ngay</button>
-        </div>
-      </div>
-
-      <!-- STEP 2 -->
-      <div id="wizStep2" class="card" style="display:none;">
-        <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:6px;">
-          <h3 style="margin:0;">Phỏng vấn chuyên sâu &amp; Gợi ý nâng tầm sản phẩm</h3>
-          <div class="row" style="gap:6px;">
-            <span class="pill" id="wizRoundPill">Vòng 1</span>
-            <span class="pill" id="wizClarityPill" style="border-color:rgba(34,197,94,.45); color:#86efac;">Độ rõ ràng: 60%</span>
-          </div>
-        </div>
-        <p id="wizSummaryVi" style="color:#93c5fd; margin-top:4px;"></p>
-
-        <details id="wizPrevQaBox" style="display:none; margin-bottom:12px;">
-          <summary style="cursor:pointer; color:#94a3b8; font-size:12px;">📋 Xem lại các ý đã chốt ở các vòng trước (<span id="wizPrevQaCount">0</span> mục)</summary>
-          <ul id="wizPrevQaList" style="margin:8px 0 0 18px; color:var(--muted); font-size:12px; line-height:1.6;"></ul>
-        </details>
-
-        <div id="wizQuestionsList" style="display:flex; flex-direction:column; gap:12px;"></div>
-
-        <div id="wizSuggestionsWrap" style="display:none; margin-top:16px; padding:12px; border:1px solid rgba(56,189,248,.35); border-radius:10px; background:rgba(14,165,233,.06);">
-          <div style="font-weight:700; color:#7dd3fc; margin-bottom:8px;">✨ Gợi ý nâng tầm sản phẩm (tick chọn thêm những ý bạn thích):</div>
-          <div id="wizSuggestionsList" style="display:flex; flex-direction:column; gap:8px;"></div>
-        </div>
-
-        <div id="wizOpenGapsWrap" style="display:none; margin-top:12px; padding:10px 12px; border:1px dashed rgba(250,204,21,.35); border-radius:8px;">
-          <div style="font-size:12px; font-weight:600; color:#fde047; margin-bottom:4px;">💡 Những điểm có thể đào sâu thêm nếu bạn bấm "Hỏi sâu thêm":</div>
-          <ul id="wizOpenGapsList" style="margin:0 0 0 18px; color:var(--muted); font-size:12px; line-height:1.5;"></ul>
-        </div>
-
-        <label class="field" style="margin-top:14px;">
-          <span>✍️ Ghi chú / Mong muốn bổ sung tự do của bạn (tùy chọn)</span>
-          <textarea id="wizUserNotesInput" rows="2" style="font-family:inherit;" placeholder="VD: Tôi muốn thêm nút xuất PDF, hỗ trợ tiếng Việt có dấu, hoặc kết nối với API nội bộ ở cổng 17841..."></textarea>
-        </label>
-
-        <div class="row" style="justify-content:space-between; margin-top:16px; gap:10px; flex-wrap:wrap;">
-          <button class="btn" onclick="resetWizard()">← Quay lại sửa ý tưởng</button>
-          <div class="row" style="gap:10px;">
-            <button class="btn" id="btnWizFollowupRound" style="border-color:rgba(96,165,250,.5); color:#93c5fd;" onclick="submitWizardInterviewFollowup()">🔍 Hỏi sâu thêm (Vòng tiếp theo)</button>
-            <button class="btn success" id="btnWizSynthesize" onclick="submitWizardSynthesize()">✅ Đã đủ ý — Tạo PRD &amp; Hiến pháp dự án →</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- STEP 3 -->
-      <div id="wizStep3" class="card" style="display:none;">
-        <h3 id="wizProductTitle">Bản thiết kế tính năng &amp; Cam kết chất lượng sản phẩm</h3>
-        <p style="color:var(--muted); margin-top:0;">Hãy kiểm tra danh sách tính năng và các tiêu chí nghiệm thu tự động dưới đây trước khi hệ thống bắt đầu lập trình:</p>
-        <div class="grid-2" style="margin-bottom:14px;">
-          <div class="q-card">
-            <div style="font-weight:700; color:#93c5fd;">✨ Các tính năng chính sẽ có trong sản phẩm:</div>
-            <ul id="wizFeaturesList" style="line-height:1.7; margin:0 0 4px 18px;"></ul>
-          </div>
-          <div class="q-card">
-            <div style="font-weight:700; color:#86efac;">🛡️ Cam kết nghiệm thu tự động (AC-1..AC-N — Hệ thống tự kiểm tra):</div>
-            <textarea id="wizAcceptanceInput" rows="5" style="font-family:inherit; font-size:12px;" placeholder="Mỗi dòng 1 tiêu chí nghiệm thu (VD: AC-1: Kiểm tra đầy đủ dữ liệu đầu vào...)"></textarea>
-          </div>
-        </div>
-
-        <div class="grid-2" style="margin-bottom:12px;">
-          <label class="field">
-            <span>Tên thư mục dự án sẽ tạo</span>
-            <input type="text" id="wizProjectName" />
-          </label>
-          <label class="field">
-            <span>Công nghệ dựng khung (0 token — hỗ trợ mọi nền tảng)</span>
-            <select id="wizChosenStack">
-              <option value="generic">Mọi sản phẩm công nghệ (Antigravity tự sinh Blueprint tối ưu)</option>
-              <option value="fullstack_web">Website Full-Stack (React + Express + Prisma/SQLite thật)</option>
-              <option value="web_react">Website React + TypeScript (Vite)</option>
-              <option value="python_app">Ứng dụng Python + Pytest</option>
-            </select>
-          </label>
-        </div>
-
-        <details style="margin-bottom:14px;">
-          <summary style="cursor:pointer; color:var(--muted); font-size:12px;">Xem / Chỉnh sửa Hợp đồng Kiến trúc (`contracts.md`) &amp; Đặc tả kỹ thuật (`PRD.md`)</summary>
-          <div class="grid-2" style="margin-top:8px;">
-            <label class="field">
-              <span>Hợp đồng Kiến trúc dùng chung (`.auto-engine/contracts.md`)</span>
-              <textarea id="wizContractPreview" rows="6"></textarea>
-            </label>
-            <label class="field">
-              <span>Đặc tả chi tiết (`openspec/prd.md`)</span>
-              <textarea id="wizPrdPreview" rows="6"></textarea>
-            </label>
-          </div>
-        </details>
-
-        <div class="row" style="justify-content:space-between;">
-          <div class="row">
-            <button class="btn" onclick="goWizardStep(2)">← Quay lại câu hỏi</button>
-            <label class="check-label"><input type="checkbox" id="wizInstallDeps" /> Tự cài thư viện `npm install` (nếu là Web)</label>
-          </div>
-          <button class="btn success" id="btnWizBuild" onclick="submitWizardBuild()">🚀 Đồng ý &amp; Bắt đầu tạo sản phẩm</button>
-        </div>
-      </div>
-
-      <!-- STEP 4 -->
-      <div id="wizStep4" class="card" style="display:none;">
-        <div class="row" style="justify-content:space-between; margin-bottom:10px;">
-          <h3 style="margin:0;">Tiến độ xây dựng &amp; Kiểm định sản phẩm</h3>
-          <div class="row">
-            <span class="pill" id="wizTokensSavedPill" title="Tổng token sử dụng">Tokens: 0</span>
-            <span class="pill" id="wizProgressText">0 / 0 phần hoàn thành</span>
-          </div>
-        </div>
-        <div class="progress-bar-bg" style="margin-bottom:14px;">
-          <div class="progress-bar-fill" id="wizProgressFill"></div>
-        </div>
-        <div id="wizDoneBanner" style="display:none; background:rgba(34,197,94,.12); border:1px solid rgba(34,197,94,.4); color:#86efac; padding:10px 14px; border-radius:8px; margin-bottom:12px;"></div>
-        <div id="wizGuideCard" class="q-card" style="display:none; margin-bottom:14px; border-color:rgba(34,197,94,.5); background:rgba(34,197,94,.07);">
-          <div class="row" style="justify-content:space-between;">
-            <b style="color:#86efac;">📖 Hướng dẫn chạy &amp; sử dụng sản phẩm vừa tạo (Dành cho người Non-Tech)</b>
-            <button class="btn success sm" onclick="launchPreview()">▶️ Khởi chạy &amp; Mở trình duyệt ngay</button>
-          </div>
-          <ol id="wizGuideSteps" style="margin:6px 0 4px 18px; line-height:1.65; color:#e6edf3;"></ol>
-          <div id="wizGuideFiles" style="font-size:12px; color:var(--muted);"></div>
-        </div>
-        <div id="wizTaskSimpleList" style="display:flex; flex-direction:column; gap:8px; margin-bottom:14px;"></div>
-
-        <!-- HỘP YÊU CẦU CHỈNH SỬA / BỔ SUNG TÍNH NĂNG TIẾP THEO NGAY TẠI BƯỚC 4 -->
-        <div class="q-card" style="margin-bottom:14px; border-color:rgba(59,130,246,.4);">
-          <div style="font-weight:700; color:#93c5fd;">✨ Bạn muốn thêm tính năng hay chỉnh sửa gì tiếp theo trên sản phẩm này?</div>
-          <div class="row" style="flex-wrap:nowrap;">
-            <input type="text" id="wizFollowupInput" style="font-family:inherit;" placeholder="Gõ yêu cầu bổ sung (VD: Thêm bộ lọc tìm kiếm nhanh, thêm biểu đồ thống kê, sửa lỗi nút lưu...)" />
-            <button class="btn primary" id="btnWizFollowup" onclick="submitWizardFollowup()">✨ Cập nhật sản phẩm ngay</button>
-          </div>
-        </div>
-
-        <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">Nhật ký hoạt động trực tiếp:</div>
-        <div id="wizLogBox" class="log-box" style="height:170px; margin-bottom:12px;"></div>
-
-        <details style="margin-bottom:14px;">
-          <summary style="cursor:pointer; color:#93c5fd; font-size:12px; font-weight:600;">Xem tương tác trực tiếp Engine ↔ Antigravity (Prompt / Hợp đồng Kiến trúc / Tool Call)</summary>
-          <div id="wizTraceBox" class="trace-box" style="height:280px; margin-top:8px;"></div>
-        </details>
-
-        <div class="row" style="justify-content:space-between;">
-          <div class="row">
-            <button class="btn danger" id="btnWizStop" onclick="stopSprint()">Dừng an toàn</button>
-            <button class="btn primary" id="btnWizRetryBlocked" style="display:none;" onclick="retryBlockedFromWizard()">🔄 Thử lại phần bị lỗi &amp; Chạy tiếp</button>
-            <button class="btn" onclick="resetWizard()">+ Tạo sản phẩm mới khác</button>
-          </div>
-          <div class="row">
-            <span id="wizPreviewHint" style="color:var(--muted); font-size:12px;"></span>
-            <button class="btn success" id="btnLaunchPreview" onclick="launchPreview()">▶️ Chạy thử sản phẩm ngay</button>
-            <button class="btn primary" onclick="openTargetFolder()">📂 Mở thư mục sản phẩm</button>
+          <div class="row" style="justify-content:flex-end; margin-top:12px;">
+            <button class="btn primary" id="btnWizQuickUpdate" onclick="submitWizardQuickUpdate()">✨ Gửi Antigravity Sửa ngay</button>
           </div>
         </div>
       </div>
     </div>
-  </div>
 
-  <!-- ==================== CHẾ ĐỘ CHUYÊN GIA (DEVELOPER MODE) ==================== -->
-  <div id="devContainer" class="layout" style="display:none;">
-    <nav>
-      <button class="nav-btn active" onclick="switchTab('dashboard', this)">Điều khiển (Dashboard)</button>
-      <button class="nav-btn" onclick="switchTab('live', this)">Tương tác Antigravity (Live)</button>
-      <button class="nav-btn" onclick="switchTab('planner', this)">PRD &amp; Kế hoạch (Plan)</button>
-      <button class="nav-btn" onclick="switchTab('contracts', this)">Hợp đồng &amp; Kiểm định (4 Trụ cột)</button>
-      <button class="nav-btn" onclick="switchTab('config', this)">Cấu hình (Settings)</button>
-      <button class="nav-btn" onclick="switchTab('runs', this)">Lịch sử chạy (Runs)</button>
-    </nav>
-
-    <main>
-      <div id="repoWarnBanner" class="banner-warn">
-        Thư mục <b>target_repo</b> chưa trỏ tới một Git repo tồn tại trên đĩa. Hãy vào tab <b>Cấu hình (Settings)</b> và bấm <b>Chọn thư mục...</b> để chọn dự án của bạn.
+    <!-- ========== CỘT PHẢI: TIẾN ĐỘ TASK & TƯƠNG TÁC ANTIGRAVITY ========== -->
+    <div class="col">
+      <!-- TIẾN ĐỘ TASK + TIỆN ÍCH A, B, E -->
+      <div class="card">
+        <div class="card-hdr">
+          <h3>📊 Tiến độ Tasks (<span id="taskProgressLabel">0 / 0</span>)</h3>
+          <div class="row">
+            <!-- A: Dừng an toàn & Chạy tiếp phần lỗi -->
+            <button class="btn danger sm" id="btnStopSafe" onclick="stopWorker()" disabled>⏹ Dừng an toàn</button>
+            <button class="btn primary sm" id="btnRetryBlocked" onclick="retryBlockedTasks()" style="display:none;">🔄 Thử lại phần lỗi</button>
+            <!-- B: Chạy thử & Mở thư mục -->
+            <button class="btn success sm" onclick="launchPreview()" title="Khởi chạy sản phẩm ngay">▶️ Chạy thử</button>
+            <button class="btn sm" onclick="openTargetFolder()" title="Mở thư mục dự án">📂</button>
+            <!-- E: Quy tắc & Hợp đồng (Drawer ẩn gọn) -->
+            <button class="btn sm" onclick="openRulesDrawer()" title="Xem / sửa Hiến pháp & Hợp đồng dự án">📋 Quy tắc</button>
+          </div>
+        </div>
+        <div class="progress-track"><div class="progress-fill" id="taskProgressFill"></div></div>
+        <div id="taskListContainer" class="task-list">
+          <div style="color:var(--muted); font-size:12.5px; text-align:center; padding:18px 0;">
+            Chưa có task nào. Hãy nhập yêu cầu hoặc Prompt sửa nhanh ở cột bên trái.
+          </div>
+        </div>
       </div>
 
-      <!-- VIEW 1: DASHBOARD -->
-      <section id="view-dashboard" class="view active">
-        <div class="card">
-          <h3>Công cụ hệ thống &amp; Trạng thái</h3>
-          <div id="toolsRow" class="row"></div>
-        </div>
-
-        <div class="grid-4">
-          <div class="kpi"><div class="kpi-label">Tasks Hoàn thành</div><div class="kpi-value" id="kpiDone">0 / 0</div></div>
-          <div class="kpi"><div class="kpi-label">Tổng Token (In + Out)</div><div class="kpi-value" id="kpiTokens">0</div></div>
-          <div class="kpi"><div class="kpi-label">Hiệu quả Token / Chi phí</div><div class="kpi-value" id="kpiCost" style="font-size:18px;">Sẵn sàng</div></div>
-          <div class="kpi"><div class="kpi-label">Trạng thái Plan</div><div class="kpi-value" id="kpiApproval">Chưa duyệt</div></div>
-        </div>
-
-        <div class="card">
-          <h3>Thao tác điều phối Sprint</h3>
+      <!-- TƯƠNG TÁC TRỰC TIẾP HỆ THỐNG <-> ANTIGRAVITY -->
+      <div class="card" style="flex:1; display:flex; flex-direction:column;">
+        <div class="card-hdr">
+          <h3>🤖 Tương tác trực tiếp Hệ thống ↔ Antigravity</h3>
           <div class="row">
-            <button class="btn primary" id="btnApprove" onclick="approvePlan()">1. Phê duyệt Plan</button>
-            <button class="btn success" id="btnRun" onclick="runSprint(false)">2. Chạy Sprint Tự động</button>
-            <button class="btn" id="btnResume" onclick="resumeSprint()">Khôi phục &amp; Chạy tiếp (Resume)</button>
-            <button class="btn primary" id="btnDevRetryBlocked" style="display:none;" onclick="retryBlockedFromWizard()">🔄 Thử lại phần BLOCKED &amp; Chạy tiếp</button>
-            <button class="btn" onclick="launchPreview()">▶️ Chạy thử sản phẩm (Preview)</button>
-            <button class="btn" onclick="openTargetFolder()">📂 Mở thư mục dự án</button>
-            <button class="btn danger" id="btnStop" onclick="stopSprint()">Dừng an toàn</button>
+            <select id="traceFilter" style="width:auto; padding:4px 8px; font-size:12px;" onchange="renderTraces()">
+              <option value="all">Tất cả</option>
+              <option value="tools">Chỉ Tool calls &amp; Kết quả</option>
+              <option value="prompts">Chỉ Prompt gửi đi</option>
+            </select>
+            <button class="btn sm" onclick="clearTraceView()">Xóa màn hình</button>
           </div>
-          <div id="pillarsStatusRow" class="row" style="margin-top:10px;"></div>
         </div>
+        <div id="traceStreamBox" class="trace-box">
+          <div style="color:var(--muted); font-size:12.5px; text-align:center; padding:24px 0;">
+            Luồng tương tác real-time (Prompt, Tool calls, Đọc ảnh/tài liệu, Verify) sẽ hiển thị tại đây.
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
 
-        <div class="card">
-          <div class="row" style="justify-content:space-between; margin-bottom:8px;">
-            <h3 style="margin:0;">Tiến độ các phần công việc (Tasks &amp; Cơ chế Tự vá lỗi)</h3>
-            <span class="pill" id="devLiveTaskPill">Chưa chạy</span>
-          </div>
-          <div class="progress-bar-bg" style="margin-bottom:12px;">
-            <div class="progress-bar-fill" id="devProgressFill"></div>
-          </div>
-          <div id="devGuideCard" class="q-card" style="display:none; margin-bottom:12px; border-color:rgba(34,197,94,.5); background:rgba(34,197,94,.07);">
-            <div class="row" style="justify-content:space-between;">
-              <b style="color:#86efac;">📖 Hướng dẫn chạy &amp; sử dụng sản phẩm (Đã tạo sẵn `CHAY_SAN_PHAM.bat` &amp; `HUONG_DAN_SU_DUNG.md`)</b>
-              <button class="btn success sm" onclick="launchPreview()">▶️ Khởi chạy &amp; Mở trình duyệt ngay</button>
-            </div>
-            <ol id="devGuideSteps" style="margin:6px 0 4px 18px; line-height:1.65; color:#e6edf3;"></ol>
-            <div id="devGuideFiles" style="font-size:12px; color:var(--muted);"></div>
-          </div>
-          <div id="devTaskQuickList" style="display:flex; flex-direction:column; gap:6px;"></div>
-        </div>
-
-        <div class="card">
-          <div class="row" style="justify-content:space-between; margin-bottom:10px;">
-            <h3 style="margin:0;">Nhật ký thời gian thực (Live Stream)</h3>
-            <button class="btn sm" onclick="clearLogs()">Xóa màn hình log</button>
-          </div>
-          <div id="logBox" class="log-box"></div>
-        </div>
-      </section>
-
-      <!-- VIEW LIVE: ANTIGRAVITY INTERACTION TRACE -->
-      <section id="view-live" class="view">
-        <div class="card">
-          <div class="row" style="justify-content:space-between; margin-bottom:10px;">
-            <div>
-              <h3 style="margin:0;">Luồng tương tác Realtime: Engine ↔ Antigravity</h3>
-              <div style="color:var(--muted); font-size:12px; margin-top:3px;">Hiển thị toàn bộ Prompt hệ thống gửi vào, phản hồi streaming từ Antigravity, Tool Call và kết quả kiểm thử.</div>
-            </div>
-            <div class="row">
-              <select id="traceFilter" style="width:auto;" onchange="reRenderAllTraces()">
-                <option value="all">Tất cả sự kiện</option>
-                <option value="prompt_sent">Chỉ Prompt gửi vào</option>
-                <option value="text_delta">Chỉ phản hồi Antigravity</option>
-                <option value="tool_call">Chỉ Tool Calls</option>
-                <option value="verify_result">Chỉ Verify / Lỗi</option>
-              </select>
-              <button class="btn sm" onclick="clearTraceBoxes()">Xóa hiển thị</button>
-            </div>
-          </div>
-          <div id="devTraceBox" class="trace-box"></div>
-        </div>
-      </section>
-
-      <!-- VIEW 2: PLANNER & TASKS -->
-      <section id="view-planner" class="view">
-        <div class="card">
-          <h3>Nhập PRD / Yêu cầu hoặc Import tasks.json</h3>
-          <div class="row" style="margin-bottom:10px;">
-            <button class="btn" onclick="pickPrdFile()">Mở file PRD / tasks.json...</button>
-            <span id="pickedFileLabel" style="color:var(--muted); font-size:12px;"></span>
-          </div>
-          <textarea id="prdInput" rows="8" placeholder="Dán mô tả PRD (Markdown) hoặc nội dung tasks.json vào đây..."></textarea>
-          <div class="row" style="margin-top:10px; justify-content:space-between;">
-            <div class="row">
-              <label class="check-label"><input type="checkbox" id="chkImportTasks" /> Import định dạng tasks.json</label>
-              <label class="check-label"><input type="checkbox" id="chkPlanAutoApprove" /> Tự động duyệt ngay sau khi Plan</label>
-            </div>
-            <button class="btn primary" id="btnPlan" onclick="submitPlan()">Lập kế hoạch DAG (Plan)</button>
-          </div>
-        </div>
-
-        <div id="clarifyCard" class="card" style="display:none; border-color:rgba(234,179,8,.5);">
-          <h3 style="color:#fde047;">PRD cần làm rõ trước khi chia Task (Tránh AI đoán mò)</h3>
-          <ol id="clarifyList" style="margin:0 0 12px 18px; line-height:1.6;"></ol>
-          <textarea id="clarifyAnswers" rows="3" placeholder="Nhập câu trả lời bổ sung cho các câu hỏi trên..."></textarea>
-          <div class="row" style="margin-top:10px;">
-            <button class="btn primary" onclick="appendClarificationsAndReplan()">Bổ sung vào PRD &amp; Plan lại</button>
-          </div>
-        </div>
-
-        <div class="card">
-          <h3>Danh sách Atomic Tasks trong `state.db`</h3>
-          <div style="overflow-x:auto;">
-            <table>
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Mức độ</th>
-                  <th>Phụ thuộc</th>
-                  <th>Files được sửa / tạo mới</th>
-                  <th>Trạng thái</th>
-                  <th>Tokens</th>
-                  <th>Thao tác</th>
-                </tr>
-              </thead>
-              <tbody id="tasksTbody"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <!-- VIEW CONTRACTS, EPISODIC HANDOFF MEMORY & 0-TOKEN REPLAY AUDIT -->
-      <section id="view-contracts" class="view">
-        <div class="card">
-          <div class="row" style="justify-content:space-between; margin-bottom:10px;">
-            <div>
-              <h3 style="margin:0;">Trụ cột 2 &amp; Nâng cấp: Hợp đồng Kiến trúc (`contracts.md`), Trí nhớ Bàn giao (`handoff.md`) &amp; Dynamic Blueprint</h3>
-              <div style="color:var(--muted); font-size:12px; margin-top:3px;">Được tự động tiêm vào mọi Task &amp; nhánh Git Worktree song song để đảm bảo khớp 100% chữ ký hàm, schema và tiêu chí nghiệm thu AC-1..AC-N.</div>
-            </div>
-            <button class="btn primary" onclick="saveContractsAndMemory()">Lưu Hợp đồng &amp; Bộ nhớ</button>
-          </div>
-          <div class="grid-2">
-            <label class="field">
-              <span>Hợp đồng Kiến trúc &amp; Tiêu chí Nghiệm thu (`.auto-engine/contracts.md`)</span>
-              <textarea id="contractsMdBox" rows="10" placeholder="Chưa có contracts.md (Sẽ tự động được tạo khi qua Wizard hoặc lập kế hoạch DAG >= 2 tasks)..."></textarea>
-            </label>
-            <label class="field">
-              <span>Trí nhớ Bàn giao 0-Token giữa các Task (`.auto-engine/handoff.md`)</span>
-              <textarea id="handoffMdBox" rows="10" placeholder="Chưa có handoff.md (Sẽ tự động ghi lại các file và chữ ký hàm sau mỗi Task DONE)..."></textarea>
-            </label>
-          </div>
-          <label class="field" style="margin-top:10px;">
-            <span>Dynamic Custom Blueprint (`.auto-engine/blueprint.yaml` — Tự động sinh cho mọi công nghệ mới ngoài danh sách mẫu)</span>
-            <textarea id="customBlueprintBox" rows="5" placeholder="Tùy chọn: cấu hình verify_commands, runtime_verify_commands, preview_command, quality_rules riêng cho dự án..."></textarea>
-          </label>
-        </div>
-
-        <div class="card">
-          <div class="row" style="justify-content:space-between; margin-bottom:10px;">
-            <div>
-              <h3 style="margin:0;">Trụ cột 1: Kiểm định Định vị File 0-Token &amp; Cửa sổ AST/Brace trên Lịch sử Git (`audit-repo`)</h3>
-              <div style="color:var(--muted); font-size:12px; margin-top:3px;">Tái hiện các commit thực tế gần nhất trong repo ở mức 0 LLM token để đo Recall, Precision, AST/Brace Window Hit Rate và lượng Token tiết kiệm.</div>
-            </div>
-            <div class="row">
-              <input type="number" id="auditCommitsCount" value="10" min="1" max="50" style="width:80px;" />
-              <button class="btn success" id="btnAuditRepo" onclick="runRepoAudit()">🔍 Chạy 0-Token Replay Audit</button>
-            </div>
-          </div>
-          <pre id="auditReportPre" class="trace-pre" style="max-height:340px;">Bấm "Chạy 0-Token Replay Audit" để đo độ chính xác định vị của Engine trên repo hiện tại.</pre>
-        </div>
-      </section>
-
-      <!-- VIEW 3: SETTINGS -->
-      <section id="view-config" class="view">
-        <div class="card">
-          <h3>Thiết lập Dự án &amp; Antigravity (`config.yaml`)</h3>
-          <div class="grid-2">
-            <label class="field">
-              <span>Thư mục Git repo đích (`target_repo`)</span>
-              <div class="row" style="flex-wrap:nowrap;">
-                <input type="text" id="cfgTargetRepo" />
-                <button class="btn" onclick="pickRepoFolder()">Chọn thư mục...</button>
-              </div>
-            </label>
-            <label class="field">
-              <span>Nhánh gốc (`base_branch`)</span>
-              <input type="text" id="cfgBaseBranch" />
-            </label>
-            <label class="field">
-              <span>Chế độ thực thi (`executor.mode`)</span>
-              <select id="cfgMode">
-                <option value="agy_cli">agy_cli (Antigravity CLI - Khuyên dùng)</option>
-                <option value="agy_sdk">agy_sdk (Antigravity Python SDK)</option>
-                <option value="mcp_only">mcp_only (FastMCP cho IDE)</option>
-                <option value="aider">aider (Fallback Mode C)</option>
-                <option value="opencode">opencode (Fallback Mode C)</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>File quy ước cố định (`shared_rules_file`, tùy chọn)</span>
-              <input type="text" id="cfgSharedRules" placeholder="vd: AGENTS.md" />
-            </label>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="row" style="justify-content:space-between; margin-bottom:12px;">
-            <h3 style="margin:0;">Định tuyến Model &amp; Effort (`agy.tiers`)</h3>
-            <button class="btn sm" onclick="loadAgyModels(true)">Tải lại model từ `agy`</button>
-          </div>
-          <div class="grid-4">
-            <div class="kpi">
-              <div class="kpi-label">Planner (Lập kế hoạch)</div>
-              <select id="tierPlannerModel" class="agy-model-select" style="margin:6px 0;"><option value="">Mặc định agy</option></select>
-              <select id="tierPlannerEffort"><option>high</option><option>medium</option><option>low</option></select>
-            </div>
-            <div class="kpi">
-              <div class="kpi-label">Coder Low (Task dễ)</div>
-              <select id="tierLowModel" class="agy-model-select" style="margin:6px 0;"><option value="">Mặc định agy</option></select>
-              <select id="tierLowEffort"><option>low</option><option>medium</option><option>high</option></select>
-            </div>
-            <div class="kpi">
-              <div class="kpi-label">Coder Medium (Task vừa)</div>
-              <select id="tierMedModel" class="agy-model-select" style="margin:6px 0;"><option value="">Mặc định agy</option></select>
-              <select id="tierMedEffort"><option>medium</option><option>low</option><option>high</option></select>
-            </div>
-            <div class="kpi">
-              <div class="kpi-label">Escalation (Retry cuối / Khó)</div>
-              <select id="tierEscModel" class="agy-model-select" style="margin:6px 0;"><option value="">Mặc định agy</option></select>
-              <select id="tierEscEffort"><option>high</option><option>medium</option><option>low</option></select>
-            </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <h3>Giới hạn Token, Chống Lặp &amp; Lệnh Kiểm thử</h3>
-          <div class="grid-4" style="margin-bottom:12px;">
-            <label class="field"><span>Max Retries / Task</span><input type="number" id="limRetries" /></label>
-            <label class="field"><span>Max Tokens / Task</span><input type="number" id="limTokensTask" /></label>
-            <label class="field"><span>Max Tool Calls / Lượt</span><input type="number" id="limToolCalls" /></label>
-            <label class="field"><span>Max Blocked Liên tiếp</span><input type="number" id="limConsecBlocked" /></label>
-          </div>
-          <div class="grid-4" style="margin-bottom:12px;">
-            <label class="field">
-              <span>Chế độ Lập kế hoạch (`sprint.planning_mode`)</span>
-              <select id="cfgPlanningMode">
-                <option value="auto">auto (Fast-Path 0-token khi gọn, DAG khi lớn)</option>
-                <option value="dag">dag (Luôn chia nhiều Task DAG)</option>
-                <option value="single">single (Gom 1 Task trực tiếp)</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Số nhánh Song song (`max_parallel_tasks`)</span>
-              <input type="number" id="cfgMaxParallel" min="1" max="8" />
-            </label>
-            <label class="field">
-              <span>Chế độ Phạm vi (`guards.scope_mode`)</span>
-              <select id="cfgScopeMode">
-                <option value="soft">soft (Linh hoạt cho phép mở rộng file liên quan)</option>
-                <option value="strict">strict (Khóa cứng chỉ các file được giao)</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Idle Watchdog Timeout (`idle_timeout_seconds`)</span>
-              <input type="number" id="cfgIdleTimeout" min="15" max="1800" />
-            </label>
-          </div>
-          <div class="grid-2" style="margin-bottom:12px;">
-            <label class="field">
-              <span>Lệnh verify mặc định (mỗi dòng 1 lệnh đơn, KHÔNG dùng `&amp;&amp;`)</span>
-              <textarea id="cfgDefaultVerify" rows="3"></textarea>
-            </label>
-            <label class="field">
-              <span>Lệnh verify cuối Sprint &amp; Runtime Gate (mỗi dòng 1 lệnh đơn)</span>
-              <textarea id="cfgFinalVerify" rows="3"></textarea>
-            </label>
-          </div>
-          <label class="field" style="margin-bottom:12px;">
-            <span>Lệnh Runtime / Behavioral Smoke Gate (`sprint.runtime_verify_commands`, tự động chạy + tự vá lỗi `T-FINAL-FIX` cuối Sprint)</span>
-            <textarea id="cfgRuntimeVerify" rows="2" placeholder="VD: python scripts/smoke_http_health.py --cmd &quot;npm start&quot; --url http://127.0.0.1:3000"></textarea>
-          </label>
-          <div class="row" style="justify-content:space-between;">
-            <div class="row" style="gap:16px;">
-              <label class="check-label"><input type="checkbox" id="chkAutoApproveTools" /> Tự duyệt quyền sửa file cho `agy` headless</label>
-              <label class="check-label"><input type="checkbox" id="chkDynamicMcp" /> Dynamic MCP Gating</label>
-              <label class="check-label"><input type="checkbox" id="chkUseRtk" /> Dùng `rtk` nén log</label>
-              <label class="check-label"><input type="checkbox" id="chkRequireApprove" /> Bắt buộc duyệt Plan</label>
-              <label class="check-label"><input type="checkbox" id="chkForbidDelAssert" /> Chặn xóa assertion test</label>
-              <label class="check-label"><input type="checkbox" id="chkEnforceProd" /> Chặn code Demo/Mock giả lập</label>
-            </div>
-            <button class="btn primary" onclick="saveConfig()">Lưu cấu hình</button>
-          </div>
-        </div>
-      </section>
-
-      <!-- VIEW 4: RUNS LEDGER -->
-      <section id="view-runs" class="view">
-        <div class="card">
-          <h3>Nhật ký các lần thực thi (`runs` trong `state.db`)</h3>
-          <div style="overflow-x:auto;">
-            <table>
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Task</th>
-                  <th>Lần</th>
-                  <th>Model / Effort</th>
-                  <th>Tokens (In / Out)</th>
-                  <th>Thời gian</th>
-                  <th>Kết quả</th>
-                  <th>Chi tiết lỗi rút gọn</th>
-                </tr>
-              </thead>
-              <tbody id="runsTbody"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-    </main>
+  <!-- ==================== DRAWER E: HIẾN PHÁP & HỢP ĐỒNG DỰ ÁN (ẨN GỌN) ==================== -->
+  <div id="rulesDrawerBackdrop" class="drawer-backdrop" onclick="if(event.target===this) closeRulesDrawer()">
+    <div class="drawer">
+      <div class="row" style="justify-content:space-between;">
+        <h3 style="margin:0;">📋 Quy tắc (Constitution) &amp; Hợp đồng dự án</h3>
+        <button class="btn sm" onclick="closeRulesDrawer()">✕ Đóng</button>
+      </div>
+      <p style="margin:0; font-size:12.5px; color:var(--muted);">
+        Hệ thống tự động đính kèm 2 tài liệu này vào mọi task &amp; mọi lần sửa nhanh để Antigravity luôn giữ đúng kiến trúc và tiêu chuẩn dự án.
+      </p>
+      <label class="field">
+        <span>Hiến pháp dự án (`.auto-engine/constitution.md`)</span>
+        <textarea id="drawerConstitution" rows="9" style="font-family:var(--mono); font-size:12px;"></textarea>
+      </label>
+      <label class="field">
+        <span>Hợp đồng Kiến trúc &amp; Nghiệm thu (`.auto-engine/contracts.md`)</span>
+        <textarea id="drawerContracts" rows="9" style="font-family:var(--mono); font-size:12px;"></textarea>
+      </label>
+      <div class="row" style="justify-content:flex-end;">
+        <button class="btn primary" onclick="saveRulesDrawer()">💾 Lưu thay đổi</button>
+      </div>
+    </div>
   </div>
 
+  <input type="file" id="hiddenFileInput" multiple style="display:none;" onchange="handleHiddenFilePicked(event)" />
   <div id="toast" class="toast"></div>
 
   <script>
-    let latestState = null;
-    let currentAppMode = "simple";
+    let latestState = {};
     let localWizardStep = 1;
+    let activeWorkTab = "create";
     let wizardAnswers = {};
-    let lastTraceSeq = 0;
-    let allTraces = [];
-    let refreshTimer = null;
+    let traceItems = [];
+    let currentAttachTarget = "idea";
+    const attachmentsByBox = { idea: [], notes: [], quickfix: [], hitl: [] };
+    let customModelMode = false;
 
-    function scheduleRefreshState(delayMs = 350) {
-      if (refreshTimer) return;
-      refreshTimer = setTimeout(async () => {
-        refreshTimer = null;
-        try { await refreshState(); } catch (_) {}
-      }, delayMs);
+    function esc(s) {
+      return String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
     }
 
     function showToast(msg) {
       const el = document.getElementById("toast");
       el.textContent = msg;
-      el.style.display = "block";
-      setTimeout(() => { el.style.display = "none"; }, 3200);
+      el.classList.add("show");
+      clearTimeout(el._t);
+      el._t = setTimeout(() => el.classList.remove("show"), 3200);
     }
 
-    function setAppMode(mode) {
-      currentAppMode = mode;
-      document.getElementById("simpleContainer").style.display = mode === "simple" ? "flex" : "none";
-      document.getElementById("devContainer").style.display = mode === "dev" ? "flex" : "none";
-      document.getElementById("modeBtnSimple").classList.toggle("active", mode === "simple");
-      document.getElementById("modeBtnDev").classList.toggle("active", mode === "dev");
-    }
-
-    function switchTab(name, btn) {
-      document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
-      document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
-      document.getElementById("view-" + name).classList.add("active");
-      btn.classList.add("active");
-    }
-
-    function esc(str) {
-      return String(str ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    }
-
-    function appendLogEntry(entry) {
-      for (const boxId of ["logBox", "wizLogBox"]) {
-        const box = document.getElementById(boxId);
-        if (!box) continue;
-        const div = document.createElement("div");
-        div.className = "log-line log-" + (entry.level || "info");
-        div.textContent = `[${entry.time}] [${(entry.level || "info").toUpperCase()}] ${entry.message}`;
-        box.appendChild(div);
-        box.scrollTop = box.scrollHeight;
-      }
-    }
-
-    function clearLogs() {
-      document.getElementById("logBox").innerHTML = "";
-      document.getElementById("wizLogBox").innerHTML = "";
-    }
-
-    function clearTraceBoxes() {
-      allTraces = [];
-      for (const boxId of ["devTraceBox", "wizTraceBox"]) {
-        const box = document.getElementById(boxId);
-        if (box) box.innerHTML = "";
-      }
-    }
-
-    function buildTraceElement(t) {
-      const kind = t.kind || "info";
-      let cls = "kind-" + kind;
-      if (kind === "verify_result") {
-        cls = (t.meta && t.meta.passed) ? "kind-verify_pass" : "kind-verify_fail";
-      }
-      const div = document.createElement("div");
-      div.className = "trace-card " + cls;
-      const badgeParts = [
-        `<span class="badge">${esc(t.phase || "engine")}</span>`,
-        t.task_id ? `<span class="badge b-PENDING">${esc(t.task_id)}</span>` : "",
-        t.model ? `<span class="badge">${esc(t.model)}${t.effort ? " / " + esc(t.effort) : ""}</span>` : "",
-        `<span style="color:var(--muted);">${esc(t.time || "")}</span>`,
-      ].filter(Boolean).join(" ");
-
-      let bodyHtml = "";
-      if (kind === "prompt_sent") {
-        const tokApprox = Math.max(1, Math.round(String(t.content || "").length / 3.5));
-        bodyHtml = `<details><summary style="cursor:pointer; color:#93c5fd;">Xem Prompt đã gửi (~${tokApprox.toLocaleString()} tokens, ${String(t.content || "").length} ký tự)</summary><pre class="trace-pre">${esc(t.content || "")}</pre></details>`;
-      } else if (kind === "text_delta") {
-        bodyHtml = `<pre class="trace-pre trace-delta-body">${esc(t.content || "")}</pre>`;
-      } else if (t.content) {
-        const metaUsage = t.meta && t.meta.usage
-          ? `<div style="color:var(--muted); font-size:11px; margin-top:4px;">Tokens: in=${t.meta.usage.prompt_tokens || 0}, out=${t.meta.usage.completion_tokens || 0}${t.meta.duration_sec ? ` • ${t.meta.duration_sec}s` : ""}</div>`
-          : "";
-        bodyHtml = `<pre class="trace-pre">${esc(t.content)}</pre>${metaUsage}`;
-      }
-
-      div.innerHTML = `<div class="trace-head"><div><b>${esc(t.title || kind)}</b></div><div class="row" style="gap:5px;">${badgeParts}</div></div>${bodyHtml}`;
-      div.dataset.phase = t.phase || "";
-      div.dataset.taskId = t.task_id || "";
-      div.dataset.kind = kind;
-      return div;
-    }
-
-    function appendTraceToBox(box, t, filterVal) {
-      if (!box) return;
-      if (filterVal && filterVal !== "all" && t.kind !== filterVal) return;
-
-      if (t.kind === "text_delta") {
-        const last = box.lastElementChild;
-        if (last && last.dataset.kind === "text_delta" && last.dataset.phase === (t.phase || "") && last.dataset.taskId === (t.task_id || "")) {
-          const pre = last.querySelector(".trace-delta-body");
-          if (pre) {
-            pre.textContent += t.content || "";
-            box.scrollTop = box.scrollHeight;
-            return;
-          }
-        }
-      }
-      box.appendChild(buildTraceElement(t));
-      box.scrollTop = box.scrollHeight;
-    }
-
-    function appendTraceEntry(t) {
-      if (!t) return;
-      if (typeof t.seq === "number") {
-        if (t.seq <= lastTraceSeq) return;
-        lastTraceSeq = t.seq;
-      }
-      allTraces.push(t);
-      if (allTraces.length > 400) allTraces = allTraces.slice(-400);
-      const filterEl = document.getElementById("traceFilter");
-      const filterVal = filterEl ? filterEl.value : "all";
-      appendTraceToBox(document.getElementById("devTraceBox"), t, filterVal);
-      appendTraceToBox(document.getElementById("wizTraceBox"), t, "all");
-    }
-
-    function reRenderAllTraces() {
-      const filterEl = document.getElementById("traceFilter");
-      const filterVal = filterEl ? filterEl.value : "all";
-      const devBox = document.getElementById("devTraceBox");
-      if (!devBox) return;
-      devBox.innerHTML = "";
-      for (const t of allTraces) appendTraceToBox(devBox, t, filterVal);
-    }
-
-    function syncTraces(traces) {
-      for (const t of traces || []) {
-        if (typeof t.seq === "number" && t.seq <= lastTraceSeq) continue;
-        appendTraceEntry(t);
-      }
-    }
-
-    function renderBlueprintSelectors(blueprints) {
-      if (!blueprints || !blueprints.length) return;
-      const key = JSON.stringify(blueprints.map(b => [b.id, b.label]));
-      const hintSel = document.getElementById("wizStackHint");
-      const chosenSel = document.getElementById("wizChosenStack");
-      if (hintSel && hintSel.dataset.bpKey !== key) {
-        const cur = hintSel.value || "auto";
-        hintSel.dataset.bpKey = key;
-        hintSel.innerHTML = `<option value="auto">Để hệ thống tự chọn phù hợp nhất</option>` +
-          blueprints.map(b => `<option value="${esc(b.id)}">${esc(b.label)}</option>`).join("");
-        hintSel.value = cur;
-      }
-      if (chosenSel && chosenSel.dataset.bpKey !== key) {
-        const cur = chosenSel.value || "generic";
-        chosenSel.dataset.bpKey = key;
-        chosenSel.innerHTML = blueprints.map(b => `<option value="${esc(b.id)}">${esc(b.label)}</option>`).join("");
-        chosenSel.value = cur;
-      }
-    }
-
-    function renderInteractionBanner(pending) {
-      const banner = document.getElementById("hitlBanner");
-      const list = document.getElementById("hitlQuestionsList");
-      if (!pending || !pending.questions || pending.questions.length === 0) {
-        banner.classList.remove("active");
-        list.dataset.key = "";
-        return;
-      }
-      banner.classList.add("active");
-      document.getElementById("hitlTaskBadge").textContent = pending.task_id || "TASK";
-      document.getElementById("hitlTitle").textContent = `${pending.title || ""} — Antigravity đang chờ thông tin thật từ bạn:`;
-      const key = JSON.stringify(pending);
-      if (list.dataset.key !== key) {
-        list.dataset.key = key;
-        list.innerHTML = pending.questions.map((q, idx) => `
-          <div class="q-card" style="padding:10px;">
-            <div style="font-size:13px; font-weight:600;">${esc(q)}</div>
-            <div class="row" style="flex-wrap:nowrap;">
-              <input type="text" class="hitl-ans-input" id="hitlAns_${idx}" data-question="${esc(q).replace(/"/g, "&quot;")}" placeholder="Nhập câu trả lời thật (hoặc chọn file ảnh/3D bên cạnh)..." />
-              <button type="button" class="btn sm" onclick="pickAssetForHitl(${idx})">Chọn file ảnh / 3D...</button>
-            </div>
-          </div>
-        `).join("");
-      }
-    }
-
-    async function pickAssetForHitl(idx) {
-      try {
-        const res = await api("/api/pick-asset", "POST");
-        if (res.path) {
-          const inp = document.getElementById("hitlAns_" + idx);
-          if (inp) inp.value = inp.value.trim() ? `${inp.value.trim()}, ${res.path}` : res.path;
-        }
-      } catch (e) { showToast(e.message); }
-    }
-
-    async function submitHitlAnswers() {
-      const inputs = document.querySelectorAll(".hitl-ans-input");
-      const answers = {};
-      inputs.forEach(inp => {
-        const q = inp.dataset.question || "";
-        if (q) answers[q] = inp.value.trim() || "Sử dụng cấu hình mặc định chuẩn trong PRD (có thể chỉnh sau trong Settings).";
-      });
-      try {
-        const next = await api("/api/interaction/answer", "POST", { answers });
-        renderState(next);
-        showToast("Đã gửi thông tin cho Antigravity!");
-      } catch (e) { showToast(e.message); }
-    }
-
-    async function submitDefaultHitlAnswers() {
-      const inputs = document.querySelectorAll(".hitl-ans-input");
-      const answers = {};
-      inputs.forEach(inp => {
-        const q = inp.dataset.question || "";
-        if (q) answers[q] = inp.value.trim() || "Sử dụng giá trị mặc định chuẩn trong PRD và cho phép cấu hình qua Settings/.env.";
-      });
-      try {
-        const next = await api("/api/interaction/answer", "POST", { answers });
-        renderState(next);
-        showToast("⚡ Đã áp dụng mặc định và tiếp tục Sprint!");
-      } catch (e) { showToast(e.message); }
-    }
-
-    function goWizardStep(step) {
-      localWizardStep = step;
-      for (let i = 1; i <= 4; i++) {
-        document.getElementById("wizStep" + i).style.display = i === step ? "block" : "none";
-        const chip = document.getElementById("stepChip" + i);
-        chip.classList.toggle("active", i === step);
-        chip.classList.toggle("done", i < step);
-      }
-    }
-
-    function useIdeaSample(txt) {
-      document.getElementById("wizIdeaInput").value = txt;
-    }
-
-    function renderWizard(s) {
-      const w = s.wizard || {};
-      const insights = s.engine_insights || {};
-      const det = insights.detected || {};
-      const busy = s.worker.status !== "idle";
-      ["btnWizInterview", "btnWizFollowupRound", "btnWizSynthesize", "btnWizBuild", "btnWizAutopilot", "btnWizQuickUpdate", "btnWizFollowup"].forEach(id => {
-        const b = document.getElementById(id);
-        if (b) b.disabled = busy;
-      });
-      document.getElementById("btnWizStop").disabled = !busy;
-
-      const stackPill = document.getElementById("wizActiveStackPill");
-      if (stackPill) {
-        stackPill.textContent = det.stack ? `Stack nhận diện: ${det.stack}` : "Tự nhận diện mọi công nghệ";
-      }
-      const targetPill = document.getElementById("wizCurrentTargetPill");
-      if (targetPill && s.config && s.config.project) {
-        targetPill.textContent = s.config.project.target_repo || "Chưa chọn thư mục";
-      }
-
-      if (!document.getElementById("wizParentDir").value && w.parent_dir) {
-        document.getElementById("wizParentDir").value = w.parent_dir;
-      }
-      if (w.step && w.step !== localWizardStep) {
-        goWizardStep(w.step);
-      }
-
-      if (w.interview) {
-        document.getElementById("wizSummaryVi").textContent = w.interview.product_summary_vi || "";
-        const roundPill = document.getElementById("wizRoundPill");
-        const clarityPill = document.getElementById("wizClarityPill");
-        const rNum = w.interview.round_number || w.round || 1;
-        const cScore = (w.interview.clarity_score !== undefined && w.interview.clarity_score !== null) ? w.interview.clarity_score : 60;
-        const cLvl = w.interview.complexity_level || "standard";
-        if (roundPill) roundPill.textContent = `Vòng ${rNum} · Mức độ: ${cLvl}`;
-        if (clarityPill) {
-          clarityPill.textContent = `Độ rõ ràng: ${cScore}%${w.interview.ready_to_build ? " (Sẵn sàng)" : ""}`;
-        }
-
-        const prevQa = w.qa_history || {};
-        const prevKeys = Object.keys(prevQa);
-        const prevBox = document.getElementById("wizPrevQaBox");
-        if (prevBox) {
-          if (prevKeys.length > 0) {
-            prevBox.style.display = "block";
-            document.getElementById("wizPrevQaCount").textContent = String(prevKeys.length);
-            document.getElementById("wizPrevQaList").innerHTML = prevKeys
-              .map(k => `<li><b>${esc(k)}</b>: ${esc(prevQa[k])}</li>`)
-              .join("");
-          } else {
-            prevBox.style.display = "none";
-          }
-        }
-
-        const qBox = document.getElementById("wizQuestionsList");
-        const renderSig = JSON.stringify({ r: rNum, q: w.interview.questions });
-        if (qBox.dataset.renderedFor !== renderSig) {
-          qBox.dataset.renderedFor = renderSig;
-          wizardAnswers = {};
-          qBox.innerHTML = (w.interview.questions || []).map((q, qIdx) => {
-            wizardAnswers[q.question] = q.default_answer || (q.options && q.options[0]) || "";
-            const opts = (q.options || []).map((opt, oIdx) =>
-              `<button type="button" class="opt-btn" onclick="selectWizOpt(this, ${qIdx}, ${oIdx})">${esc(opt)}</button>`
-            ).join(" ");
-            const catHtml = q.category ? `<span class="pill" style="font-size:11px; margin-bottom:4px; display:inline-block;">${esc(q.category)}</span>` : "";
-            const whyHtml = q.why_it_matters ? `<div style="font-size:12px; color:var(--muted); margin-bottom:6px;">${esc(q.why_it_matters)}</div>` : "";
-            return `<div class="q-card">
-              ${catHtml}
-              <div style="font-weight:600;">${esc(q.question)}</div>
-              ${whyHtml}
-              <div class="row">${opts}</div>
-              <input type="text" value="${esc(wizardAnswers[q.question]).replace(/"/g, "&quot;")}" oninput="updateWizInput(${qIdx}, this.value)" placeholder="Hoặc nhập câu trả lời riêng của bạn..." />
-            </div>`;
-          }).join("");
-        }
-
-        const suggWrap = document.getElementById("wizSuggestionsWrap");
-        const suggList = document.getElementById("wizSuggestionsList");
-        const suggestions = w.interview.proactive_suggestions || [];
-        if (suggWrap && suggList) {
-          const suggSig = JSON.stringify({ r: rNum, s: suggestions });
-          if (suggestions.length > 0) {
-            suggWrap.style.display = "block";
-            if (suggList.dataset.renderedFor !== suggSig) {
-              suggList.dataset.renderedFor = suggSig;
-              suggList.innerHTML = suggestions.map((sg, sIdx) => {
-                const labelVal = `${sg.title}${sg.benefit_vi ? " — " + sg.benefit_vi : ""}`;
-                return `<label style="display:flex; gap:8px; align-items:flex-start; cursor:pointer; font-size:13px;">
-                  <input type="checkbox" class="wiz-sugg-cb" value="${esc(labelVal).replace(/"/g, "&quot;")}" ${sg.recommended ? "checked" : ""} style="margin-top:3px;" />
-                  <span><b>${esc(sg.title)}</b>${sg.recommended ? ' <span class="pill" style="font-size:10px; color:#86efac;">Khuyên dùng</span>' : ""}<br/><span style="color:var(--muted); font-size:12px;">${esc(sg.benefit_vi || "")}</span></span>
-                </label>`;
-              }).join("");
-            }
-          } else {
-            suggWrap.style.display = "none";
-          }
-        }
-
-        const gapsWrap = document.getElementById("wizOpenGapsWrap");
-        const gapsList = document.getElementById("wizOpenGapsList");
-        const gaps = w.interview.open_gaps_vi || [];
-        if (gapsWrap && gapsList) {
-          if (gaps.length > 0) {
-            gapsWrap.style.display = "block";
-            gapsList.innerHTML = gaps.map(g => `<li>${esc(g)}</li>`).join("");
-          } else {
-            gapsWrap.style.display = "none";
-          }
-        }
-
-        document.getElementById("wizProjectName").value = document.getElementById("wizProjectName").value || w.interview.suggested_project_name || "my-ai-app";
-        if (w.interview.recommended_stack) {
-          document.getElementById("wizChosenStack").value = w.interview.recommended_stack;
-        }
-      }
-
-      if (w.spec) {
-        document.getElementById("wizProductTitle").textContent = w.spec.product_title || "Bản thiết kế tính năng & Cam kết chất lượng sản phẩm";
-        document.getElementById("wizFeaturesList").innerHTML = (w.spec.features_vi || []).map(f => `<li>${esc(f)}</li>`).join("");
-        const prdBox = document.getElementById("wizPrdPreview");
-        const acBox = document.getElementById("wizAcceptanceInput");
-        const conBox = document.getElementById("wizContractPreview");
-        if (prdBox.dataset.loadedTitle !== w.spec.product_title) {
-          prdBox.dataset.loadedTitle = w.spec.product_title || "";
-          prdBox.value = w.spec.prd_markdown || "";
-          if (acBox) acBox.value = (w.spec.acceptance_criteria || []).join("\n");
-          if (conBox) conBox.value = w.spec.architecture_contract || "";
-        }
-      }
-
-      // Step 4 progress
-      const tasks = s.tasks || [];
-      const doneCnt = (s.summary.counts && s.summary.counts.DONE) || 0;
-      const blockedCnt = (s.summary.counts && s.summary.counts.BLOCKED) || 0;
-      const pendingCnt = (s.summary.counts && s.summary.counts.PENDING) || 0;
-      const totCnt = s.summary.total_tasks || tasks.length || 0;
-      const pct = totCnt > 0 ? Math.round((doneCnt / totCnt) * 100) : 0;
-      document.getElementById("wizProgressText").textContent = `${doneCnt} / ${totCnt} phần hoàn thành (${pct}%)`;
-      document.getElementById("wizProgressFill").style.width = `${pct}%`;
-      const totTok = (s.summary.prompt_tokens || 0) + (s.summary.completion_tokens || 0);
-      const tokPill = document.getElementById("wizTokensSavedPill");
-      if (tokPill) tokPill.textContent = `Tokens: ${totTok.toLocaleString()}`;
-
-      const retryBtn = document.getElementById("btnWizRetryBlocked");
-      if (retryBtn) {
-        retryBtn.style.display = (!busy && (blockedCnt > 0 || (pendingCnt > 0 && doneCnt < totCnt))) ? "inline-block" : "none";
-      }
-
-      document.getElementById("wizTaskSimpleList").innerHTML = tasks.map(t => {
-        const errNote = (t.status === "BLOCKED" && t.last_error)
-          ? `<div style="color:#fca5a5; font-size:12px; margin-top:4px;">Lý do dừng: ${esc(t.last_error)}</div>`
-          : "";
-        return `<div class="q-card" style="flex-direction:row; justify-content:space-between; align-items:center;">
-          <div>
-            <span><b>${esc(t.task_id)}:</b> ${esc(t.title)}</span>
-            ${errNote}
-          </div>
-          <span class="badge b-${esc(t.status)}">${esc(t.status)}</span>
-        </div>`;
-      }).join("");
-
-      const doneBanner = document.getElementById("wizDoneBanner");
-      if (w.done_message) {
-        doneBanner.style.display = "block";
-        doneBanner.textContent = w.done_message;
-        const isWarn = w.done_message.includes("⚠️") || blockedCnt > 0 || doneCnt < totCnt;
-        doneBanner.style.background = isWarn ? "rgba(234,179,8,.14)" : "rgba(34,197,94,.12)";
-        doneBanner.style.borderColor = isWarn ? "rgba(234,179,8,.45)" : "rgba(34,197,94,.4)";
-        doneBanner.style.color = isWarn ? "#fde047" : "#86efac";
-      } else {
-        doneBanner.style.display = "none";
-      }
-      document.getElementById("wizPreviewHint").textContent = w.preview_cmd ? `Lệnh chạy: ${w.preview_cmd}` : "";
-    }
-
-    async function retryBlockedFromWizard() {
-      try {
-        await api("/api/wizard/retry-blocked", "POST");
-        showToast("🔄 Đang thử lại phần bị gián đoạn và chạy tiếp...");
-        await refreshState();
-      } catch (e) { showToast(e.message); }
-    }
-
-    function updateWizInput(qIdx, val) {
-      const q = latestState && latestState.wizard && latestState.wizard.interview && latestState.wizard.interview.questions[qIdx];
-      if (q) wizardAnswers[q.question] = val;
-    }
-
-    function selectWizOpt(btn, qIdx, oIdx) {
-      const q = latestState && latestState.wizard && latestState.wizard.interview && latestState.wizard.interview.questions[qIdx];
-      if (!q) return;
-      const optVal = (q.options && q.options[oIdx]) || "";
-      const card = btn.closest(".q-card");
-      card.querySelectorAll(".opt-btn").forEach(b => b.classList.remove("selected"));
-      btn.classList.add("selected");
-      card.querySelector("input[type='text']").value = optVal;
-      wizardAnswers[q.question] = optVal;
-    }
-
-    function renderState(s) {
-      latestState = s;
-      const repoPill = document.getElementById("repoPill");
-      repoPill.textContent = s.config.project.target_repo;
-      repoPill.className = "pill " + (s.is_git_repo ? "ok" : "warn");
-      document.getElementById("repoWarnBanner").style.display = s.is_git_repo ? "none" : "block";
-
-      const wp = document.getElementById("workerPill");
-      const busy = s.worker.status !== "idle";
-      wp.textContent = busy ? `${s.worker.status}: ${s.worker.message}` : "idle (Sẵn sàng)";
-      wp.className = "pill " + (s.worker.status === "waiting_user" ? "warn" : (busy ? "busy" : "ok"));
-
-      renderInteractionBanner(s.pending_interaction);
-      syncTraces(s.traces || []);
-      renderBlueprintSelectors(s.blueprints || []);
-
-      const medModel = (s.config.agy && s.config.agy.tiers && s.config.agy.tiers.coder_medium && s.config.agy.tiers.coder_medium.model) || "";
-      document.getElementById("modelPill").textContent = "Model: " + (medModel || "Mặc định agy");
-
-      ["btnPlan", "btnRun", "btnResume"].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.disabled = busy;
-      });
-      document.getElementById("btnStop").disabled = !busy;
-
-      renderWizard(s);
-
-      // Tools row
-      const toolsRow = document.getElementById("toolsRow");
-      toolsRow.innerHTML = Object.entries(s.tools).map(([name, info]) => {
-        const cls = info.ready ? "ok" : (info.optional ? "warn" : "err");
-        const st = info.ready ? "READY" : (info.optional ? "OPTIONAL" : "MISSING");
-        return `<span class="pill ${cls}" title="${esc(info.path)}">${esc(name)}: ${st}</span>`;
-      }).join("");
-
-      // KPIs
-      const cnt = s.summary.counts || {};
-      const doneCnt = cnt.DONE || 0;
-      const blockedCnt = cnt.BLOCKED || 0;
-      const totTasks = s.summary.total_tasks || (s.tasks ? s.tasks.length : 0) || 0;
-      document.getElementById("kpiDone").textContent = `${doneCnt} / ${totTasks}`;
-      const totTok = (s.summary.prompt_tokens || 0) + (s.summary.completion_tokens || 0);
-      document.getElementById("kpiTokens").textContent = totTok.toLocaleString();
-      const rawCost = Number(s.summary.cost_usd || 0);
-      const costEl = document.getElementById("kpiCost");
-      if (rawCost > 0) {
-        costEl.textContent = "$" + rawCost.toFixed(4);
-      } else if (totTok > 0) {
-        costEl.textContent = "Gói agy (~32% tiết kiệm)";
-        costEl.title = "Antigravity CLI không tính phí API riêng lẻ; chế độ Surgical Prompt + AST/Brace Locator giúp tiết kiệm ~30-50% tổng token so với chat dài thông thường.";
-      } else {
-        costEl.textContent = "Sẵn sàng";
-      }
-      document.getElementById("kpiApproval").textContent = s.plan_approved ? "Đã duyệt" : "Chưa duyệt";
-
-      const devPct = totTasks > 0 ? Math.round((doneCnt / totTasks) * 100) : 0;
-      const devFill = document.getElementById("devProgressFill");
-      if (devFill) devFill.style.width = `${devPct}%`;
-      const devRetryBtn = document.getElementById("btnDevRetryBlocked");
-      if (devRetryBtn) devRetryBtn.style.display = (!busy && blockedCnt > 0) ? "inline-block" : "none";
-
-      const activeTask = (s.tasks || []).find(t => t.status === "RUNNING" || t.status === "VERIFYING");
-      const devLivePill = document.getElementById("devLiveTaskPill");
-      if (devLivePill) {
-        if (activeTask) {
-          const retryNote = activeTask.retry_count > 0 ? ` • 🔧 Đang tự vá lỗi (Lần thử ${activeTask.retry_count})` : "";
-          devLivePill.textContent = `Đang xử lý ${activeTask.task_id} (${activeTask.status})${retryNote}`;
-          devLivePill.className = "pill busy";
-        } else if (blockedCnt > 0) {
-          devLivePill.textContent = `Tạm dừng (${blockedCnt} phần BLOCKED)`;
-          devLivePill.className = "pill warn";
-        } else if (totTasks > 0 && doneCnt >= totTasks) {
-          devLivePill.textContent = `Hoàn tất ${doneCnt}/${totTasks} (100%)`;
-          devLivePill.className = "pill ok";
-        } else {
-          devLivePill.textContent = `${doneCnt} / ${totTasks} hoàn thành (${devPct}%)`;
-          devLivePill.className = "pill";
-        }
-      }
-
-      const devQuickList = document.getElementById("devTaskQuickList");
-      if (devQuickList) {
-        devQuickList.innerHTML = (s.tasks || []).map(t => {
-          const isRepairing = (t.status === "RUNNING" || t.status === "VERIFYING") && t.retry_count > 0;
-          const subNote = isRepairing
-            ? `<div style="color:#fde047; font-size:12px; margin-top:2px;">🔧 Lần thử ${t.retry_count}: Hệ thống đã đính kèm log lỗi lần trước để Antigravity tự sửa...</div>`
-            : (t.status === "BLOCKED" && t.last_error
-              ? `<div style="color:#fca5a5; font-size:12px; margin-top:2px;">Lý do dừng: ${esc(t.last_error.split(/\r?\n/)[0])}</div>`
-              : "");
-          return `<div class="q-card" style="padding:8px 12px; flex-direction:row; justify-content:space-between; align-items:center;">
-            <div>
-              <span><b>${esc(t.task_id)}:</b> ${esc(t.title)}</span>
-              ${subNote}
-            </div>
-            <div class="row" style="gap:6px;">
-              ${t.retry_count > 0 ? `<span class="badge">Retry #${t.retry_count}</span>` : ""}
-              <span class="badge b-${esc(t.status)}">${esc(t.status)}</span>
-            </div>
-          </div>`;
-        }).join("") || `<div style="color:var(--muted); font-size:12px;">Chưa có task nào trong state.db.</div>`;
-      }
-
-      // Clarifying questions
-      const clarifyCard = document.getElementById("clarifyCard");
-      if (s.clarifying_questions && s.clarifying_questions.length > 0) {
-        clarifyCard.style.display = "block";
-        document.getElementById("clarifyList").innerHTML = s.clarifying_questions.map(q => `<li>${esc(q)}</li>`).join("");
-      } else {
-        clarifyCard.style.display = "none";
-      }
-
-      // Tasks table
-      const tb = document.getElementById("tasksTbody");
-      tb.innerHTML = (s.tasks || []).map(t => {
-        const files = [...(t.spec.allowed_write_files || []), ...(t.spec.create_new_files || [])].join(", ");
-        const deps = (t.spec.depends_on || []).join(", ") || "-";
-        const tok = (t.prompt_tokens || 0) + (t.completion_tokens || 0);
-        return `<tr>
-          <td><b>${esc(t.task_id)}</b><div style="color:var(--muted); font-size:12px;">${esc(t.title)}</div></td>
-          <td><span class="badge b-${esc(t.complexity)}">${esc(t.complexity)}</span></td>
-          <td>${esc(deps)}</td>
-          <td><code>${esc(files)}</code></td>
-          <td><span class="badge b-${esc(t.status)}">${esc(t.status)}</span></td>
-          <td>${tok.toLocaleString()}</td>
-          <td>
-            <div class="row" style="gap:6px;">
-              ${t.status === "BLOCKED" ? `<button class="btn sm primary" onclick="retryTask('${esc(t.task_id)}')">Retry</button>` : ""}
-              <button class="btn sm" onclick="rollbackTask('${esc(t.task_id)}')">Rollback</button>
-            </div>
-          </td>
-        </tr>`;
-      }).join("") || `<tr><td colspan="7" style="color:var(--muted);">Chưa có task nào trong state.db.</td></tr>`;
-
-      // Runs table
-      const rb = document.getElementById("runsTbody");
-      rb.innerHTML = (s.runs || []).map(r => {
-        const errBlock = r.trimmed_error_log
-          ? `<details><summary style="cursor:pointer;color:var(--muted);">Xem log</summary><pre style="white-space:pre-wrap;margin:4px 0 0;">${esc(r.trimmed_error_log)}</pre></details>`
-          : "-";
-        return `<tr>
-          <td>${r.id}</td>
-          <td><b>${esc(r.task_id)}</b></td>
-          <td>${r.attempt}</td>
-          <td>${esc(r.model_used)} / ${esc(r.effort_used)}</td>
-          <td>${r.prompt_tokens} / ${r.completion_tokens}</td>
-          <td>${Number(r.duration_sec || 0).toFixed(2)}s</td>
-          <td><span class="badge b-${esc(r.verdict)}">${esc(r.verdict)}</span></td>
-          <td>${errBlock}</td>
-        </tr>`;
-      }).join("") || `<tr><td colspan="8" style="color:var(--muted);">Chưa có lịch sử chạy.</td></tr>`;
-
-      if (!document.getElementById("view-config").classList.contains("active")) {
-        populateConfigForm(s.config);
-      }
-
-      const ins = s.engine_insights || {};
-      const guide = ins.delivery_guide || null;
-      for (const prefix of ["wiz", "dev"]) {
-        const gCard = document.getElementById(prefix + "GuideCard");
-        const gSteps = document.getElementById(prefix + "GuideSteps");
-        const gFiles = document.getElementById(prefix + "GuideFiles");
-        if (gCard && gSteps && gFiles) {
-          if (guide && guide.steps_vi && guide.steps_vi.length > 0) {
-            gCard.style.display = "block";
-            gSteps.innerHTML = guide.steps_vi.map(st => `<li>${esc(st)}</li>`).join("");
-            const urlPart = guide.web_url ? ` • Giao diện Web: <b>${esc(guide.web_url)}</b>` : "";
-            const batPart = guide.bat_path ? ` • File chạy nhanh 1-click: <code>CHAY_SAN_PHAM.bat</code>` : "";
-            gFiles.innerHTML = `Lệnh chạy: <code>${esc(guide.run_command || "-")}</code>${urlPart}${batPart}`;
-          } else {
-            gCard.style.display = "none";
-          }
-        }
-      }
-      const p = ins.pillars || {};
-      const pRow = document.getElementById("pillarsStatusRow");
-      if (pRow) {
-        pRow.innerHTML = [
-          `<span class="pill ok">Trụ cột 1: AST + Brace Block Windowing (19 ngôn ngữ)</span>`,
-          `<span class="pill ${p.contract_first ? "ok" : ""}">Trụ cột 2: Contract-First (${p.contract_first ? "Đang bật" : "Tự sinh khi >=2 tasks"})</span>`,
-          `<span class="pill ${p.episodic_handoff ? "ok" : ""}">Handoff Memory (${p.episodic_handoff ? "Có dữ liệu" : "Sẵn sàng"})</span>`,
-          `<span class="pill ok">Trụ cột 3: Auto-Repair T-FINAL-FIX</span>`,
-          `<span class="pill ok">Trụ cột 4: Traceback Escalation &amp; ${p.soft_scope ? "Soft-Scope" : "Strict-Scope"}</span>`,
-          `<span class="pill">Parallel Worktrees: ${p.parallel_worktrees || 1}</span>`,
-          `<span class="pill">Watchdog: ${p.idle_watchdog_sec || 120}s</span>`,
-        ].join(" ");
-      }
-      if (!document.getElementById("view-contracts").classList.contains("active")) {
-        const cBox = document.getElementById("contractsMdBox");
-        const hBox = document.getElementById("handoffMdBox");
-        const bpBox = document.getElementById("customBlueprintBox");
-        if (cBox) cBox.value = ins.contracts_md || "";
-        if (hBox) hBox.value = ins.handoff_md || "";
-        if (bpBox) bpBox.value = ins.custom_blueprint_yaml || "";
-      }
-      const audPre = document.getElementById("auditReportPre");
-      if (audPre && ins.audit_report_md) {
-        audPre.textContent = ins.audit_report_md;
-      }
-    }
-
-    function populateConfigForm(c) {
-      document.getElementById("cfgTargetRepo").value = c.project.target_repo || "";
-      document.getElementById("cfgBaseBranch").value = c.project.base_branch || "main";
-      document.getElementById("cfgSharedRules").value = c.project.shared_rules_file || "";
-      document.getElementById("cfgMode").value = c.executor.mode || "agy_cli";
-
-      const tiers = c.agy.tiers || {};
-      document.getElementById("tierPlannerModel").value = (tiers.planner && tiers.planner.model) || "";
-      document.getElementById("tierPlannerEffort").value = (tiers.planner && tiers.planner.effort) || "high";
-      document.getElementById("tierLowModel").value = (tiers.coder_low && tiers.coder_low.model) || "";
-      document.getElementById("tierLowEffort").value = (tiers.coder_low && tiers.coder_low.effort) || "low";
-      document.getElementById("tierMedModel").value = (tiers.coder_medium && tiers.coder_medium.model) || "";
-      document.getElementById("tierMedEffort").value = (tiers.coder_medium && tiers.coder_medium.effort) || "medium";
-      document.getElementById("tierEscModel").value = (tiers.escalation && tiers.escalation.model) || "";
-      document.getElementById("tierEscEffort").value = (tiers.escalation && tiers.escalation.effort) || "high";
-
-      document.getElementById("limRetries").value = c.limits.max_retries_per_task;
-      document.getElementById("limTokensTask").value = c.limits.max_tokens_per_task;
-      document.getElementById("limToolCalls").value = c.limits.max_tool_calls_per_attempt;
-      document.getElementById("limConsecBlocked").value = c.limits.max_consecutive_blocked_tasks;
-
-      if (document.getElementById("cfgPlanningMode")) {
-        document.getElementById("cfgPlanningMode").value = (c.sprint && c.sprint.planning_mode) || "auto";
-        document.getElementById("cfgMaxParallel").value = (c.sprint && c.sprint.max_parallel_tasks) || 2;
-        document.getElementById("cfgScopeMode").value = (c.guards && c.guards.scope_mode) || "soft";
-        document.getElementById("cfgIdleTimeout").value = (c.executor && c.executor.idle_timeout_seconds) || 120;
-        document.getElementById("cfgRuntimeVerify").value = ((c.sprint && c.sprint.runtime_verify_commands) || []).join("\n");
-      }
-
-      document.getElementById("cfgDefaultVerify").value = (c.executor.default_verify_commands || []).join("\n");
-      document.getElementById("cfgFinalVerify").value = (c.sprint.final_verify_commands || []).join("\n");
-
-      document.getElementById("chkAutoApproveTools").checked = !!c.agy.auto_approve_tools;
-      document.getElementById("chkDynamicMcp").checked = !!c.agy.dynamic_mcp_gating;
-      document.getElementById("chkUseRtk").checked = !!c.tools.use_rtk;
-      document.getElementById("chkRequireApprove").checked = !!c.sprint.require_plan_approval;
-      document.getElementById("chkForbidDelAssert").checked = !!c.guards.forbid_test_assertion_deletion;
-      document.getElementById("chkEnforceProd").checked = c.guards.enforce_production_only !== false;
-    }
-
-    async function api(path, method = "GET", body = null) {
+    async function api(url, method = "GET", body = null) {
       const opts = { method, headers: {} };
       if (body !== null) {
         opts.headers["Content-Type"] = "application/json";
         opts.body = JSON.stringify(body);
       }
-      const res = await fetch(path, opts);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Request failed");
+      const res = await fetch(url, opts);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       return data;
     }
 
-    async function refreshState() {
-      const data = await api("/api/state");
-      renderState(data);
+    function fmtDuration(sec) {
+      const s = Math.max(0, Math.round(Number(sec) || 0));
+      if (s < 60) return `${s}s`;
+      const m = Math.floor(s / 60);
+      const r = s % 60;
+      return `${m}m${r < 10 ? "0" : ""}${r}s`;
+    }
+
+    function switchWorkTab(tab) {
+      activeWorkTab = tab;
+      document.getElementById("panelCreate").style.display = tab === "create" ? "block" : "none";
+      document.getElementById("panelQuickFix").style.display = tab === "quickfix" ? "block" : "none";
+      document.getElementById("tabBtnCreate").classList.toggle("active", tab === "create");
+      document.getElementById("tabBtnQuickFix").classList.toggle("active", tab === "quickfix");
+    }
+
+    function goWizardStep(step) {
+      localWizardStep = step;
+      for (let i = 1; i <= 4; i++) {
+        const el = document.getElementById(`wizStep${i}`);
+        if (el) el.style.display = i === step ? "block" : "none";
+        const chip = document.getElementById(`stepChip${i}`);
+        if (chip) {
+          chip.classList.toggle("active", i === step);
+          chip.classList.toggle("done", i < step);
+        }
+      }
+    }
+
+    /* ===== DYNAMIC MODEL SELECTOR (NO HARDCODING) ===== */
+    async function loadAgyModels(showNotice = false) {
+      try {
+        const data = await api("/api/agy/models");
+        const models = data.models || [];
+        const sel = document.getElementById("modelSelect");
+        const curModel =
+          (latestState.config &&
+            latestState.config.agy &&
+            latestState.config.agy.tiers &&
+            latestState.config.agy.tiers.coder_medium &&
+            latestState.config.agy.tiers.coder_medium.model) ||
+          sel.value ||
+          "";
+        sel.innerHTML = `<option value="">Mặc định agy</option>` +
+          models.map(m => `<option value="${esc(m.id)}">${esc(m.label || m.id)}</option>`).join("");
+        if (curModel && !models.some(m => m.id === curModel)) {
+          sel.innerHTML += `<option value="${esc(curModel)}">${esc(curModel)} (Tùy chỉnh)</option>`;
+        }
+        sel.value = curModel;
+        if (showNotice) showToast(`Đã tải ${models.length} model mới nhất từ Antigravity.`);
+      } catch (e) {
+        if (showNotice) showToast("Không tải được danh sách model: " + e.message);
+      }
+    }
+
+    async function onModelSelectChange(modelId) {
+      try {
+        latestState = await api("/api/agy/model", "POST", { model: modelId });
+        showToast(`Đã chuyển model sang: ${modelId || "Mặc định agy"}`);
+      } catch (e) { showToast(e.message); }
+    }
+
+    function toggleCustomModel() {
+      customModelMode = !customModelMode;
+      document.getElementById("modelSelect").style.display = customModelMode ? "none" : "inline-block";
+      document.getElementById("customModelInput").style.display = customModelMode ? "inline-block" : "none";
+      document.getElementById("btnApplyCustomModel").style.display = customModelMode ? "inline-flex" : "none";
+      if (customModelMode) document.getElementById("customModelInput").focus();
+    }
+
+    async function applyCustomModel() {
+      const val = document.getElementById("customModelInput").value.trim();
+      if (!val) return;
+      await onModelSelectChange(val);
+      toggleCustomModel();
+      await loadAgyModels(false);
+    }
+
+    /* ===== PASTE (CTRL+V), DRAG-DROP & ATTACH IMAGES/DOCUMENTS ===== */
+    function attachFileToBox(boxKey) {
+      currentAttachTarget = boxKey;
+      const inp = document.getElementById("hiddenFileInput");
+      inp.value = "";
+      inp.click();
+    }
+
+    async function handleHiddenFilePicked(ev) {
+      const files = Array.from(ev.target.files || []);
+      for (const f of files) {
+        await uploadSingleFile(f, currentAttachTarget);
+      }
+    }
+
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function uploadSingleFile(file, boxKey) {
+      try {
+        const dataUrl = await fileToBase64(file);
+        const targetDir = (latestState.config && latestState.config.project && latestState.config.project.target_repo) || "";
+        const entry = await api("/api/attachments/upload", "POST", {
+          filename: file.name || `pasted_${Date.now()}.png`,
+          mime_type: file.type || "application/octet-stream",
+          data_base64: dataUrl,
+          target_dir: boxKey === "quickfix" ? targetDir : "",
+        });
+        attachmentsByBox[boxKey].push(entry);
+        renderAttachmentStrip(boxKey);
+        showToast(`Đã đính kèm: ${entry.name}`);
+      } catch (e) {
+        showToast("Lỗi đính kèm tệp: " + e.message);
+      }
+    }
+
+    function removeAttachment(boxKey, idx) {
+      attachmentsByBox[boxKey].splice(idx, 1);
+      renderAttachmentStrip(boxKey);
+    }
+
+    function renderAttachmentStrip(boxKey) {
+      const idMap = {
+        idea: "ideaAttStrip",
+        notes: "notesAttStrip",
+        quickfix: "quickFixAttStrip",
+        hitl: "hitlAttStrip",
+      };
+      const el = document.getElementById(idMap[boxKey]);
+      if (!el) return;
+      const list = attachmentsByBox[boxKey] || [];
+      el.innerHTML = list.map((a, idx) => {
+        const thumb = a.is_image
+          ? `<img src="/api/attachments/preview?path=${encodeURIComponent(a.path)}" alt="${esc(a.name)}" />`
+          : `<span>📄</span>`;
+        return `<span class="att-chip" title="${esc(a.path)}">
+          ${thumb}
+          <span class="att-name">${esc(a.name)}</span>
+          <button type="button" onclick="removeAttachment('${boxKey}', ${idx})">✕</button>
+        </span>`;
+      }).join("");
+    }
+
+    function wirePasteAndDrop(containerId, textareaId, boxKey) {
+      const box = document.getElementById(containerId);
+      const ta = textareaId ? document.getElementById(textareaId) : box;
+      if (!box || !ta) return;
+
+      ta.addEventListener("paste", async (ev) => {
+        const items = Array.from((ev.clipboardData && ev.clipboardData.items) || []);
+        const fileItems = items.filter(it => it.kind === "file");
+        if (!fileItems.length) return;
+        ev.preventDefault();
+        for (const it of fileItems) {
+          const f = it.getAsFile();
+          if (f) await uploadSingleFile(f, boxKey);
+        }
+      });
+
+      box.addEventListener("dragover", (ev) => {
+        ev.preventDefault();
+        box.classList.add("drag-over");
+      });
+      box.addEventListener("dragleave", () => box.classList.remove("drag-over"));
+      box.addEventListener("drop", async (ev) => {
+        ev.preventDefault();
+        box.classList.remove("drag-over");
+        const files = Array.from((ev.dataTransfer && ev.dataTransfer.files) || []);
+        for (const f of files) {
+          await uploadSingleFile(f, boxKey);
+        }
+      });
+    }
+
+    /* ===== ACTIONS ===== */
+    async function pickActiveProject() {
+      try {
+        const res = await api("/api/pick-folder", "POST");
+        if (!res.path) return;
+        latestState = await api("/api/project/select", "POST", { path: res.path });
+        renderState(latestState);
+        showToast("Đã chọn dự án: " + res.path);
+      } catch (e) { showToast(e.message); }
     }
 
     async function pickWizardFolder() {
@@ -1664,40 +1036,114 @@
       if (res.path) document.getElementById("wizParentDir").value = res.path;
     }
 
+    async function openAgyLogin() {
+      await api("/api/agy/login", "POST");
+      showToast("Đã mở cửa sổ đăng nhập Antigravity.");
+    }
+
+    async function openTargetFolder() {
+      try { await api("/api/open-folder", "POST"); } catch (e) { showToast(e.message); }
+    }
+
+    async function launchPreview() {
+      try {
+        const res = await api("/api/preview/launch", "POST", {});
+        showToast(res.command ? `Đang chạy: ${res.command}` : "Đã mở thư mục dự án.");
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function stopWorker() {
+      await api("/api/stop", "POST");
+      showToast("Đang dừng an toàn...");
+    }
+
+    async function retryBlockedTasks() {
+      try {
+        await api("/api/wizard/retry-blocked", "POST");
+        showToast("Đang chạy tiếp phần bị lỗi...");
+        await refreshState();
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function undoLastQuickUpdate() {
+      if (!confirm("Hoàn tác dự án về đúng thời điểm trước lần sửa nhanh vừa rồi?")) return;
+      try {
+        latestState = await api("/api/wizard/undo-last", "POST");
+        renderState(latestState);
+        showToast("Đã hoàn tác dự án thành công.");
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function resetWizard() {
+      latestState = await api("/api/wizard/reset", "POST");
+      attachmentsByBox.idea = [];
+      attachmentsByBox.notes = [];
+      renderAttachmentStrip("idea");
+      renderAttachmentStrip("notes");
+      switchWorkTab("create");
+      goWizardStep(1);
+      renderState(latestState);
+    }
+
+    function selectWizOpt(btn, qIdx, oIdx) {
+      const qs = (latestState.wizard && latestState.wizard.interview && latestState.wizard.interview.questions) || [];
+      const q = qs[qIdx];
+      if (!q) return;
+      const val = (q.options || [])[oIdx] || "";
+      wizardAnswers[q.question] = val;
+      const card = btn.closest(".q-card");
+      if (card) {
+        card.querySelectorAll(".opt-btn").forEach(b => b.classList.remove("selected"));
+        btn.classList.add("selected");
+        const inp = card.querySelector("input[type='text']");
+        if (inp) inp.value = val;
+      }
+    }
+
+    function updateWizInput(qIdx, val) {
+      const qs = (latestState.wizard && latestState.wizard.interview && latestState.wizard.interview.questions) || [];
+      const q = qs[qIdx];
+      if (q) wizardAnswers[q.question] = val;
+    }
+
+    function _collectStep2Extras() {
+      const selectedSuggestions = Array.from(document.querySelectorAll(".wiz-sugg-cb:checked")).map(el => el.value);
+      const userNotes = (document.getElementById("wizUserNotesInput")?.value || "").trim();
+      const atts = [...attachmentsByBox.idea, ...attachmentsByBox.notes].map(a => a.path);
+      return { selectedSuggestions, userNotes, atts };
+    }
+
     async function submitWizardInterview() {
       const idea = document.getElementById("wizIdeaInput").value.trim();
+      if (!idea) return showToast("Vui lòng nhập ý tưởng sản phẩm trước.");
       const stackHint = document.getElementById("wizStackHint").value;
       const parentDir = document.getElementById("wizParentDir").value.trim();
-      const selectedModel = document.getElementById("wizModelSelect").value;
+      const selectedModel = document.getElementById("modelSelect").value;
+      const atts = attachmentsByBox.idea.map(a => a.path);
       try {
         await api("/api/wizard/interview", "POST", {
           idea,
           stack_hint: stackHint,
           parent_dir: parentDir,
           selected_model: selectedModel,
+          attachments: atts,
         });
-        showToast("Đang phân tích ý tưởng...");
+        showToast("Đang phân tích ý tưởng & tạo câu hỏi chuyên sâu...");
         await refreshState();
       } catch (e) { showToast(e.message); }
     }
 
-    function _collectWizardStep2Extras() {
-      const selectedSuggestions = Array.from(document.querySelectorAll(".wiz-sugg-cb:checked")).map(el => el.value);
-      const userNotes = (document.getElementById("wizUserNotesInput")?.value || "").trim();
-      return { selectedSuggestions, userNotes };
-    }
-
     async function submitWizardInterviewFollowup() {
-      const { selectedSuggestions, userNotes } = _collectWizardStep2Extras();
+      const { selectedSuggestions, userNotes, atts } = _collectStep2Extras();
       try {
         await api("/api/wizard/interview/followup", "POST", {
           answers: wizardAnswers,
           selected_suggestions: selectedSuggestions,
           user_notes: userNotes,
+          attachments: atts,
         });
-        const notesEl = document.getElementById("wizUserNotesInput");
-        if (notesEl) notesEl.value = "";
-        showToast("Đang đào sâu thêm câu hỏi ở vòng tiếp theo...");
+        document.getElementById("wizUserNotesInput").value = "";
+        showToast("Đang hỏi đào sâu vòng tiếp theo...");
         await refreshState();
       } catch (e) { showToast(e.message); }
     }
@@ -1705,7 +1151,7 @@
     async function submitWizardSynthesize() {
       const idea = document.getElementById("wizIdeaInput").value.trim() || (latestState.wizard && latestState.wizard.idea) || "";
       const stack = (latestState.wizard && latestState.wizard.interview && latestState.wizard.interview.recommended_stack) || "web_react";
-      const { selectedSuggestions, userNotes } = _collectWizardStep2Extras();
+      const { selectedSuggestions, userNotes, atts } = _collectStep2Extras();
       try {
         await api("/api/wizard/synthesize", "POST", {
           idea,
@@ -1713,6 +1159,7 @@
           stack,
           selected_suggestions: selectedSuggestions,
           user_notes: userNotes,
+          attachments: atts,
         });
         showToast("Đang tổng hợp PRD & Hiến pháp dự án...");
         await refreshState();
@@ -1725,11 +1172,8 @@
       const stack = document.getElementById("wizChosenStack").value;
       const prdMarkdown = document.getElementById("wizPrdPreview").value;
       const installDeps = document.getElementById("wizInstallDeps").checked;
-      const acLines = (document.getElementById("wizAcceptanceInput")?.value || "")
-        .split(/\r?\n/)
-        .map(s => s.trim())
-        .filter(Boolean);
-      const archContract = document.getElementById("wizContractPreview")?.value || "";
+      const acLines = (document.getElementById("wizAcceptanceInput").value || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      const archContract = document.getElementById("wizContractPreview").value || "";
       try {
         await api("/api/wizard/build", "POST", {
           parent_dir: parentDir,
@@ -1747,316 +1191,357 @@
 
     async function submitWizardAutopilot() {
       const idea = document.getElementById("wizIdeaInput").value.trim();
-      const stackHint = document.getElementById("wizStackHint").value;
-      const parentDir = document.getElementById("wizParentDir").value.trim();
-      const selectedModel = document.getElementById("wizModelSelect").value;
-      const installDeps = document.getElementById("wizAutopilotInstallDeps")?.checked || false;
+      if (!idea) return showToast("Vui lòng nhập ý tưởng sản phẩm trước.");
       try {
         await api("/api/wizard/autopilot", "POST", {
           idea,
-          stack_hint: stackHint,
-          parent_dir: parentDir,
-          selected_model: selectedModel,
-          install_deps: installDeps,
+          stack_hint: document.getElementById("wizStackHint").value,
+          parent_dir: document.getElementById("wizParentDir").value.trim(),
+          selected_model: document.getElementById("modelSelect").value,
+          install_deps: document.getElementById("wizInstallDepsStep1").checked,
         });
         goWizardStep(4);
-        showToast("⚡ Đã kích hoạt 1-Chạm Autopilot từ A → Z!");
+        showToast("Đang chạy 1-Chạm Autopilot từ A→Z...");
         await refreshState();
       } catch (e) { showToast(e.message); }
-    }
-
-    async function pickQuickUpdateRepo() {
-      const res = await api("/api/pick-folder", "POST");
-      if (res.path) {
-        const cfg = structuredClone(latestState.config);
-        cfg.project.target_repo = res.path;
-        const next = await api("/api/config", "POST", cfg);
-        renderState(next);
-        showToast("Đã chọn dự án: " + res.path);
-      }
     }
 
     async function submitWizardQuickUpdate() {
       const reqText = document.getElementById("wizQuickUpdateInput").value.trim();
-      const selectedModel = document.getElementById("wizModelSelect").value;
+      if (!reqText) return showToast("Vui lòng nhập nội dung muốn sửa hoặc nâng cấp.");
+      const targetDir = document.getElementById("quickFixRepoInput").value.trim();
+      const selectedModel = document.getElementById("modelSelect").value;
+      const atts = attachmentsByBox.quickfix.map(a => a.path);
       try {
         await api("/api/wizard/quick-update", "POST", {
           request_text: reqText,
+          target_dir: targetDir,
           selected_model: selectedModel,
+          attachments: atts,
         });
-        document.getElementById("wizQuickUpdateInput").value = "";
-        goWizardStep(4);
-        showToast("✨ Đang tự động nâng cấp sản phẩm...");
+        showToast("Đang gửi Antigravity điều tra & sửa nhanh...");
         await refreshState();
       } catch (e) { showToast(e.message); }
     }
 
-    async function submitWizardFollowup() {
-      const reqText = document.getElementById("wizFollowupInput").value.trim();
-      const selectedModel = document.getElementById("wizModelSelect").value;
+    /* ===== HITL (HỎI LẠI NGƯỜI DÙNG) ===== */
+    async function submitHitlAnswers() {
+      const inputs = Array.from(document.querySelectorAll(".hitl-ans-input"));
+      const answers = {};
+      inputs.forEach(inp => {
+        answers[inp.dataset.q] = inp.value.trim();
+      });
+      if (attachmentsByBox.hitl.length) {
+        answers["Tệp / ảnh người dùng đính kèm bổ sung"] = attachmentsByBox.hitl.map(a => a.path).join(", ");
+      }
       try {
-        await api("/api/wizard/quick-update", "POST", {
-          request_text: reqText,
-          selected_model: selectedModel,
-        });
-        document.getElementById("wizFollowupInput").value = "";
-        showToast("✨ Đang cập nhật sản phẩm theo yêu cầu mới...");
+        await api("/api/interaction/answer", "POST", { answers });
+        attachmentsByBox.hitl = [];
+        renderAttachmentStrip("hitl");
+        showToast("Đã gửi thông tin cho Antigravity chạy tiếp!");
         await refreshState();
       } catch (e) { showToast(e.message); }
     }
 
-    async function launchPreview() {
+    async function submitDefaultHitlAnswers() {
+      const inputs = Array.from(document.querySelectorAll(".hitl-ans-input"));
+      const answers = {};
+      inputs.forEach(inp => {
+        answers[inp.dataset.q] = inp.value.trim() || "Sử dụng giá trị mặc định hợp lý và cho phép cấu hình sau.";
+      });
       try {
-        const res = await api("/api/preview/launch", "POST", {});
-        if (res.command) {
-          showToast("▶️ Đã mở cửa sổ chạy thử: " + res.command);
+        await api("/api/interaction/answer", "POST", { answers });
+        showToast("Đã gửi cấu hình mặc định!");
+        await refreshState();
+      } catch (e) { showToast(e.message); }
+    }
+
+    /* ===== DRAWER E: CONSTITUTION & CONTRACTS ===== */
+    function openRulesDrawer() {
+      const ins = latestState.engine_insights || {};
+      document.getElementById("drawerConstitution").value = ins.constitution_md || "";
+      document.getElementById("drawerContracts").value = ins.contracts_md || "";
+      document.getElementById("rulesDrawerBackdrop").classList.add("open");
+    }
+    function closeRulesDrawer() {
+      document.getElementById("rulesDrawerBackdrop").classList.remove("open");
+    }
+    async function saveRulesDrawer() {
+      try {
+        latestState = await api("/api/contracts", "POST", {
+          constitution_md: document.getElementById("drawerConstitution").value,
+          contracts_md: document.getElementById("drawerContracts").value,
+        });
+        closeRulesDrawer();
+        showToast("Đã lưu Hiến pháp & Hợp đồng dự án.");
+      } catch (e) { showToast(e.message); }
+    }
+
+    /* ===== RENDERING ===== */
+    function renderTraces() {
+      const box = document.getElementById("traceStreamBox");
+      const filter = document.getElementById("traceFilter").value;
+      const filtered = traceItems.filter(it => {
+        if (filter === "tools") return it.kind === "tool_call" || it.kind === "verify_result" || it.kind === "response_done";
+        if (filter === "prompts") return it.kind === "prompt_sent";
+        return true;
+      });
+      if (!filtered.length) {
+        box.innerHTML = `<div style="color:var(--muted); font-size:12.5px; text-align:center; padding:24px 0;">Chưa có tương tác nào phù hợp bộ lọc.</div>`;
+        return;
+      }
+      box.innerHTML = filtered.slice(-80).map(it => {
+        const cls = it.kind === "log" ? `kind-log-${it.level || "info"}` : `kind-${it.kind || "info"}`;
+        const tag = it.task_id ? `[${it.task_id}] ` : "";
+        return `<div class="trace-item ${cls}">
+          <div class="trace-meta">
+            <b>${esc(tag + (it.title || it.kind || "Event"))}</b>
+            <span>${esc(it.time || "")}</span>
+          </div>
+          ${it.content ? `<pre class="trace-content">${esc(it.content)}</pre>` : ""}
+        </div>`;
+      }).join("");
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function clearTraceView() {
+      traceItems = [];
+      renderTraces();
+    }
+
+    function renderState(s) {
+      latestState = s;
+      const cfg = s.config || {};
+      const repoPath = (cfg.project && cfg.project.target_repo) || "";
+      const repoName = repoPath ? repoPath.replace(/\\/g, "/").split("/").filter(Boolean).pop() : "Chưa chọn dự án";
+      document.getElementById("activeProjectLabel").textContent = repoName;
+      document.getElementById("activeProjectBtn").title = repoPath || "Chọn thư mục dự án";
+      document.getElementById("quickFixRepoInput").value = repoPath;
+
+      // Compact Metrics Pill (Token + $Cost + Duration)
+      const sum = s.summary || {};
+      const totalTok = (sum.prompt_tokens || 0) + (sum.completion_tokens || 0) + (sum.planning_prompt_tokens || 0) + (sum.planning_completion_tokens || 0);
+      const costUsd = Number(sum.cost_usd || 0).toFixed(4);
+      const totalDur = (Number(sum.duration_sec || 0)) + Number((s.worker && s.worker.elapsed_sec) || 0);
+      document.getElementById("metricsPill").textContent = `⚡ ${totalTok.toLocaleString()} tok · $${costUsd} · ${fmtDuration(totalDur)}`;
+
+      // Worker Pill & Buttons
+      const busy = s.worker && s.worker.status !== "idle";
+      const wPill = document.getElementById("workerPill");
+      wPill.textContent = busy ? (s.worker.message || s.worker.status) : "Sẵn sàng";
+      wPill.className = "pill " + (busy ? "status-busy" : "status-idle");
+      document.getElementById("btnStopSafe").disabled = !busy;
+      ["btnWizInterview", "btnWizAutopilot", "btnWizFollowupRound", "btnWizSynthesize", "btnWizBuild", "btnWizQuickUpdate"].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.disabled = busy;
+      });
+
+      // HITL Banner
+      const hitl = s.pending_interaction;
+      const banner = document.getElementById("hitlBanner");
+      if (hitl && (hitl.questions || []).length) {
+        banner.classList.add("show");
+        document.getElementById("hitlTaskBadge").textContent = hitl.task_id || "TASK";
+        document.getElementById("hitlTitle").textContent = `[${hitl.task_id}] ${hitl.title || "Cần bạn cung cấp thông tin thật"}`;
+        const qList = document.getElementById("hitlQuestionsList");
+        const sig = JSON.stringify(hitl.questions);
+        if (qList.dataset.sig !== sig) {
+          qList.dataset.sig = sig;
+          qList.innerHTML = hitl.questions.map(q => `
+            <label class="field">
+              <span style="color:#fef08a;">${esc(q)}</span>
+              <input type="text" class="hitl-ans-input" data-q="${esc(q).replace(/"/g, "&quot;")}" placeholder="Nhập giá trị thật (API key, URL, tài khoản, lựa chọn)..." />
+            </label>
+          `).join("");
+        }
+      } else {
+        banner.classList.remove("show");
+      }
+
+      // Tasks Progress Card
+      const tasks = s.tasks || [];
+      const counts = sum.counts || {};
+      const doneCnt = counts.DONE || 0;
+      const blockedCnt = counts.BLOCKED || 0;
+      const totCnt = tasks.length || sum.total_tasks || 0;
+      document.getElementById("taskProgressLabel").textContent = `${doneCnt} / ${totCnt}`;
+      document.getElementById("taskProgressFill").style.width = totCnt ? `${Math.round((doneCnt / totCnt) * 100)}%` : "0%";
+      document.getElementById("btnRetryBlocked").style.display = blockedCnt > 0 ? "inline-flex" : "none";
+
+      const tBox = document.getElementById("taskListContainer");
+      if (!tasks.length) {
+        tBox.innerHTML = `<div style="color:var(--muted); font-size:12.5px; text-align:center; padding:18px 0;">Chưa có task nào. Hãy nhập yêu cầu hoặc Prompt sửa nhanh ở cột bên trái.</div>`;
+      } else {
+        tBox.innerHTML = tasks.map(t => {
+          const st = t.status || "PENDING";
+          const stVi = st === "DONE" ? "THÀNH CÔNG" : st === "RUNNING" ? "ĐANG CHẠY" : st === "VERIFYING" ? "ĐANG KIỂM TRA" : st === "BLOCKED" ? "LỖI / TẠM DỪNG" : "ĐANG CHỜ";
+          const errHtml = t.last_error && st === "BLOCKED" ? `<div style="color:#fca5a5; font-size:11.5px; margin-top:4px;">${esc(t.last_error).slice(0, 180)}</div>` : "";
+          return `<div class="task-item ${st}">
+            <div style="min-width:0;">
+              <div style="font-weight:600; font-size:13px;">${esc(t.task_id)}: ${esc(t.title)}</div>
+              ${errHtml}
+            </div>
+            <span class="badge b-${st}">${stVi}</span>
+          </div>`;
+        }).join("");
+      }
+
+      // Wizard State
+      const w = s.wizard || {};
+      if (!document.getElementById("wizParentDir").value && w.parent_dir) {
+        document.getElementById("wizParentDir").value = w.parent_dir;
+      }
+      if (activeWorkTab === "create" && w.step && w.step !== localWizardStep) {
+        goWizardStep(w.step);
+      }
+
+      if (w.interview) {
+        document.getElementById("wizSummaryVi").textContent = w.interview.product_summary_vi || "";
+        const rNum = w.interview.round_number || w.round || 1;
+        const cScore = w.interview.clarity_score ?? 60;
+        const cLvl = w.interview.complexity_level || "standard";
+        document.getElementById("wizRoundPill").textContent = `Vòng ${rNum} · ${cLvl}`;
+        document.getElementById("wizClarityPill").textContent = `Độ rõ ràng: ${cScore}%${w.interview.ready_to_build ? " (Sẵn sàng)" : ""}`;
+
+        const prevQa = w.qa_history || {};
+        const prevKeys = Object.keys(prevQa);
+        const prevBox = document.getElementById("wizPrevQaBox");
+        if (prevKeys.length) {
+          prevBox.style.display = "block";
+          document.getElementById("wizPrevQaCount").textContent = String(prevKeys.length);
+          document.getElementById("wizPrevQaList").innerHTML = prevKeys.map(k => `<li><b>${esc(k)}</b>: ${esc(prevQa[k])}</li>`).join("");
         } else {
-          showToast("📂 Đã mở thư mục sản phẩm!");
+          prevBox.style.display = "none";
         }
-      } catch (e) { showToast(e.message); }
-    }
 
-    async function saveContractsAndMemory() {
-      try {
-        const next = await api("/api/contracts", "POST", {
-          contracts_md: document.getElementById("contractsMdBox").value,
-          handoff_md: document.getElementById("handoffMdBox").value,
-          custom_blueprint_yaml: document.getElementById("customBlueprintBox").value,
-        });
-        renderState(next);
-        showToast("Đã lưu Hợp đồng Kiến trúc, Bộ nhớ & Blueprint!");
-      } catch (e) { showToast(e.message); }
-    }
-
-    async function runRepoAudit() {
-      const cnt = Number(document.getElementById("auditCommitsCount").value || 10);
-      try {
-        await api("/api/audit-repo", "POST", { max_commits: cnt });
-        showToast("🔍 Đang chạy 0-Token Historical Replay Audit...");
-        await refreshState();
-      } catch (e) { showToast(e.message); }
-    }
-
-    async function resetWizard() {
-      const next = await api("/api/wizard/reset", "POST");
-      document.getElementById("wizProjectName").value = "";
-      document.getElementById("wizPrdPreview").dataset.loadedTitle = "";
-      if (document.getElementById("wizAcceptanceInput")) document.getElementById("wizAcceptanceInput").value = "";
-      if (document.getElementById("wizContractPreview")) document.getElementById("wizContractPreview").value = "";
-      document.getElementById("wizQuestionsList").dataset.renderedFor = "";
-      renderState(next);
-      goWizardStep(1);
-    }
-
-    async function openTargetFolder() {
-      try { await api("/api/open-folder", "POST"); }
-      catch (e) { showToast(e.message); }
-    }
-
-    async function pickRepoFolder() {
-      const res = await api("/api/pick-folder", "POST");
-      if (res.path) document.getElementById("cfgTargetRepo").value = res.path;
-    }
-
-    async function pickPrdFile() {
-      const res = await api("/api/pick-file", "POST");
-      if (res.path) {
-        document.getElementById("pickedFileLabel").textContent = res.path;
-        document.getElementById("prdInput").value = res.content || "";
-        if (res.path.toLowerCase().endsWith(".json")) {
-          document.getElementById("chkImportTasks").checked = true;
+        const qBox = document.getElementById("wizQuestionsList");
+        const sig = JSON.stringify({ r: rNum, q: w.interview.questions });
+        if (qBox.dataset.renderedFor !== sig) {
+          qBox.dataset.renderedFor = sig;
+          wizardAnswers = {};
+          qBox.innerHTML = (w.interview.questions || []).map((q, qIdx) => {
+            wizardAnswers[q.question] = q.default_answer || (q.options && q.options[0]) || "";
+            const opts = (q.options || []).map((opt, oIdx) => `<button type="button" class="opt-btn" onclick="selectWizOpt(this, ${qIdx}, ${oIdx})">${esc(opt)}</button>`).join(" ");
+            const cat = q.category ? `<span class="pill" style="font-size:11px; width:fit-content;">${esc(q.category)}</span>` : "";
+            const why = q.why_it_matters ? `<div style="font-size:12px; color:var(--muted);">${esc(q.why_it_matters)}</div>` : "";
+            return `<div class="q-card">
+              ${cat}
+              <div style="font-weight:600;">${esc(q.question)}</div>
+              ${why}
+              <div class="row">${opts}</div>
+              <input type="text" value="${esc(wizardAnswers[q.question]).replace(/"/g, "&quot;")}" oninput="updateWizInput(${qIdx}, this.value)" placeholder="Hoặc nhập câu trả lời riêng..." />
+            </div>`;
+          }).join("");
         }
-      }
-    }
 
-    async function saveConfig() {
-      const cfg = structuredClone(latestState.config);
-      cfg.project.target_repo = document.getElementById("cfgTargetRepo").value.trim();
-      cfg.project.base_branch = document.getElementById("cfgBaseBranch").value.trim() || "main";
-      cfg.project.shared_rules_file = document.getElementById("cfgSharedRules").value.trim();
-      cfg.executor.mode = document.getElementById("cfgMode").value;
-      cfg.executor.default_verify_commands = document.getElementById("cfgDefaultVerify").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-      cfg.sprint.final_verify_commands = document.getElementById("cfgFinalVerify").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-      if (document.getElementById("cfgPlanningMode")) {
-        cfg.sprint.planning_mode = document.getElementById("cfgPlanningMode").value;
-        cfg.sprint.max_parallel_tasks = Number(document.getElementById("cfgMaxParallel").value || 2);
-        cfg.guards.scope_mode = document.getElementById("cfgScopeMode").value;
-        cfg.executor.idle_timeout_seconds = Number(document.getElementById("cfgIdleTimeout").value || 120);
-        cfg.sprint.runtime_verify_commands = document.getElementById("cfgRuntimeVerify").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        const suggestions = w.interview.proactive_suggestions || [];
+        const sWrap = document.getElementById("wizSuggestionsWrap");
+        const sList = document.getElementById("wizSuggestionsList");
+        if (suggestions.length) {
+          sWrap.style.display = "block";
+          const sSig = JSON.stringify({ r: rNum, s: suggestions });
+          if (sList.dataset.renderedFor !== sSig) {
+            sList.dataset.renderedFor = sSig;
+            sList.innerHTML = suggestions.map(sg => {
+              const val = `${sg.title}${sg.benefit_vi ? " — " + sg.benefit_vi : ""}`;
+              return `<label style="display:flex; gap:8px; align-items:flex-start; cursor:pointer; font-size:13px;">
+                <input type="checkbox" class="wiz-sugg-cb" value="${esc(val).replace(/"/g, "&quot;")}" ${sg.recommended ? "checked" : ""} style="margin-top:3px;" />
+                <span><b>${esc(sg.title)}</b>${sg.recommended ? ' <span class="pill status-idle" style="font-size:10px; padding:1px 6px;">Khuyên dùng</span>' : ""}<br/><span style="color:var(--muted); font-size:12px;">${esc(sg.benefit_vi || "")}</span></span>
+              </label>`;
+            }).join("");
+          }
+        } else {
+          sWrap.style.display = "none";
+        }
+
+        const gaps = w.interview.open_gaps_vi || [];
+        const gWrap = document.getElementById("wizOpenGapsWrap");
+        if (gaps.length) {
+          gWrap.style.display = "block";
+          document.getElementById("wizOpenGapsList").innerHTML = gaps.map(g => `<li>${esc(g)}</li>`).join("");
+        } else {
+          gWrap.style.display = "none";
+        }
+
+        document.getElementById("wizProjectName").value = document.getElementById("wizProjectName").value || w.interview.suggested_project_name || "my-ai-app";
+        if (w.interview.recommended_stack) document.getElementById("wizChosenStack").value = w.interview.recommended_stack;
       }
 
-      cfg.agy.tiers = {
-        planner: { model: document.getElementById("tierPlannerModel").value.trim(), effort: document.getElementById("tierPlannerEffort").value },
-        coder_low: { model: document.getElementById("tierLowModel").value.trim(), effort: document.getElementById("tierLowEffort").value },
-        coder_medium: { model: document.getElementById("tierMedModel").value.trim(), effort: document.getElementById("tierMedEffort").value },
-        escalation: { model: document.getElementById("tierEscModel").value.trim(), effort: document.getElementById("tierEscEffort").value },
-      };
-      cfg.limits.max_retries_per_task = Number(document.getElementById("limRetries").value);
-      cfg.limits.max_tokens_per_task = Number(document.getElementById("limTokensTask").value);
-      cfg.limits.max_tool_calls_per_attempt = Number(document.getElementById("limToolCalls").value);
-      cfg.limits.max_consecutive_blocked_tasks = Number(document.getElementById("limConsecBlocked").value);
-
-      cfg.agy.auto_approve_tools = document.getElementById("chkAutoApproveTools").checked;
-      cfg.agy.dynamic_mcp_gating = document.getElementById("chkDynamicMcp").checked;
-      cfg.tools.use_rtk = document.getElementById("chkUseRtk").checked;
-      cfg.sprint.require_plan_approval = document.getElementById("chkRequireApprove").checked;
-      cfg.guards.forbid_test_assertion_deletion = document.getElementById("chkForbidDelAssert").checked;
-      cfg.guards.enforce_production_only = document.getElementById("chkEnforceProd").checked;
-
-      try {
-        const next = await api("/api/config", "POST", cfg);
-        renderState(next);
-        showToast("Đã lưu config.yaml thành công!");
-      } catch (e) { showToast("Lỗi: " + e.message); }
-    }
-
-    async function smokeAgy() {
-      try { await api("/api/smoke-agy", "POST"); await refreshState(); }
-      catch (e) { showToast(e.message); }
-    }
-
-    async function submitPlan() {
-      const prdText = document.getElementById("prdInput").value;
-      const prdPath = document.getElementById("pickedFileLabel").textContent;
-      const fromTasks = document.getElementById("chkImportTasks").checked;
-      const autoApprove = document.getElementById("chkPlanAutoApprove").checked;
-      try {
-        await api("/api/plan", "POST", { prd_text: prdText, prd_path: prdPath, from_tasks_json: fromTasks, auto_approve: autoApprove });
-        showToast("Đang lập kế hoạch...");
-        await refreshState();
-      } catch (e) { showToast(e.message); }
-    }
-
-    async function appendClarificationsAndReplan() {
-      const ans = document.getElementById("clarifyAnswers").value.trim();
-      if (!ans) return;
-      const box = document.getElementById("prdInput");
-      box.value += "\n\n## Bổ sung làm rõ từ người dùng:\n" + ans;
-      document.getElementById("clarifyAnswers").value = "";
-      await submitPlan();
-    }
-
-    async function approvePlan() {
-      try {
-        const next = await api("/api/approve", "POST");
-        renderState(next);
-        showToast("Đã phê duyệt kế hoạch!");
-      } catch (e) { showToast(e.message); }
-    }
-
-    async function runSprint(autoApprove) {
-      try {
-        await api("/api/run", "POST", { auto_approve: autoApprove });
-        await refreshState();
-      } catch (e) { showToast(e.message); }
-    }
-
-    async function resumeSprint() {
-      try {
-        await api("/api/resume", "POST");
-        await refreshState();
-      } catch (e) { showToast(e.message); }
-    }
-
-    async function stopSprint() {
-      await api("/api/stop", "POST");
-      showToast("Đã gửi yêu cầu dừng an toàn.");
-    }
-
-    async function retryTask(taskId) {
-      try {
-        const next = await api(`/api/tasks/${encodeURIComponent(taskId)}/retry`, "POST");
-        renderState(next);
-        showToast(`Đã đặt lại ${taskId} về PENDING`);
-      } catch (e) { showToast(e.message); }
-    }
-
-    async function rollbackTask(taskId) {
-      try {
-        const next = await api(`/api/tasks/${encodeURIComponent(taskId)}/rollback`, "POST");
-        renderState(next);
-        showToast(`Đã rollback ${taskId}`);
-      } catch (e) { showToast(e.message); }
-    }
-
-    let cachedAgyModels = [];
-
-    function applyModelOptionsToSelect(sel, models, defaultLabel) {
-      const prev = sel.value;
-      sel.innerHTML = `<option value="">${esc(defaultLabel)}</option>`;
-      const seen = new Set([""]);
-      for (const m of models) {
-        if (!seen.has(m.id)) {
-          seen.add(m.id);
-          const opt = document.createElement("option");
-          opt.value = m.id;
-          opt.textContent = m.label ? `${m.label} (${m.id})` : m.id;
-          sel.appendChild(opt);
+      if (w.spec) {
+        document.getElementById("wizProductTitle").textContent = w.spec.product_title || "Duyệt tính năng & Tiêu chí nghiệm thu";
+        document.getElementById("wizFeaturesList").innerHTML = (w.spec.features_vi || []).map(f => `<li>${esc(f)}</li>`).join("");
+        const prdBox = document.getElementById("wizPrdPreview");
+        if (prdBox.dataset.loaded !== w.spec.product_title) {
+          prdBox.dataset.loaded = w.spec.product_title || "";
+          prdBox.value = w.spec.prd_markdown || "";
+          document.getElementById("wizAcceptanceInput").value = (w.spec.acceptance_criteria || []).join("\n");
+          document.getElementById("wizContractPreview").value = w.spec.architecture_contract || "";
         }
       }
-      if (prev && !seen.has(prev)) {
-        const custom = document.createElement("option");
-        custom.value = prev;
-        custom.textContent = prev;
-        sel.appendChild(custom);
-      }
-      sel.value = prev;
-    }
 
-    async function loadAgyModels(notify = false) {
-      try {
-        const res = await api("/api/agy/models");
-        cachedAgyModels = res.models || [];
-        document.querySelectorAll(".agy-model-select").forEach(sel => {
-          applyModelOptionsToSelect(sel, cachedAgyModels, "Mặc định agy");
-        });
-        applyModelOptionsToSelect(
-          document.getElementById("wizModelSelect"),
-          cachedAgyModels,
-          "Theo cấu hình hiện tại (Mặc định agy)"
-        );
-        if (latestState && latestState.config && !document.getElementById("view-config").classList.contains("active")) {
-          populateConfigForm(latestState.config);
-        }
-        if (notify) showToast(`Đã tải ${cachedAgyModels.length} model từ agy`);
-      } catch (e) {
-        if (notify) showToast("Không tải được danh sách model: " + e.message);
+      if (w.done_message) {
+        document.getElementById("wizDoneBanner").textContent = w.done_message;
+      }
+
+      // Delivery guide
+      const guide = s.engine_insights && s.engine_insights.delivery_guide;
+      const gCard = document.getElementById("deliveryGuideCard");
+      if (guide && guide.run_command) {
+        gCard.style.display = "block";
+        document.getElementById("deliveryGuideBody").innerHTML =
+          `<div>• <b>Cách mở nhanh nhất:</b> Nhấp đúp file <code>CHAY_SAN_PHAM.bat</code> trong thư mục dự án hoặc bấm nút <b>▶️ Chạy thử sản phẩm</b>.</div>` +
+          `<div>• <b>Lệnh khởi chạy:</b> <code>${esc(guide.run_command)}</code>${guide.web_url ? ` → Mở trình duyệt tại <b>${esc(guide.web_url)}</b>` : ""}</div>`;
+      } else {
+        gCard.style.display = "none";
+      }
+
+      // Seed traces on initial load
+      if (!traceItems.length && ((s.traces && s.traces.length) || (s.logs && s.logs.length))) {
+        const merged = [
+          ...(s.traces || []),
+          ...(s.logs || []).map(l => ({ kind: "log", level: l.level, title: l.level.toUpperCase(), content: l.message, time: l.time })),
+        ];
+        traceItems = merged.slice(-100);
+        renderTraces();
       }
     }
 
-    async function openAgyLogin() {
+    async function refreshState() {
       try {
-        await api("/api/agy/login", "POST");
-        showToast("Đã mở cửa sổ Terminal đăng nhập agy!");
-      } catch (e) { showToast(e.message); }
+        const s = await api("/api/state");
+        renderState(s);
+      } catch (_) {}
     }
 
-    (async () => {
-      await loadAgyModels(false);
-      await refreshState();
-      if (latestState && latestState.config) populateConfigForm(latestState.config);
-
+    function connectSSE() {
       const es = new EventSource("/api/events");
       es.onmessage = (ev) => {
         try {
-          const entry = JSON.parse(ev.data);
-          if (entry.event_type === "trace" && entry.trace) {
-            appendTraceEntry(entry.trace);
-            if (["response_done", "verify_result", "user_question", "user_answer"].includes(entry.trace.kind)) {
-              scheduleRefreshState(200);
-            }
-          } else if (entry.message !== undefined) {
-            appendLogEntry(entry);
-            scheduleRefreshState(350);
+          const item = JSON.parse(ev.data);
+          if (item.event_type === "log") {
+            traceItems.push({ kind: "log", level: item.level, title: (item.level || "info").toUpperCase(), content: item.message, time: item.time });
+          } else {
+            traceItems.push(item);
           }
+          if (traceItems.length > 200) traceItems.splice(0, traceItems.length - 200);
+          renderTraces();
         } catch (_) {}
       };
-      setInterval(() => {
-        if (latestState && latestState.worker && latestState.worker.status !== "idle") {
-          refreshState();
-        }
-      }, 2000);
-    })();
+      es.onerror = () => {
+        es.close();
+        setTimeout(connectSSE, 2500);
+      };
+    }
+
+    // Boot
+    wirePasteAndDrop("ideaComposer", "wizIdeaInput", "idea");
+    wirePasteAndDrop("notesComposer", "wizUserNotesInput", "notes");
+    wirePasteAndDrop("quickFixComposer", "wizQuickUpdateInput", "quickfix");
+    wirePasteAndDrop("hitlBanner", null, "hitl");
+
+    refreshState().then(() => loadAgyModels(false));
+    connectSSE();
+    setInterval(refreshState, 2500);
   </script>
 </body>
 </html>

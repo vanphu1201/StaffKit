@@ -304,3 +304,78 @@ def test_multi_round_interviewer_proactive_suggestions_and_constitution(tmp_path
     assert "<task_spec>" in prompt
     assert "Reproduce & Probe thật" in prompt
     assert "Isolate Root Cause" in prompt
+
+
+def test_ui_attachments_dynamic_model_constitution_and_metrics(tmp_path: Path) -> None:
+    import base64
+    from starlette.testclient import TestClient
+    from engine.ui.server import create_ui_app
+
+    repo = tmp_path / "demo_repo"
+    repo.mkdir()
+    (repo / "src").mkdir()
+    (repo / "src" / "main.ts").write_text("export const x = 1;\n", encoding="utf-8")
+    cfg_path = tmp_path / "config.yaml"
+    cfg = EngineConfig(project=ProjectConfig(target_repo=str(repo)))
+    cfg_path.write_text(
+        f"project:\n  target_repo: {repo.as_posix()}\n",
+        encoding="utf-8",
+    )
+
+    app = create_ui_app(cfg_path)
+    client = TestClient(app)
+
+    # 1. Streamlined UI loads with metrics pill, dynamic model bar, paste/drop, and no Dev-mode clutter
+    html_res = client.get("/")
+    assert html_res.status_code == 200
+    assert "metricsPill" in html_res.text
+    assert "modelSelect" in html_res.text
+    assert "wizQuickUpdateInput" in html_res.text
+    assert "btnUndoQuickFix" in html_res.text
+    assert "rulesDrawerBackdrop" in html_res.text
+    assert "Chuyên gia (Dev)" not in html_res.text
+
+    # 2. Upload pasted PNG image attachment -> saved in .auto-engine/user_attachments/ & previewable & injected in PromptCompiler
+    png_1x1 = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+    up_res = client.post(
+        "/api/attachments/upload",
+        json={
+            "filename": "screenshot_bug.png",
+            "mime_type": "image/png",
+            "data_base64": "data:image/png;base64," + base64.b64encode(png_1x1).decode("ascii"),
+            "target_dir": repo.as_posix(),
+        },
+    )
+    assert up_res.status_code == 200
+    att = up_res.json()
+    assert att["is_image"] is True
+    assert Path(att["path"]).is_file()
+
+    prev_res = client.get("/api/attachments/preview", params={"path": att["path"]})
+    assert prev_res.status_code == 200
+    assert prev_res.headers["content-type"].startswith("image/png")
+
+    compiler = PromptCompiler(EngineConfig.load(cfg_path))
+    task = TaskSpec(task_id="T-01", title="Fix UI", objective="Fix button", allowed_write_files=["src/main.ts"])
+    compiled, _ = compiler.compile(task)
+    assert "<user_attachments>" in compiled
+    assert att["path"] in compiled
+    assert "read_file" in compiled
+
+    # 3. Dynamic custom model selection works for any brand-new Antigravity model ID
+    m_res = client.post("/api/agy/model", json={"model": "gemini-5-ultra-preview"})
+    assert m_res.status_code == 200
+    assert m_res.json()["config"]["agy"]["tiers"]["coder_medium"]["model"] == "gemini-5-ultra-preview"
+
+    # 4. Save constitution & contracts via drawer endpoint
+    c_res = client.post(
+        "/api/contracts",
+        json={"constitution_md": "# Hiến pháp\n- Luôn test thật.", "contracts_md": "# Contract\n- GET /health"},
+    )
+    assert c_res.status_code == 200
+    insights = c_res.json()["engine_insights"]
+    assert "Luôn test thật" in insights["constitution_md"]
+    assert "GET /health" in insights["contracts_md"]
+    assert "duration_sec" in c_res.json()["summary"]
