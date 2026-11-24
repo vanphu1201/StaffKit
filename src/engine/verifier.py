@@ -292,8 +292,37 @@ class Verifier:
         )
 
 
+def probe_http_endpoint(
+    url: str,
+    *,
+    expected_status: int = 200,
+    timeout_sec: float = 5.0,
+) -> tuple[bool, str]:
+    """0-token behavioral HTTP endpoint probe: verifies live status code and non-empty response body."""
+    import urllib.error
+    import urllib.request
+
+    cleaned = url.strip()
+    if not cleaned:
+        return False, "Empty smoke_url"
+    try:
+        with urllib.request.urlopen(cleaned, timeout=timeout_sec) as resp:
+            body = resp.read(2048).decode("utf-8", errors="replace")
+            if resp.status != expected_status:
+                return False, f"GET {cleaned} returned HTTP {resp.status} (expected {expected_status})"
+            if not body.strip():
+                return False, f"GET {cleaned} returned HTTP {resp.status} with empty body"
+            return True, f"GET {cleaned} -> HTTP {resp.status} ({len(body)} bytes)"
+    except urllib.error.HTTPError as exc:
+        if exc.code == expected_status:
+            return True, f"GET {cleaned} -> HTTP {exc.code}"
+        return False, f"GET {cleaned} -> HTTP {exc.code} (expected {expected_status})"
+    except Exception as exc:
+        return False, f"GET {cleaned} failed: {exc}"
+
+
 def run_web_runtime_smoke(repo_path: Path, *, timeout_sec: float = 16.0) -> tuple[bool, str]:
-    """0-token lightweight runtime smoke check for Web/Node apps: verify server boots & responds HTTP < 500."""
+    """0-token lightweight runtime smoke check for Web/Node & Python apps: verify server boots & responds HTTP < 500."""
     import json
     import time
     import urllib.error
@@ -301,7 +330,6 @@ def run_web_runtime_smoke(repo_path: Path, *, timeout_sec: float = 16.0) -> tupl
 
     pkg_path = repo_path / "package.json"
     if not pkg_path.is_file():
-        # Lightweight Python/CLI runtime smoke fallback when pyproject.toml exists
         pyproj = repo_path / "pyproject.toml"
         if pyproj.is_file():
             py_bin = repo_path / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
@@ -323,22 +351,26 @@ def run_web_runtime_smoke(repo_path: Path, *, timeout_sec: float = 16.0) -> tupl
     except (json.JSONDecodeError, OSError):
         return True, "Skipped runtime smoke (unreadable package.json)."
     scripts = pkg.get("scripts") if isinstance(pkg, dict) else None
-    if not isinstance(scripts, dict) or not str(scripts.get("start", "")).strip():
-        return True, "Skipped runtime smoke (no `start` script)."
+    if not isinstance(scripts, dict):
+        return True, "Skipped runtime smoke (no scripts in package.json)."
 
-    # Detect likely port (default 3001 / 3000 / 8000)
+    boot_script_name = "start" if str(scripts.get("start", "")).strip() else ("dev" if str(scripts.get("dev", "")).strip() else "")
+    if not boot_script_name:
+        return True, "Skipped runtime smoke (no `start` or `dev` script)."
+
     candidate_ports = [3001, 3000, 8000, 5173]
-    start_cmd = str(scripts["start"]).strip()
+    start_cmd = str(scripts[boot_script_name]).strip()
     m_port = re.search(r"(?:PORT=|--port\s+|:)(\d{4,5})", start_cmd)
     if m_port:
         p_num = int(m_port.group(1))
-        if p_num not in candidate_ports:
-            candidate_ports.insert(0, p_num)
+        if p_num in candidate_ports:
+            candidate_ports.remove(p_num)
+        candidate_ports.insert(0, p_num)
 
     def _probe_port(port: int) -> tuple[bool, str]:
         url = f"http://127.0.0.1:{port}/"
         try:
-            with urllib.request.urlopen(url, timeout=2.5) as resp:
+            with urllib.request.urlopen(url, timeout=2.0) as resp:
                 body = resp.read(2048).decode("utf-8", errors="replace")
                 if resp.status >= 500:
                     return False, f"GET {url} returned HTTP {resp.status}"
@@ -352,14 +384,14 @@ def run_web_runtime_smoke(repo_path: Path, *, timeout_sec: float = 16.0) -> tupl
         except Exception:
             return False, ""
 
-    # If already running locally, probe directly without spawning a duplicate process
-    for p in candidate_ports[:3]:
+    for p in candidate_ports:
         ok_live, detail_live = _probe_port(p)
         if detail_live:
             return ok_live, f"Runtime Smoke (live server): {detail_live}"
 
+    boot_cmd = "npm start" if boot_script_name == "start" else "npm run dev"
     proc = subprocess.Popen(
-        "npm start",
+        boot_cmd,
         cwd=str(repo_path),
         shell=True,
         stdout=subprocess.PIPE,
@@ -373,13 +405,17 @@ def run_web_runtime_smoke(repo_path: Path, *, timeout_sec: float = 16.0) -> tupl
         while time.monotonic() < deadline:
             if proc.poll() is not None:
                 out = (proc.stdout.read() if proc.stdout else "")[:1200]
-                return False, f"Runtime Smoke FAIL: `npm start` exited early (code {proc.returncode}):\n{out}"
-            for p in candidate_ports[:3]:
+                return False, f"Runtime Smoke FAIL: `{boot_cmd}` exited early (code {proc.returncode}):\n{out}"
+            for p in candidate_ports:
                 ok_live, detail_live = _probe_port(p)
                 if detail_live:
                     return ok_live, f"Runtime Smoke PASS: {detail_live}"
             time.sleep(0.8)
-        return True, "Runtime Smoke: server stayed alive without crashing (custom port not auto-detected)."
+        return (
+            False,
+            f"Runtime Smoke FAIL: `{boot_cmd}` did not respond on ports {candidate_ports} within {timeout_sec:.0f}s "
+            f"(pass `smoke_url` explicitly if using a custom port).",
+        )
     finally:
         if proc.poll() is None:
             if os.name == "nt":

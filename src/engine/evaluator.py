@@ -377,11 +377,9 @@ def run_plugin_micro_evals() -> PluginMicroEvalReport:
                     py_exe = f'"{sys.executable}"' if " " in sys.executable else sys.executable
                     smoke_out = fn_map["verify_and_smoke"](
                         repo_path=str(repo),
-                        commands=[
-                            f'{py_exe} -c "import app, urllib.request; assert app.VALUE == 1; '
-                            f'r = urllib.request.urlopen(\'http://127.0.0.1:{port}/health\'); assert r.status == 200"'
-                        ],
-                        run_smoke=False,
+                        commands=[f'{py_exe} -c "import app; assert app.VALUE == 1"'],
+                        smoke_url=f"http://127.0.0.1:{port}/health",
+                        expected_status=200,
                         generate_delivery_pack=False,
                     )
                 finally:
@@ -392,6 +390,7 @@ def run_plugin_micro_evals() -> PluginMicroEvalReport:
                     "ERROR" not in snap_msg
                     and "ERROR" not in undo_msg
                     and restored_ok
+                    and "HTTP Endpoint Probe: **PASS**" in smoke_out
                     and "**OVERALL: PASS**" in smoke_out
                 )
                 details = (

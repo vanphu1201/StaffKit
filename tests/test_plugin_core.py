@@ -127,3 +127,41 @@ def test_audit_historical_commits_runs_cleanly_on_self() -> None:
     report = audit_historical_commits(repo_root, limit=5)
     assert report.commits_evaluated >= 1
     assert report.avg_recall >= 0.5
+
+
+def test_verify_and_smoke_rejects_http_500_false_green(tmp_path: Path) -> None:
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class _FailHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(b"internal error")
+
+        def log_message(self, fmt: str, *args: object) -> None:
+            return
+
+    srv = HTTPServer(("127.0.0.1", 0), _FailHandler)
+    port = srv.server_address[1]
+    th = threading.Thread(target=srv.serve_forever, daemon=True)
+    th.start()
+    try:
+        mcp = mcp_server.create_mcp_server(None)
+
+        async def _probe() -> str:
+            fn = (await mcp.get_tool("verify_and_smoke")).fn
+            return fn(
+                repo_path=str(tmp_path),
+                commands=[],
+                smoke_url=f"http://127.0.0.1:{port}/api/health",
+                expected_status=200,
+                generate_delivery_pack=False,
+            )
+
+        out = asyncio.run(_probe())
+        assert "HTTP Endpoint Probe: **FAIL**" in out
+        assert "**OVERALL: FAIL**" in out
+    finally:
+        srv.shutdown()
+        srv.server_close()

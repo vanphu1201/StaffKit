@@ -17,7 +17,7 @@ from engine.bootstrapper import detect_existing_stack, generate_nontech_delivery
 from engine.git_guard import GitGuard
 from engine.indexer import extract_fast_skeleton, extract_symbol_windows, list_real_files, locate_relevant_files
 from engine.models import EngineConfig, ProjectConfig
-from engine.verifier import Verifier, run_web_runtime_smoke
+from engine.verifier import Verifier, probe_http_endpoint, run_web_runtime_smoke
 
 logging.basicConfig(
     level=logging.INFO,
@@ -282,9 +282,11 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
         repo_path: str = "",
         commands: list[str] | None = None,
         run_smoke: bool = True,
+        smoke_url: str = "",
+        expected_status: int = 200,
         generate_delivery_pack: bool = True,
     ) -> str:
-        """Run 0-token independent verification (build/typecheck/tests + live Web/Python runtime smoke + Non-Tech Delivery Pack)."""
+        """Run 0-token independent verification (build/tests + live HTTP endpoint or runtime smoke + Delivery Pack)."""
         t0 = time.monotonic()
         repo = _resolve_repo_path(repo_path, config.target_repo_path)
         det_stack, det_vc, det_fc, _ = detect_existing_stack(repo)
@@ -305,7 +307,11 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
         else:
             report.append("- Static/Test Gate: (no commands detected; pass `commands=[...]` to run specific checks)")
 
-        if all_ok and run_smoke and ((repo / "package.json").is_file() or (repo / "pyproject.toml").is_file()):
+        if all_ok and smoke_url.strip():
+            ep_ok, ep_msg = probe_http_endpoint(smoke_url.strip(), expected_status=expected_status)
+            all_ok = all_ok and ep_ok
+            report.append(f"- HTTP Endpoint Probe: **{'PASS' if ep_ok else 'FAIL'}** — {ep_msg}")
+        elif all_ok and run_smoke and ((repo / "package.json").is_file() or (repo / "pyproject.toml").is_file()):
             smoke_ok, smoke_msg = run_web_runtime_smoke(repo)
             all_ok = all_ok and smoke_ok
             report.append(f"- Runtime Smoke Probe: **{'PASS' if smoke_ok else 'FAIL'}** — {smoke_msg}")

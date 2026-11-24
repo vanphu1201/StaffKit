@@ -245,6 +245,16 @@ _VI_EN_LOCATOR_MAP: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("báo cáo", ("report", "export", "summary")),
     ("cấu hình", ("config", "settings", "env")),
     ("lỗi", ("error", "handler", "client", "validator")),
+    ("tìm kiếm", ("search", "filter", "query", "index")),
+    ("tải lên", ("upload", "file", "storage", "media")),
+    ("thanh toán", ("payment", "billing", "stripe", "checkout", "order")),
+    ("thông báo", ("notification", "toast", "alert", "message")),
+    ("biểu mẫu", ("form", "input", "modal", "dialog", "validation")),
+    ("bảng", ("table", "grid", "list", "pagination")),
+    ("trang chủ", ("home", "index", "dashboard", "landing", "app")),
+    ("điều hướng", ("nav", "navbar", "sidebar", "router", "route")),
+    ("mô hình", ("model", "models", "provider", "client", "ai")),
+    ("nhân vật", ("character", "asset", "scene", "story")),
 )
 
 
@@ -606,13 +616,8 @@ def locate_relevant_files(
 
     readonly_files: list[str] = []
     seen_ro = set(target_files) | set(test_files)
-    for rel in demoted_runners_up:
-        if rel not in seen_ro:
-            seen_ro.add(rel)
-            readonly_files.append(rel)
-            if len(readonly_files) >= max_readonly:
-                break
 
+    # Priority 1: 1-hop Forward Local Imports (direct dependencies of target_files)
     if repo_path is not None and len(readonly_files) < max_readonly:
         for rel in target_files:
             content = file_texts.get(rel)
@@ -631,7 +636,7 @@ def locate_relevant_files(
             if len(readonly_files) >= max_readonly:
                 break
 
-    # 1-hop Reverse Importers (callers/consumers of top target_files)
+    # Priority 2: 1-hop Reverse Importers (callers/consumers of top target_files)
     if repo_path is not None and target_files and len(readonly_files) < max_readonly:
         reverse_pool = dict(file_texts)
         if len(reverse_pool) < 80:
@@ -649,6 +654,14 @@ def locate_relevant_files(
                 readonly_files.append(caller)
                 if len(readonly_files) >= max_readonly:
                     break
+
+    # Priority 3: Demoted scoring runners-up
+    for rel in demoted_runners_up:
+        if len(readonly_files) >= max_readonly:
+            break
+        if rel not in seen_ro:
+            seen_ro.add(rel)
+            readonly_files.append(rel)
 
     if len(readonly_files) < max_readonly:
         for rel in sorted(guarded_paths):
