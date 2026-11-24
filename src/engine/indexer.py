@@ -976,226 +976,8 @@ def extract_symbol_windows(
     return "\n".join(emitted)
 
 
-def build_hierarchical_dir_summary(
-    real_files: set[str],
-    *,
-    priority_dirs: set[str] | None = None,
-    max_entries: int = 80,
-) -> str:
-    """Compress thousands of files across hundreds of folders into a compact summary."""
-    groups: dict[str, list[str]] = defaultdict(list)
-    for raw in real_files:
-        rel = normalize_posix_path(raw)
-        if not rel:
-            continue
-        parts = rel.split("/")
-        if len(parts) <= 1:
-            d = "."
-        else:
-            depth = min(len(parts) - 1, 3)
-            d = "/".join(parts[:depth])
-        groups[d].append(parts[-1])
-
-    norm_prio = {normalize_posix_path(d).strip("/") or "." for d in (priority_dirs or set())}
-    prio_keys = sorted(d for d in groups if d in norm_prio)
-    other_keys = sorted((d for d in groups if d not in norm_prio), key=lambda d: (-len(groups[d]), d))
-    ordered = prio_keys + other_keys
-
-    lines: list[str] = []
-    for d in ordered[:max_entries]:
-        files = sorted(groups[d])
-        samples = ", ".join(files[:3])
-        if len(files) > 3:
-            samples += f", +{len(files) - 3} more"
-        prefix = "./" if d == "." else f"{d}/"
-        lines.append(f"{prefix} ({len(files)} files: {samples})")
-
-    if len(ordered) > max_entries:
-        rem_dirs = ordered[max_entries:]
-        rem_files = sum(len(groups[d]) for d in rem_dirs)
-        lines.append(f"... (+{len(rem_dirs)} more folders, {rem_files} files)")
-    return "\n".join(lines)
-
-
 class IndexerError(RuntimeError):
-    """Raised when repository indexing or repomix invocation fails."""
-
-
-class RepoIndexer:
-    """Generates cached Tree-sitter repo skeletons via `repomix --compress` (0 LLM tokens)."""
-
-    def __init__(self, config: EngineConfig) -> None:
-        self.config = config
-        self.repo_path = config.target_repo_path
-        self.auto_dir = config.auto_engine_dir
-        self.repo_map_path = self.auto_dir / "repo_map.xml"
-        self.hash_path = self.auto_dir / "repo_map.hash"
-
-    def _run_git(self, *args: str) -> str:
-        proc = subprocess.run(
-            ["git", *args],
-            cwd=str(self.repo_path),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        if proc.returncode != 0:
-            raise IndexerError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
-        return proc.stdout
-
-    def compute_repo_state_hash(self) -> str:
-        """Hash HEAD + porcelain status (excluding .auto-engine) for smart cache invalidation."""
-        head = self._run_git("rev-parse", "HEAD").strip()
-        status_lines = [
-            line
-            for line in self._run_git("status", "--porcelain").splitlines()
-            if ".auto-engine" not in line
-        ]
-        payload = f"{head}\n" + "\n".join(status_lines)
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-    def _build_fast_repo_map(
-        self,
-        real_files: set[str],
-        state_hash: str,
-        *,
-        focus_files: list[str] | None = None,
-        priority_identifiers: list[str] | None = None,
-    ) -> Path:
-        """Build scoped XML repo map with hierarchical dir summary + fast skeletons (for mega-repos or repomix fallback)."""
-        norm_set = {normalize_posix_path(f) for f in real_files if f and f.strip()}
-        priority_dirs: set[str] = set()
-        selected: list[str] = []
-        seen: set[str] = set()
-
-        for raw in focus_files or []:
-            rel = normalize_posix_path(raw)
-            if rel in norm_set and rel not in seen:
-                seen.add(rel)
-                selected.append(rel)
-                parts = rel.split("/")
-                if len(parts) > 1:
-                    priority_dirs.add("/".join(parts[: min(len(parts) - 1, 3)]))
-
-        for rel in sorted(norm_set):
-            if len(selected) >= 80:
-                break
-            if rel not in seen and rel.rsplit("/", 1)[-1].lower() in _ROOT_MANIFEST_NAMES:
-                seen.add(rel)
-                selected.append(rel)
-
-        for rel in sorted(norm_set):
-            if len(selected) >= 80:
-                break
-            if rel in seen or _is_test_path(rel) or _is_doc_or_meta_path(rel):
-                continue
-            full_path = self.repo_path / rel
-            if full_path.is_file() and full_path.stat().st_size > 120_000:
-                continue
-            seen.add(rel)
-            selected.append(rel)
-
-        dir_summary = build_hierarchical_dir_summary(norm_set, priority_dirs=priority_dirs, max_entries=80)
-        blocks = [f"<directory_structure>\n{dir_summary}\n</directory_structure>", "<files>"]
-        for rel in selected:
-            skel = extract_fast_skeleton(
-                self.repo_path / rel,
-                max_lines=80,
-                priority_identifiers=priority_identifiers,
-            )
-            if skel:
-                blocks.append(f'<file path="{rel}">\n{skel}\n</file>')
-        blocks.append("</files>")
-
-        self.repo_map_path.write_text("<repomix>\n" + "\n".join(blocks) + "\n</repomix>\n", encoding="utf-8")
-        self.hash_path.write_text(state_hash, encoding="utf-8")
-        return self.repo_map_path
-
-    def build_repo_map(
-        self,
-        force: bool = False,
-        *,
-        focus_files: list[str] | None = None,
-        priority_identifiers: list[str] | None = None,
-    ) -> Path:
-        """Build cached Repo Skeleton Map (`repomix --compress` on <=250 files, scoped fast indexer on mega-repos)."""
-        self.auto_dir.mkdir(parents=True, exist_ok=True)
-        base_hash = self.compute_repo_state_hash()
-        focus_key = ""
-        if focus_files:
-            focus_key = ":" + hashlib.sha256("\n".join(sorted(focus_files)).encode("utf-8")).hexdigest()[:12]
-        state_hash = f"{base_hash}{focus_key}"
-
-        if (
-            not force
-            and self.repo_map_path.is_file()
-            and self.hash_path.is_file()
-            and self.hash_path.read_text(encoding="utf-8").strip() in {state_hash, base_hash}
-        ):
-            if not focus_key or self.hash_path.read_text(encoding="utf-8").strip() == state_hash:
-                return self.repo_map_path
-
-        try:
-            real_files = list_real_files(self.repo_path)
-        except IndexerError:
-            real_files = set()
-
-        if len(real_files) > 250:
-            return self._build_fast_repo_map(
-                real_files,
-                state_hash,
-                focus_files=focus_files,
-                priority_identifiers=priority_identifiers,
-            )
-
-        npx_bin = shutil.which("npx.cmd") or shutil.which("npx")
-        if not npx_bin:
-            if real_files:
-                return self._build_fast_repo_map(
-                    real_files,
-                    state_hash,
-                    focus_files=focus_files,
-                    priority_identifiers=priority_identifiers,
-                )
-            raise IndexerError("`npx` not found in PATH; Node.js is required to run repomix.")
-
-        ignore_csv = ",".join([".auto-engine/**", *self.config.tools.repomix_ignore])
-        cmd = [
-            npx_bin,
-            "-y",
-            "repomix",
-            "--compress",
-            "--style",
-            "xml",
-            "--output",
-            str(self.repo_map_path),
-            "--ignore",
-            ignore_csv,
-        ]
-        proc = subprocess.run(
-            cmd,
-            cwd=str(self.repo_path),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            shell=(os.name == "nt" and npx_bin.lower().endswith(".ps1")),
-        )
-        if proc.returncode != 0 or not self.repo_map_path.is_file():
-            if real_files:
-                return self._build_fast_repo_map(
-                    real_files,
-                    state_hash,
-                    focus_files=focus_files,
-                    priority_identifiers=priority_identifiers,
-                )
-            raise IndexerError(
-                f"repomix failed (exit {proc.returncode}): {proc.stderr.strip() or proc.stdout.strip()}"
-            )
-
-        self.hash_path.write_text(state_hash, encoding="utf-8")
-        return self.repo_map_path
+    """Raised when repository file discovery fails."""
 
 
 def list_real_files(repo_path: Path) -> set[str]:
@@ -1217,65 +999,77 @@ def list_real_files(repo_path: Path) -> set[str]:
     }
 
 
-def extract_file_skeletons(repo_map_path: Path, target_paths: list[str]) -> dict[str, str]:
-    """Parse `<file path='...'>` blocks from repomix output (supports plain-text preamble & unescaped HTML/XML)."""
-    if not repo_map_path.is_file() or not target_paths:
-        return {}
-
-    wanted = {normalize_posix_path(p) for p in target_paths}
-    text = repo_map_path.read_text(encoding="utf-8", errors="replace")
-    result: dict[str, str] = {}
-
-    for match in FILE_TAG_RE.finditer(text):
-        norm = normalize_posix_path(match.group(1))
-        if norm in wanted:
-            content = match.group(2).strip()
-            if content:
-                result[norm] = content
-    return result
+_SECRET_SCAN_RE = re.compile(
+    r"""(?:\b(?:sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})\b)"""
+)
+_CODE_EXTS = {
+    ".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+    ".go", ".rs", ".java", ".kt", ".cs", ".cpp", ".c", ".h", ".php", ".rb", ".swift", ".dart",
+}
 
 
-def compact_repo_map_for_planner(
-    repo_map_text: str,
-    max_chars: int = 50000,
-    priority_files: set[str] | None = None,
-) -> str:
-    """Keep directory structure + code skeletons while prioritizing relevant files and skipping large docs."""
-    sections: list[str] = []
-    dir_match = DIR_STRUCT_RE.search(repo_map_text)
-    if dir_match:
-        dir_body = dir_match.group(1)
-        dir_cap = min(8000, max(1000, max_chars // 4))
-        if len(dir_body) > dir_cap:
-            cut = dir_body.rfind("\n", 0, dir_cap)
-            cut = cut if cut > 0 else dir_cap
-            dir_body = dir_body[:cut] + "\n... [directory tree truncated]"
-        sections.append(f"<directory_structure>{dir_body}</directory_structure>")
+def scan_repo_tech_debt(repo_path: Path, *, max_files: int = 250) -> str:
+    """0-token static X-Ray for `/audit-and-evolve`: bloated files, TODO/mock markers, hardcoded secrets & test ratio."""
+    try:
+        all_files = sorted(list_real_files(repo_path))
+    except IndexerError:
+        ignore_dirs = {".git", ".auto-engine", "node_modules", ".venv", "__pycache__", "dist", "build"}
+        all_files = []
+        for root, dirs, files in os.walk(repo_path):
+            dirs[:] = [d for d in dirs if d not in ignore_dirs]
+            for f in files:
+                all_files.append((Path(root) / f).relative_to(repo_path).as_posix())
+        all_files.sort()
 
-    norm_priority = {normalize_posix_path(p) for p in priority_files} if priority_files else set()
-    priority_blocks: list[str] = []
-    other_blocks: list[str] = []
+    code_files = [
+        rel for rel in all_files
+        if not _is_doc_or_meta_path(rel) and Path(rel).suffix.lower() in _CODE_EXTS
+    ]
+    test_files = [rel for rel in code_files if _is_test_path(rel)]
+    src_files = [rel for rel in code_files if not _is_test_path(rel)]
 
-    for match in FILE_TAG_RE.finditer(repo_map_text):
-        rel = normalize_posix_path(match.group(1))
-        body = match.group(2).strip()
-        if rel.lower().endswith(".md") and len(body) > 4000:
-            block = f'<file path="{rel}">\n(Markdown doc omitted: {len(body)} chars)\n</file>'
-        else:
-            block = f'<file path="{rel}">\n{body}\n</file>'
-        if rel in norm_priority:
-            priority_blocks.append(block)
-        else:
-            other_blocks.append(block)
+    bloated: list[tuple[int, str]] = []
+    stub_hits: list[tuple[int, str]] = []
+    secret_hits: list[str] = []
 
-    used = sum(len(s) for s in sections)
-    for block in priority_blocks + other_blocks:
-        if used + len(block) > max_chars:
-            sections.append("... [remaining files omitted to stay within planner budget]")
-            break
-        sections.append(block)
-        used += len(block)
+    for rel in src_files[:max_files]:
+        fp = repo_path / rel
+        if not fp.is_file():
+            continue
+        try:
+            if fp.stat().st_size > 512_000:
+                bloated.append((9999, rel))
+                continue
+            text = fp.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        line_cnt = text.count("\n") + (1 if text and not text.endswith("\n") else 0)
+        if line_cnt >= 450:
+            bloated.append((line_cnt, rel))
+        markers = len(_STUB_MARKER_RE.findall(text))
+        if markers > 0:
+            stub_hits.append((markers, rel))
+        if _SECRET_SCAN_RE.search(text):
+            secret_hits.append(rel)
 
-    if not sections:
-        return repo_map_text[:max_chars]
-    return "\n\n".join(sections)
+    bloated.sort(key=lambda item: (-item[0], item[1]))
+    stub_hits.sort(key=lambda item: (-item[0], item[1]))
+
+    lines = [
+        f"- Source vs Test Files: `{len(src_files)}` source / `{len(test_files)}` test",
+    ]
+    if bloated:
+        top_b = ", ".join(f"`{rel}` ({cnt}L)" for cnt, rel in bloated[:5])
+        lines.append(f"- Bloated Files (>=450 lines): {top_b}")
+    else:
+        lines.append("- Bloated Files (>=450 lines): None")
+    if stub_hits:
+        top_s = ", ".join(f"`{rel}` ({cnt})" for cnt, rel in stub_hits[:5])
+        lines.append(f"- TODO/FIXME/Stub Markers: {top_s}")
+    else:
+        lines.append("- TODO/FIXME/Stub Markers: None")
+    if secret_hits:
+        lines.append(f"- Potential Hardcoded Secrets: {', '.join(f'`{r}`' for r in secret_hits[:5])}")
+    else:
+        lines.append("- Potential Hardcoded Secrets: None detected")
+    return "\n".join(lines)

@@ -15,7 +15,13 @@ from fastmcp import FastMCP
 
 from engine.bootstrapper import detect_existing_stack, generate_nontech_delivery_guide
 from engine.git_guard import GitGuard
-from engine.indexer import extract_fast_skeleton, extract_symbol_windows, list_real_files, locate_relevant_files
+from engine.indexer import (
+    extract_fast_skeleton,
+    extract_symbol_windows,
+    list_real_files,
+    locate_relevant_files,
+    scan_repo_tech_debt,
+)
 from engine.models import EngineConfig, ProjectConfig
 from engine.verifier import Verifier, probe_http_endpoint, run_web_runtime_smoke
 
@@ -98,8 +104,8 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
     mcp = FastMCP("auto-prompt-architect")
 
     @mcp.tool()
-    def load_project_memory(repo_path: str = "") -> str:
-        """0-token X-ray briefing: stack, verify/preview commands, constitution, contracts, lessons, handoff, global playbook & recent git log."""
+    def load_project_memory(repo_path: str = "", include_audit: bool = False) -> str:
+        """0-token X-ray briefing: stack, verify/preview commands, constitution, contracts, lessons, handoff, global playbook & optional tech-debt X-Ray."""
         t0 = time.monotonic()
         repo = _resolve_repo_path(repo_path, config.target_repo_path)
         auto_dir = repo / ".auto-engine"
@@ -129,6 +135,8 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
             f"- Path: `{repo.as_posix()}` | Stack: `{det_stack}`",
             f"- Verify: `{det_vc}` | Final Gate: `{det_fc}` | Preview: `{det_prev or '(auto)'}`",
         ]
+        if include_audit:
+            sections.append(f"\n## 0-Token Tech-Debt & Health X-Ray\n{scan_repo_tech_debt(repo)}")
         if commits:
             sections.append(f"\n## Recent Git Commits\n{commits}")
         if constitution:
@@ -298,6 +306,21 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
 
         report: list[str] = [f"# INDEPENDENT VERIFICATION (`{repo.name}`, stack=`{det_stack}`)"]
         all_ok = True
+        if (repo / ".git").exists():
+            _, untracked = guard.get_changed_files()
+            sanity_ok, gaming_hits = guard.check_diff_sanity(
+                untracked,
+                local_cfg.guards.forbid_diff_patterns,
+                forbid_assertion_deletion=local_cfg.guards.forbid_test_assertion_deletion,
+                forbid_demo_patterns=local_cfg.guards.forbid_demo_patterns,
+                enforce_production_only=local_cfg.guards.enforce_production_only,
+            )
+            if not sanity_ok:
+                all_ok = False
+                report.append("- Diff Sanity Gate (anti-mock/anti-skip): **FAIL**")
+                report.append("```\n" + "\n".join(gaming_hits[:10]) + "\n```")
+            else:
+                report.append("- Diff Sanity Gate (anti-mock/anti-skip): **PASS**")
         if cmds:
             res = verifier.run_commands(cmds)
             all_ok = all_ok and res.passed

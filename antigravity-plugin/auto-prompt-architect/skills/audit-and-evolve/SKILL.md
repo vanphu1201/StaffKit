@@ -9,7 +9,7 @@ Act as a candid **Principal Product & Systems Architect** helping a user who alr
 
 ## Phase 1: 0-Token X-Ray & Real Health Audit (NEVER Guess)
 
-1. Call `load_project_memory(repo_path)` and `verify_and_smoke(repo_path, generate_delivery_pack=False)` first to get the true state of the codebase (stack, build/test/runtime health, `constitution.md`, `contracts.md`, `lessons.md`, recent commits).
+1. Call `load_project_memory(repo_path, include_audit=True)` and `verify_and_smoke(repo_path, generate_delivery_pack=False)` first to get the true state of the codebase (stack, build/test/runtime health, 0-token Tech-Debt X-Ray of bloated files/TODOs/secrets/test-ratio, `constitution.md`, `contracts.md`, `lessons.md`, recent commits).
 2. Inspect the real core entrypoints, main user flows, error-handling paths, and data/integration layers directly.
 3. If the project is a Web App currently running (or trivially startable), inspect the live UI briefly via Antigravity IDE's `browser` subagent to catch UX friction, dead buttons, or console errors that static builds miss.
 

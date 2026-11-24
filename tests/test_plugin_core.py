@@ -165,3 +165,46 @@ def test_verify_and_smoke_rejects_http_500_false_green(tmp_path: Path) -> None:
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_verify_and_smoke_catches_diff_sanity_anti_mock_and_skip(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    (tmp_path / "app.ts").write_text("export const ok = true;\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=str(tmp_path), check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=str(tmp_path), check=True, capture_output=True)
+
+    # Introduce forbidden @ts-ignore & TODO: mock placeholder in working tree
+    (tmp_path / "app.ts").write_text(
+        "// @ts-ignore\n// TODO: mock response\nexport const ok = true;\n",
+        encoding="utf-8",
+    )
+
+    mcp = mcp_server.create_mcp_server(None)
+
+    async def _probe() -> str:
+        fn = (await mcp.get_tool("verify_and_smoke")).fn
+        return fn(repo_path=str(tmp_path), commands=[], run_smoke=False, generate_delivery_pack=False)
+
+    out = asyncio.run(_probe())
+    assert "Diff Sanity Gate (anti-mock/anti-skip): **FAIL**" in out
+    assert "**OVERALL: FAIL**" in out
+
+
+def test_load_project_memory_include_audit_tech_debt_xray(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    big_code = "\n".join(f"x_{i} = {i}" for i in range(470)) + "\n# TODO: refactor later\n"
+    (tmp_path / "bloated.py").write_text(big_code, encoding="utf-8")
+    (tmp_path / "test_bloated.py").write_text("def test_ok(): assert True\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=str(tmp_path), check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=str(tmp_path), check=True, capture_output=True)
+
+    mcp = mcp_server.create_mcp_server(None)
+
+    async def _probe() -> str:
+        fn = (await mcp.get_tool("load_project_memory")).fn
+        return fn(repo_path=str(tmp_path), include_audit=True)
+
+    out = asyncio.run(_probe())
+    assert "0-Token Tech-Debt & Health X-Ray" in out
+    assert "bloated.py" in out
+    assert "TODO/FIXME/Stub Markers" in out

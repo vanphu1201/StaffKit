@@ -111,6 +111,11 @@ def audit_historical_commits(
         "package.json", "package-lock.json", "pyproject.toml",
         "uv.lock", "tsconfig.json", "requirements.txt",
     }
+    boilerplate_commit_re = re.compile(
+        r"^(?:chore:\s*(?:snapshot|auto-prompt-architect safety snapshot)|wip\b|"
+        r"feat\(auto-engine\):\s*\[T-\d+\]\s*Yêu cầu nâng cấp)",
+        re.IGNORECASE,
+    )
     rows: list[CommitAuditRow] = []
     for raw_rec in log_proc.stdout.split("\x1e"):
         if len(rows) >= limit:
@@ -123,7 +128,7 @@ def audit_historical_commits(
         subject = parts[1].strip() if len(parts) > 1 else ""
         body = parts[2].strip() if len(parts) > 2 else ""
         commit_msg = f"{subject}\n\n{body}".strip() if body else subject
-        if len(commit_msg) < 20:
+        if len(commit_msg) < 20 or boilerplate_commit_re.search(subject):
             continue
 
         diff_proc = subprocess.run(
