@@ -340,26 +340,44 @@ class InterviewQuestion(BaseModel):
 
     id: str
     question: str
+    category: str = ""
+    why_it_matters: str = ""
     options: list[str] = Field(default_factory=list)
     default_answer: str = ""
 
 
+class ProactiveSuggestion(BaseModel):
+    """A proactive value-add feature or UX suggestion proposed during discovery."""
+
+    id: str
+    title: str
+    benefit_vi: str = ""
+    recommended: bool = False
+
+
 class InterviewOutput(BaseModel):
-    """Structured output of Layer 0A ProductInterviewer."""
+    """Structured output of Layer 0A ProductInterviewer (supports adaptive multi-round deep-dive)."""
 
     recommended_stack: str = "generic"
     suggested_project_name: str = "my-ai-app"
     product_summary_vi: str = ""
+    complexity_level: Literal["simple", "standard", "complex"] = "standard"
+    round_number: int = 1
+    clarity_score: int = Field(default=60, ge=0, le=100)
+    ready_to_build: bool = False
+    open_gaps_vi: list[str] = Field(default_factory=list)
     questions: list[InterviewQuestion] = Field(default_factory=list)
+    proactive_suggestions: list[ProactiveSuggestion] = Field(default_factory=list)
 
 
 class ProductSpec(BaseModel):
-    """Plain-Vietnamese feature list plus synthesized technical PRD, architecture contract, and dynamic stack rules."""
+    """Plain-Vietnamese feature list plus synthesized technical PRD, constitution, contract, and dynamic stack rules."""
 
     product_title: str
     features_vi: list[str] = Field(default_factory=list)
     acceptance_criteria: list[str] = Field(default_factory=list)
     prd_markdown: str
+    project_constitution: str = ""
     architecture_contract: str = ""
     verify_commands: list[str] = Field(default_factory=list)
     runtime_verify_commands: list[str] = Field(default_factory=list)

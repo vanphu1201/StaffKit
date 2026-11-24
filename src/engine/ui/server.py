@@ -34,6 +34,7 @@ from engine.git_guard import GitGuard
 from engine.indexer import RepoIndexer
 from engine.interviewer import (
     ProductInterviewer,
+    persist_project_constitution,
     persist_project_contracts,
     save_custom_blueprint_if_needed,
 )
@@ -143,6 +144,10 @@ class DesktopAppController:
         self.wizard_stack_hint: str = "auto"
         self.wizard_parent_dir: str = str(Path.home() / "AutoProjects")
         self.wizard_interview: dict[str, Any] | None = None
+        self.wizard_qa_history: dict[str, str] = {}
+        self.wizard_selected_suggestions: list[str] = []
+        self.wizard_user_notes: str = ""
+        self.wizard_round: int = 1
         self.wizard_spec: dict[str, Any] | None = None
         self.wizard_preview_cmd: str = ""
         self.wizard_done_message: str = ""
@@ -350,6 +355,10 @@ class DesktopAppController:
                 "stack_hint": self.wizard_stack_hint,
                 "parent_dir": self.wizard_parent_dir,
                 "interview": self.wizard_interview,
+                "qa_history": dict(self.wizard_qa_history),
+                "selected_suggestions": list(self.wizard_selected_suggestions),
+                "user_notes": self.wizard_user_notes,
+                "round": self.wizard_round,
                 "spec": self.wizard_spec,
                 "preview_cmd": preview_cmd,
                 "done_message": self.wizard_done_message,
@@ -594,6 +603,10 @@ class DesktopAppController:
             self.wizard_step = 1
             self.wizard_idea = ""
             self.wizard_interview = None
+            self.wizard_qa_history = {}
+            self.wizard_selected_suggestions = []
+            self.wizard_user_notes = ""
+            self.wizard_round = 1
             self.wizard_spec = None
             self.wizard_preview_cmd = ""
             self.wizard_done_message = ""
@@ -619,6 +632,10 @@ class DesktopAppController:
                 if parent_dir.strip():
                     self.wizard_parent_dir = parent_dir.strip()
                 self.wizard_interview = None
+                self.wizard_qa_history = {}
+                self.wizard_selected_suggestions = []
+                self.wizard_user_notes = ""
+                self.wizard_round = 1
                 self.wizard_spec = None
                 self.wizard_done_message = ""
 
@@ -628,30 +645,126 @@ class DesktopAppController:
                 stop_event=self.stop_event,
                 on_trace=self.emit_trace,
             )
-            out = interviewer.generate_interview(idea, stack_hint=stack_hint)  # type: ignore[arg-type]
+            out = interviewer.generate_interview(idea, stack_hint=stack_hint, round_number=1)  # type: ignore[arg-type]
             with self._lock:
                 self.wizard_interview = out.model_dump()
+                self.wizard_round = out.round_number
                 self.wizard_step = 2
-            self.emit_log("success", f"Đã phân tích xong ý tưởng: {out.product_summary_vi}")
+            self.emit_log(
+                "success",
+                f"Đã phân tích Vòng 1 ({out.complexity_level}, rõ ràng {out.clarity_score}%): {out.product_summary_vi}",
+            )
 
-        return self._start_worker("interviewing", "Đang phân tích ý tưởng & tạo câu hỏi...", _job)
+        return self._start_worker("interviewing", "Đang phân tích độ phức tạp & tạo câu hỏi chuyên sâu...", _job)
 
-    def start_wizard_synthesize(self, idea: str, answers: dict[str, str], stack: str) -> bool:
+    def start_wizard_interview_followup(
+        self,
+        *,
+        answers: dict[str, str],
+        selected_suggestions: list[str] | None = None,
+        user_notes: str = "",
+    ) -> bool:
+        """Run an additional deep-dive interview round until the user feels requirements are crystal clear."""
         def _job() -> None:
             cfg = self.load_config()
+            with self._lock:
+                for k, v in (answers or {}).items():
+                    if str(k).strip() and str(v).strip():
+                        self.wizard_qa_history[str(k).strip()] = str(v).strip()
+                merged_sugg = list(
+                    dict.fromkeys(
+                        self.wizard_selected_suggestions
+                        + [str(s).strip() for s in (selected_suggestions or []) if str(s).strip()]
+                    )
+                )
+                self.wizard_selected_suggestions = merged_sugg
+                if user_notes.strip():
+                    self.wizard_user_notes = (
+                        f"{self.wizard_user_notes}\n{user_notes.strip()}".strip()
+                        if self.wizard_user_notes
+                        else user_notes.strip()
+                    )
+                next_round = self.wizard_round + 1
+                idea = self.wizard_idea
+                stack_hint = self.wizard_stack_hint
+                qa_snapshot = dict(self.wizard_qa_history)
+                notes_snapshot = self.wizard_user_notes
+
             interviewer = ProductInterviewer(
                 cfg,
                 on_event=self.emit_log,
                 stop_event=self.stop_event,
                 on_trace=self.emit_trace,
             )
-            spec = interviewer.synthesize_spec(idea, answers, stack)
+            out = interviewer.generate_interview(
+                idea,
+                stack_hint=stack_hint,  # type: ignore[arg-type]
+                previous_qa=qa_snapshot,
+                selected_suggestions=merged_sugg,
+                user_notes=notes_snapshot,
+                round_number=next_round,
+            )
+            with self._lock:
+                self.wizard_interview = out.model_dump()
+                self.wizard_round = next_round
+                self.wizard_step = 2
+            self.emit_log(
+                "success",
+                f"Đã hoàn tất Vòng {next_round} (độ rõ ràng {out.clarity_score}%): {len(out.questions)} câu hỏi đào sâu mới.",
+            )
+
+        return self._start_worker("interviewing", "Đang phân tích câu trả lời & hỏi sâu thêm...", _job)
+
+    def start_wizard_synthesize(
+        self,
+        idea: str,
+        answers: dict[str, str],
+        stack: str,
+        *,
+        selected_suggestions: list[str] | None = None,
+        user_notes: str = "",
+    ) -> bool:
+        def _job() -> None:
+            cfg = self.load_config()
+            with self._lock:
+                merged_qa = dict(self.wizard_qa_history)
+                for k, v in (answers or {}).items():
+                    if str(k).strip() and str(v).strip():
+                        merged_qa[str(k).strip()] = str(v).strip()
+                self.wizard_qa_history = merged_qa
+                merged_sugg = list(
+                    dict.fromkeys(
+                        self.wizard_selected_suggestions
+                        + [str(s).strip() for s in (selected_suggestions or []) if str(s).strip()]
+                    )
+                )
+                self.wizard_selected_suggestions = merged_sugg
+                combined_notes = self.wizard_user_notes
+                if user_notes.strip():
+                    combined_notes = (
+                        f"{combined_notes}\n{user_notes.strip()}".strip() if combined_notes else user_notes.strip()
+                    )
+                    self.wizard_user_notes = combined_notes
+
+            interviewer = ProductInterviewer(
+                cfg,
+                on_event=self.emit_log,
+                stop_event=self.stop_event,
+                on_trace=self.emit_trace,
+            )
+            spec = interviewer.synthesize_spec(
+                idea,
+                merged_qa,
+                stack,
+                selected_suggestions=merged_sugg,
+                user_notes=combined_notes,
+            )
             with self._lock:
                 self.wizard_spec = spec.model_dump()
                 self.wizard_step = 3
-            self.emit_log("success", f"Đã tạo bản thiết kế tính năng: {spec.product_title}")
+            self.emit_log("success", f"Đã tạo bản thiết kế tính năng & Hiến pháp dự án: {spec.product_title}")
 
-        return self._start_worker("synthesizing", "Đang tổng hợp tính năng sản phẩm...", _job)
+        return self._start_worker("synthesizing", "Đang tổng hợp tính năng, Hiến pháp dự án & PRD...", _job)
 
     def _execute_build_pipeline(
         self,
@@ -683,6 +796,7 @@ class DesktopAppController:
                 spec_obj = ProductSpec.model_validate(self.wizard_spec)
                 save_custom_blueprint_if_needed(target_dir, spec_obj, stack=stack)
                 persist_project_contracts(target_dir, spec_obj)
+                persist_project_constitution(target_dir, spec_obj)
             except Exception:
                 pass
         elif architecture_contract.strip():
@@ -1212,12 +1326,29 @@ def create_ui_app(config_path: Path) -> Starlette:
             return JSONResponse({"error": "Đang có tác vụ nền khác chạy."}, status_code=409)
         return JSONResponse({"started": True})
 
+    async def api_wizard_interview_followup(request: Request) -> JSONResponse:
+        body = await request.json()
+        raw_sugg = body.get("selected_suggestions")
+        sugg_list = [str(x).strip() for x in raw_sugg if str(x).strip()] if isinstance(raw_sugg, list) else []
+        ok = controller.start_wizard_interview_followup(
+            answers=dict(body.get("answers") or {}),
+            selected_suggestions=sugg_list,
+            user_notes=str(body.get("user_notes", "")),
+        )
+        if not ok:
+            return JSONResponse({"error": "Đang có tác vụ nền khác chạy."}, status_code=409)
+        return JSONResponse({"started": True})
+
     async def api_wizard_synthesize(request: Request) -> JSONResponse:
         body = await request.json()
+        raw_sugg = body.get("selected_suggestions")
+        sugg_list = [str(x).strip() for x in raw_sugg if str(x).strip()] if isinstance(raw_sugg, list) else []
         ok = controller.start_wizard_synthesize(
             idea=str(body.get("idea", "")),
             answers=dict(body.get("answers") or {}),
             stack=str(body.get("stack", "web_react")),
+            selected_suggestions=sugg_list,
+            user_notes=str(body.get("user_notes", "")),
         )
         if not ok:
             return JSONResponse({"error": "Đang có tác vụ nền khác chạy."}, status_code=409)
@@ -1359,6 +1490,7 @@ def create_ui_app(config_path: Path) -> Starlette:
         Route("/api/tasks/{task_id}/rollback", api_rollback, methods=["POST"]),
         Route("/api/tasks/{task_id}/retry", api_retry, methods=["POST"]),
         Route("/api/wizard/interview", api_wizard_interview, methods=["POST"]),
+        Route("/api/wizard/interview/followup", api_wizard_interview_followup, methods=["POST"]),
         Route("/api/wizard/synthesize", api_wizard_synthesize, methods=["POST"]),
         Route("/api/wizard/build", api_wizard_build, methods=["POST"]),
         Route("/api/wizard/autopilot", api_wizard_autopilot, methods=["POST"]),

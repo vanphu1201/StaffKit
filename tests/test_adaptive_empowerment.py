@@ -164,3 +164,143 @@ def test_smart_watchdog_grants_grace_on_progress_and_aborts_stuck_loop(tmp_path:
     with patch("subprocess.Popen", return_value=_FakeProc(prod_events)):
         res_ok = executor.execute("prompt", task, "m", "low")
     assert res_ok.success, f"Expected productive run to get grace extension, got: {res_ok.error_message}"
+
+
+def test_multi_round_interviewer_proactive_suggestions_and_constitution(tmp_path: Path) -> None:
+    from engine.interviewer import ProductInterviewer, persist_project_constitution
+    from engine.models import InterviewOutput, InterviewQuestion, ProactiveSuggestion, ProductSpec
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "src").mkdir()
+    (repo / "src" / "app.ts").write_text("export const ok = true;\n", encoding="utf-8")
+
+    cfg = EngineConfig(project=ProjectConfig(target_repo=str(repo)))
+    prompts_seen: list[str] = []
+
+    def _fake_llm(prompt: str, _schema: Path, _effort: str) -> str:
+        prompts_seen.append(prompt)
+        if "VÒNG HỎI ĐÀO SÂU THỨ 2" in prompt:
+            out2 = InterviewOutput(
+                recommended_stack="fullstack_web",
+                suggested_project_name="studio-pro",
+                product_summary_vi="Studio dựng video AI chuyên sâu",
+                complexity_level="complex",
+                round_number=2,
+                clarity_score=92,
+                ready_to_build=True,
+                open_gaps_vi=["Xác nhận định dạng xuất âm thanh cuối cùng"],
+                questions=[
+                    InterviewQuestion(
+                        id="q8",
+                        category="Xử lý lỗi",
+                        why_it_matters="Tránh mất dữ liệu khi render lâu",
+                        question="Khi render video bị lỗi giữa chừng thì xử lý ra sao?",
+                        options=["Tự thử lại 2 lần", "Lưu checkpoint để chạy tiếp"],
+                        default_answer="Lưu checkpoint để chạy tiếp",
+                    )
+                ],
+                proactive_suggestions=[
+                    ProactiveSuggestion(
+                        id="s3",
+                        title="Tự động kiểm tra sức khỏe FFmpeg & API",
+                        benefit_vi="Báo lỗi rõ ràng ngay từ đầu thay vì treo giữa chừng",
+                        recommended=True,
+                    )
+                ],
+            )
+            return out2.model_dump_json()
+        if "ProductSpec" in prompt:
+            spec = ProductSpec(
+                product_title="Studio Video AI Pro",
+                features_vi=["Tạo kịch bản", "Render MP4 thật", "Health check kết nối"],
+                acceptance_criteria=["AC-1: Render MP4 thật thành công"],
+                project_constitution="# Constitution\n- Không bao giờ dùng mock data.\n- Mọi API ngoài phải có health check & timeout rõ ràng.",
+                architecture_contract="## Contract\n- POST /api/render -> { jobId: string }",
+                prd_markdown="# PRD\nChi tiết sản phẩm thật.",
+            )
+            return spec.model_dump_json()
+
+        # Round 1: complex idea returns 8 questions (> old hard cap of 5!) + proactive suggestions
+        out1 = InterviewOutput(
+            recommended_stack="fullstack_web",
+            suggested_project_name="studio-pro",
+            product_summary_vi="Hệ thống dựng video tự động đa bước",
+            complexity_level="complex",
+            round_number=1,
+            clarity_score=65,
+            ready_to_build=False,
+            open_gaps_vi=["Cơ chế xử lý lỗi khi API ngoài mất kết nối"],
+            questions=[
+                InterviewQuestion(
+                    id=f"q{i}",
+                    category="Luồng chính",
+                    why_it_matters="Chốt nghiệp vụ",
+                    question=f"Câu hỏi chuyên sâu số {i}?",
+                    options=["A", "B"],
+                    default_answer="A",
+                )
+                for i in range(1, 9)
+            ],
+            proactive_suggestions=[
+                ProactiveSuggestion(
+                    id="s1",
+                    title="Auto-save tiến độ dự án",
+                    benefit_vi="Không mất dữ liệu khi đóng trình duyệt",
+                    recommended=True,
+                ),
+                ProactiveSuggestion(
+                    id="s2",
+                    title="Chế độ xem trước nhanh 480p",
+                    benefit_vi="Kiểm tra kịch bản nhanh gấp 5 lần trước khi xuất Full HD",
+                    recommended=False,
+                ),
+            ],
+        )
+        return out1.model_dump_json()
+
+    interviewer = ProductInterviewer(cfg, llm_caller=_fake_llm)
+    r1 = interviewer.generate_interview("Làm hệ thống studio dựng video AI đa bước tích hợp TTS và FFmpeg", round_number=1)
+    assert r1.complexity_level == "complex"
+    assert len(r1.questions) == 8  # No longer artificially capped at 5!
+    assert len(r1.proactive_suggestions) == 2
+    assert r1.clarity_score == 65
+
+    r2 = interviewer.generate_interview(
+        "Làm hệ thống studio dựng video AI đa bước tích hợp TTS và FFmpeg",
+        previous_qa={"Câu hỏi chuyên sâu số 1?": "A"},
+        selected_suggestions=["Auto-save tiến độ dự án"],
+        user_notes="Cần kết nối webchat2api ở cổng 17841",
+        round_number=2,
+    )
+    assert r2.round_number == 2
+    assert r2.clarity_score == 92 and r2.ready_to_build is True
+    assert "Auto-save tiến độ dự án" in prompts_seen[-1]
+    assert "17841" in prompts_seen[-1]
+
+    spec = interviewer.synthesize_spec(
+        "Làm hệ thống studio dựng video AI",
+        {"Câu hỏi chuyên sâu số 1?": "A"},
+        "fullstack_web",
+        selected_suggestions=["Auto-save tiến độ dự án"],
+        user_notes="Cần kết nối webchat2api ở cổng 17841",
+    )
+    assert "Không bao giờ dùng mock data" in spec.project_constitution
+    const_path = persist_project_constitution(repo, spec)
+    assert const_path is not None and const_path.is_file()
+
+    # Verify PromptCompiler injects <project_constitution>, <task_spec>, and Systematic Debugging protocol
+    compiler = PromptCompiler(cfg)
+    fix_task = TaskSpec(
+        task_id="T-01",
+        title="Sửa lỗi kết nối API",
+        objective="Sửa lỗi 502 trên cổng 17841",
+        allowed_write_files=["src/app.ts"],
+        execution_profile="investigate_fix",
+    )
+    prompt, _tok = compiler.compile(fix_task)
+    assert "<project_constitution>" in prompt
+    assert "Không bao giờ dùng mock data" in prompt
+    assert "<task_spec>" in prompt
+    assert "Reproduce & Probe thật" in prompt
+    assert "Isolate Root Cause" in prompt

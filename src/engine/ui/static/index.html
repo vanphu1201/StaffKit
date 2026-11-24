@@ -468,12 +468,43 @@
 
       <!-- STEP 2 -->
       <div id="wizStep2" class="card" style="display:none;">
-        <h3>Hệ thống cần làm rõ vài điểm để không làm sai ý bạn</h3>
-        <p id="wizSummaryVi" style="color:#93c5fd; margin-top:0;"></p>
+        <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <h3 style="margin:0;">Phỏng vấn chuyên sâu &amp; Gợi ý nâng tầm sản phẩm</h3>
+          <div class="row" style="gap:6px;">
+            <span class="pill" id="wizRoundPill">Vòng 1</span>
+            <span class="pill" id="wizClarityPill" style="border-color:rgba(34,197,94,.45); color:#86efac;">Độ rõ ràng: 60%</span>
+          </div>
+        </div>
+        <p id="wizSummaryVi" style="color:#93c5fd; margin-top:4px;"></p>
+
+        <details id="wizPrevQaBox" style="display:none; margin-bottom:12px;">
+          <summary style="cursor:pointer; color:#94a3b8; font-size:12px;">📋 Xem lại các ý đã chốt ở các vòng trước (<span id="wizPrevQaCount">0</span> mục)</summary>
+          <ul id="wizPrevQaList" style="margin:8px 0 0 18px; color:var(--muted); font-size:12px; line-height:1.6;"></ul>
+        </details>
+
         <div id="wizQuestionsList" style="display:flex; flex-direction:column; gap:12px;"></div>
-        <div class="row" style="justify-content:space-between; margin-top:16px;">
+
+        <div id="wizSuggestionsWrap" style="display:none; margin-top:16px; padding:12px; border:1px solid rgba(56,189,248,.35); border-radius:10px; background:rgba(14,165,233,.06);">
+          <div style="font-weight:700; color:#7dd3fc; margin-bottom:8px;">✨ Gợi ý nâng tầm sản phẩm (tick chọn thêm những ý bạn thích):</div>
+          <div id="wizSuggestionsList" style="display:flex; flex-direction:column; gap:8px;"></div>
+        </div>
+
+        <div id="wizOpenGapsWrap" style="display:none; margin-top:12px; padding:10px 12px; border:1px dashed rgba(250,204,21,.35); border-radius:8px;">
+          <div style="font-size:12px; font-weight:600; color:#fde047; margin-bottom:4px;">💡 Những điểm có thể đào sâu thêm nếu bạn bấm "Hỏi sâu thêm":</div>
+          <ul id="wizOpenGapsList" style="margin:0 0 0 18px; color:var(--muted); font-size:12px; line-height:1.5;"></ul>
+        </div>
+
+        <label class="field" style="margin-top:14px;">
+          <span>✍️ Ghi chú / Mong muốn bổ sung tự do của bạn (tùy chọn)</span>
+          <textarea id="wizUserNotesInput" rows="2" style="font-family:inherit;" placeholder="VD: Tôi muốn thêm nút xuất PDF, hỗ trợ tiếng Việt có dấu, hoặc kết nối với API nội bộ ở cổng 17841..."></textarea>
+        </label>
+
+        <div class="row" style="justify-content:space-between; margin-top:16px; gap:10px; flex-wrap:wrap;">
           <button class="btn" onclick="resetWizard()">← Quay lại sửa ý tưởng</button>
-          <button class="btn primary" id="btnWizSynthesize" onclick="submitWizardSynthesize()">Tiếp tục: Tạo danh sách tính năng →</button>
+          <div class="row" style="gap:10px;">
+            <button class="btn" id="btnWizFollowupRound" style="border-color:rgba(96,165,250,.5); color:#93c5fd;" onclick="submitWizardInterviewFollowup()">🔍 Hỏi sâu thêm (Vòng tiếp theo)</button>
+            <button class="btn success" id="btnWizSynthesize" onclick="submitWizardSynthesize()">✅ Đã đủ ý — Tạo PRD &amp; Hiến pháp dự án →</button>
+          </div>
         </div>
       </div>
 
@@ -1177,7 +1208,7 @@
       const insights = s.engine_insights || {};
       const det = insights.detected || {};
       const busy = s.worker.status !== "idle";
-      ["btnWizInterview", "btnWizSynthesize", "btnWizBuild", "btnWizAutopilot", "btnWizQuickUpdate", "btnWizFollowup"].forEach(id => {
+      ["btnWizInterview", "btnWizFollowupRound", "btnWizSynthesize", "btnWizBuild", "btnWizAutopilot", "btnWizQuickUpdate", "btnWizFollowup"].forEach(id => {
         const b = document.getElementById(id);
         if (b) b.disabled = busy;
       });
@@ -1201,22 +1232,87 @@
 
       if (w.interview) {
         document.getElementById("wizSummaryVi").textContent = w.interview.product_summary_vi || "";
+        const roundPill = document.getElementById("wizRoundPill");
+        const clarityPill = document.getElementById("wizClarityPill");
+        const rNum = w.interview.round_number || w.round || 1;
+        const cScore = (w.interview.clarity_score !== undefined && w.interview.clarity_score !== null) ? w.interview.clarity_score : 60;
+        const cLvl = w.interview.complexity_level || "standard";
+        if (roundPill) roundPill.textContent = `Vòng ${rNum} · Mức độ: ${cLvl}`;
+        if (clarityPill) {
+          clarityPill.textContent = `Độ rõ ràng: ${cScore}%${w.interview.ready_to_build ? " (Sẵn sàng)" : ""}`;
+        }
+
+        const prevQa = w.qa_history || {};
+        const prevKeys = Object.keys(prevQa);
+        const prevBox = document.getElementById("wizPrevQaBox");
+        if (prevBox) {
+          if (prevKeys.length > 0) {
+            prevBox.style.display = "block";
+            document.getElementById("wizPrevQaCount").textContent = String(prevKeys.length);
+            document.getElementById("wizPrevQaList").innerHTML = prevKeys
+              .map(k => `<li><b>${esc(k)}</b>: ${esc(prevQa[k])}</li>`)
+              .join("");
+          } else {
+            prevBox.style.display = "none";
+          }
+        }
+
         const qBox = document.getElementById("wizQuestionsList");
-        if (qBox.dataset.renderedFor !== JSON.stringify(w.interview.questions)) {
-          qBox.dataset.renderedFor = JSON.stringify(w.interview.questions);
+        const renderSig = JSON.stringify({ r: rNum, q: w.interview.questions });
+        if (qBox.dataset.renderedFor !== renderSig) {
+          qBox.dataset.renderedFor = renderSig;
           wizardAnswers = {};
           qBox.innerHTML = (w.interview.questions || []).map((q, qIdx) => {
             wizardAnswers[q.question] = q.default_answer || (q.options && q.options[0]) || "";
             const opts = (q.options || []).map((opt, oIdx) =>
               `<button type="button" class="opt-btn" onclick="selectWizOpt(this, ${qIdx}, ${oIdx})">${esc(opt)}</button>`
             ).join(" ");
+            const catHtml = q.category ? `<span class="pill" style="font-size:11px; margin-bottom:4px; display:inline-block;">${esc(q.category)}</span>` : "";
+            const whyHtml = q.why_it_matters ? `<div style="font-size:12px; color:var(--muted); margin-bottom:6px;">${esc(q.why_it_matters)}</div>` : "";
             return `<div class="q-card">
+              ${catHtml}
               <div style="font-weight:600;">${esc(q.question)}</div>
+              ${whyHtml}
               <div class="row">${opts}</div>
               <input type="text" value="${esc(wizardAnswers[q.question]).replace(/"/g, "&quot;")}" oninput="updateWizInput(${qIdx}, this.value)" placeholder="Hoặc nhập câu trả lời riêng của bạn..." />
             </div>`;
           }).join("");
         }
+
+        const suggWrap = document.getElementById("wizSuggestionsWrap");
+        const suggList = document.getElementById("wizSuggestionsList");
+        const suggestions = w.interview.proactive_suggestions || [];
+        if (suggWrap && suggList) {
+          const suggSig = JSON.stringify({ r: rNum, s: suggestions });
+          if (suggestions.length > 0) {
+            suggWrap.style.display = "block";
+            if (suggList.dataset.renderedFor !== suggSig) {
+              suggList.dataset.renderedFor = suggSig;
+              suggList.innerHTML = suggestions.map((sg, sIdx) => {
+                const labelVal = `${sg.title}${sg.benefit_vi ? " — " + sg.benefit_vi : ""}`;
+                return `<label style="display:flex; gap:8px; align-items:flex-start; cursor:pointer; font-size:13px;">
+                  <input type="checkbox" class="wiz-sugg-cb" value="${esc(labelVal).replace(/"/g, "&quot;")}" ${sg.recommended ? "checked" : ""} style="margin-top:3px;" />
+                  <span><b>${esc(sg.title)}</b>${sg.recommended ? ' <span class="pill" style="font-size:10px; color:#86efac;">Khuyên dùng</span>' : ""}<br/><span style="color:var(--muted); font-size:12px;">${esc(sg.benefit_vi || "")}</span></span>
+                </label>`;
+              }).join("");
+            }
+          } else {
+            suggWrap.style.display = "none";
+          }
+        }
+
+        const gapsWrap = document.getElementById("wizOpenGapsWrap");
+        const gapsList = document.getElementById("wizOpenGapsList");
+        const gaps = w.interview.open_gaps_vi || [];
+        if (gapsWrap && gapsList) {
+          if (gaps.length > 0) {
+            gapsWrap.style.display = "block";
+            gapsList.innerHTML = gaps.map(g => `<li>${esc(g)}</li>`).join("");
+          } else {
+            gapsWrap.style.display = "none";
+          }
+        }
+
         document.getElementById("wizProjectName").value = document.getElementById("wizProjectName").value || w.interview.suggested_project_name || "my-ai-app";
         if (w.interview.recommended_stack) {
           document.getElementById("wizChosenStack").value = w.interview.recommended_stack;
@@ -1585,12 +1681,40 @@
       } catch (e) { showToast(e.message); }
     }
 
+    function _collectWizardStep2Extras() {
+      const selectedSuggestions = Array.from(document.querySelectorAll(".wiz-sugg-cb:checked")).map(el => el.value);
+      const userNotes = (document.getElementById("wizUserNotesInput")?.value || "").trim();
+      return { selectedSuggestions, userNotes };
+    }
+
+    async function submitWizardInterviewFollowup() {
+      const { selectedSuggestions, userNotes } = _collectWizardStep2Extras();
+      try {
+        await api("/api/wizard/interview/followup", "POST", {
+          answers: wizardAnswers,
+          selected_suggestions: selectedSuggestions,
+          user_notes: userNotes,
+        });
+        const notesEl = document.getElementById("wizUserNotesInput");
+        if (notesEl) notesEl.value = "";
+        showToast("Đang đào sâu thêm câu hỏi ở vòng tiếp theo...");
+        await refreshState();
+      } catch (e) { showToast(e.message); }
+    }
+
     async function submitWizardSynthesize() {
       const idea = document.getElementById("wizIdeaInput").value.trim() || (latestState.wizard && latestState.wizard.idea) || "";
       const stack = (latestState.wizard && latestState.wizard.interview && latestState.wizard.interview.recommended_stack) || "web_react";
+      const { selectedSuggestions, userNotes } = _collectWizardStep2Extras();
       try {
-        await api("/api/wizard/synthesize", "POST", { idea, answers: wizardAnswers, stack });
-        showToast("Đang tạo danh sách tính năng...");
+        await api("/api/wizard/synthesize", "POST", {
+          idea,
+          answers: wizardAnswers,
+          stack,
+          selected_suggestions: selectedSuggestions,
+          user_notes: userNotes,
+        });
+        showToast("Đang tổng hợp PRD & Hiến pháp dự án...");
         await refreshState();
       } catch (e) { showToast(e.message); }
     }

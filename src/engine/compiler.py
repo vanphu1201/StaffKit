@@ -114,12 +114,11 @@ class PromptCompiler:
             )
         elif profile == "investigate_fix":
             verify_rule = (
-                "- CHẾ ĐỘ ĐIỀU TRA & SỬA LỖI SÂU (INVESTIGATE & FIX): Engine đã định vị sẵn bản đồ và các file nghi vấn nhất "
-                "làm bàn đạp để bạn tiết kiệm thời gian. Bạn ĐƯỢC TOÀN QUYỀN đọc thêm file liên quan và chạy các lệnh chẩn đoán "
-                "nhanh (như `curl`/HTTP probe dịch vụ local, kiểm tra port/process, chạy test đơn lẻ `npx vitest run <file>` / "
-                "`pytest <file>`, `tsc --noEmit`) để tự chứng minh bản vá chạy thật 100% trước khi kết thúc. Tránh chạy các lệnh "
-                "cài đặt nặng không cần thiết (`npm install` toàn bộ) nếu chưa thật sự cần; sau khi bạn xong, Engine bên ngoài "
-                "vẫn sẽ tự chạy toàn bộ Verification Commands độc lập."
+                "- CHẾ ĐỘ ĐIỀU TRA & SỬA LỖI SÂU (INVESTIGATE & FIX — chuẩn `superpowers:systematic-debugging` + `OpenSpec`):\n"
+                "  1. **Reproduce & Probe thật:** ĐƯỢC TOÀN QUYỀN đọc mở rộng file liên quan và chạy lệnh chẩn đoán nhanh (`curl`/HTTP probe dịch vụ local, kiểm tra port/process, chạy test đơn lẻ `npx vitest run <file>` / `pytest <file>`, `tsc --noEmit`) để nhìn thấy hành vi thật trước khi sửa, TUYỆT ĐỐI KHÔNG đoán mò.\n"
+                "  2. **Isolate Root Cause:** Truy tận nguyên nhân gốc (kiểm tra payload/status thật, hợp đồng dữ liệu, cấu hình).\n"
+                "  3. **Minimal Targeted Fix & Preserve Invariants:** Sửa triệt để đúng gốc rễ nhưng bảo toàn 100% các tính năng và test đang chạy tốt.\n"
+                "  4. **Verify thật & Regression Test:** Tự chạy kiểm chứng nhanh bản vá + thêm/cập nhật test bao phủ kịch bản lỗi trước khi kết thúc (Engine bên ngoài vẫn sẽ chạy toàn bộ Verification Commands độc lập)."
             )
         else:
             verify_rule = (
@@ -344,6 +343,24 @@ class PromptCompiler:
         lines = [f"- {k}: {v}" for k, v in data.items() if str(v).strip()]
         return "\n".join(lines)
 
+    def _load_constitution_text(self, max_lines: int = 28) -> str:
+        """Load `.auto-engine/constitution.md` (spec-kit style immutable project principles)."""
+        for candidate in (
+            self.config.auto_engine_dir / "constitution.md",
+            self.repo_path / "openspec" / "constitution.md",
+        ):
+            if candidate.is_file():
+                try:
+                    raw = candidate.read_text(encoding="utf-8", errors="replace").strip()
+                except OSError:
+                    continue
+                if raw:
+                    c_lines = raw.splitlines()
+                    if len(c_lines) > max_lines:
+                        return "\n".join(c_lines[:max_lines]) + "\n... [constitution trimmed]"
+                    return "\n".join(c_lines)
+        return ""
+
     def _load_contract_text(self, max_lines: int = 40) -> str:
         """Load shared `.auto-engine/contracts.md` or `openspec/contracts.md` so all tasks stay interface-aligned."""
         for candidate in (
@@ -450,6 +467,7 @@ class PromptCompiler:
         repo_tree_text: str = "",
         contract_text: str = "",
         handoff_text: str = "",
+        constitution_text: str = "",
         objective_override: str | None = None,
     ) -> str:
         verify_cmds = task.verify_commands or self.config.executor.default_verify_commands
@@ -463,6 +481,7 @@ class PromptCompiler:
         payload_lines = [
             "---",
             "[DYNAMIC TASK PAYLOAD - PER TASK]",
+            "<task_spec>",
             f"# TASK: {task.task_id} - {task.title}",
             f"- Objective: {effective_objective}",
             f"- Acceptance Criteria: {task.acceptance_criteria}",
@@ -472,33 +491,58 @@ class PromptCompiler:
             f"- Protected Test Files (DO NOT TOUCH): {self._format_protected_tests(task)}",
             f"- Constraints: {task.constraints}",
             f"- Verification Commands (Engine sẽ chạy sau khi bạn xong): {verify_cmds}",
+            "</task_spec>",
         ]
+        if constitution_text:
+            payload_lines.extend(
+                [
+                    "",
+                    "<project_constitution>",
+                    "# PROJECT CONSTITUTION (Immutable Principles — Inherited Across All Tasks & Updates)",
+                    constitution_text,
+                    "</project_constitution>",
+                ]
+            )
         if contract_text:
-            payload_lines.extend(["", "# ARCHITECTURE & INTERFACE CONTRACT (Shared Across All Tasks)", contract_text])
+            payload_lines.extend(
+                [
+                    "",
+                    "<architecture_contract>",
+                    "# ARCHITECTURE & INTERFACE CONTRACT (Shared Across All Tasks)",
+                    contract_text,
+                    "</architecture_contract>",
+                ]
+            )
         if handoff_text:
             payload_lines.extend(
                 [
                     "",
+                    "<upstream_handoff>",
                     "# UPSTREAM COMPLETED TASKS HANDOFF (0-Token Memory — Files & Signatures Already Built)",
                     handoff_text,
+                    "</upstream_handoff>",
                 ]
             )
         payload_lines.extend(
             [
                 "",
+                "<readonly_context>",
                 "# READONLY CONTEXT (Interfaces / Types / Signatures)",
                 readonly_text,
+                "</readonly_context>",
                 "",
+                "<target_files>",
                 "# TARGET FILES TO MODIFY",
                 targets_text,
+                "</target_files>",
             ]
         )
         if repo_tree_text:
-            payload_lines.extend(["", "# REPO FILE TREE (paths only)", repo_tree_text])
+            payload_lines.extend(["", "<repo_tree>", "# REPO FILE TREE (paths only)", repo_tree_text, "</repo_tree>"])
         if user_answers_text:
-            payload_lines.extend(["", "# USER ANSWERS & REAL ASSETS", user_answers_text])
+            payload_lines.extend(["", "<user_answers>", "# USER ANSWERS & REAL ASSETS", user_answers_text, "</user_answers>"])
         if feedback_text:
-            payload_lines.extend(["", feedback_text])
+            payload_lines.extend(["", "<retry_feedback>", feedback_text, "</retry_feedback>"])
         return f"{static_prefix}\n\n" + "\n".join(payload_lines)
 
     def compile(
@@ -521,6 +565,7 @@ class PromptCompiler:
         compact_objective = compress_and_offload_objective(task, self.config.auto_engine_dir)
         targets_text, all_inlined = self._format_target_files(task, skeletons)
         user_answers_text = self._load_user_answers_text()
+        constitution_text = self._load_constitution_text(max_lines=28)
         contract_text = self._load_contract_text(max_lines=40)
         handoff_text = self._load_handoff_text(task.task_id, max_lines=28)
         repo_tree_text = self._format_repo_file_tree(task)
@@ -547,6 +592,7 @@ class PromptCompiler:
             repo_tree_text=repo_tree_text,
             contract_text=contract_text,
             handoff_text=handoff_text,
+            constitution_text=constitution_text,
             objective_override=compact_objective,
         )
         tokens = estimate_tokens(prompt)
