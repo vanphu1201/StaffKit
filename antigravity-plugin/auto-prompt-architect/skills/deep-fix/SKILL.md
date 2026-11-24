@@ -20,9 +20,9 @@ Solve bugs and upgrades cleanly on the first try with zero blind guessing and ze
 
 ## Step 3: Surgical Fix & Behavioral Reality Verification
 1. Apply a clean, minimal root-cause fix while honoring `.auto-engine/constitution.md` and preserving all existing tests/invariants.
-2. **Prove the fix works live:** re-run the real runtime probe / user flow and confirm real success (e.g., HTTP 200 with real output, UI works in browser, CLI succeeds).
+2. **Prove the fix works live:** re-run the real runtime probe / user flow and confirm real success (e.g., HTTP 200 with real output, CLI succeeds; for Web UI bugs, verify visually & check console via Antigravity IDE's `browser` subagent).
 3. Run `verify_and_smoke(repo_path=...)` for independent build/test/runtime smoke verification.
 
 ## Step 4: Compound Knowledge (Zero Future Regression)
-1. Call `record_lesson(title=..., summary=..., repo_path=...)` capturing the exact root cause and runtime contract discovered so future sessions never re-introduce the bug.
+1. Call `record_lesson(title=..., summary=..., repo_path=..., touched_files=[...])` capturing the exact root cause and refreshing `.auto-engine/handoff.md` signatures so future sessions never re-introduce the bug.
 2. Report concisely in Vietnamese: **(1) Nguyên nhân gốc đã xác minh**, **(2) Bằng chứng chạy thật sau khi sửa**, **(3) Các file đã thay đổi**.

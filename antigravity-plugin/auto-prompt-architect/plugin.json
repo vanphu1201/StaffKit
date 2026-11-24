@@ -1,7 +1,8 @@
 {
   "name": "auto-prompt-architect",
   "displayName": "Auto-Prompt Architect",
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "logo": "assets/logo.svg",
   "description": "Biến ý tưởng mơ hồ thành sản phẩm hoàn chỉnh không lỗi ngay trong Antigravity IDE: Phỏng vấn đa vòng + Gợi ý nâng tầm + Hiến pháp dự án + Trí nhớ bài học 0-token + Kiểm chứng thực tế.",
   "repository": "https://github.com/vanphu1201/automatic-promt",
   "suggestedPrompts": [

@@ -39,6 +39,7 @@ Once the user confirms they are ready:
 1. Create a clean safety checkpoint if modifying an existing repo: `snapshot_or_undo(action="snapshot", repo_path=...)`.
 2. Build the product natively using Antigravity IDE's full capabilities (parallel edits, real dependency installation, live testing, Browser UI inspection when applicable).
 3. Run independent 0-token verification:
-   `verify_and_smoke(repo_path=...)` — confirms build, typecheck, tests, AND live Web/API server boot & HTTP response.
-4. Record any non-trivial runtime/environment discoveries via `record_lesson(title, summary, repo_path=...)`.
-5. Deliver a clear plain-Vietnamese summary including **exact run instructions** and **what was verified live**.
+   `verify_and_smoke(repo_path=..., generate_delivery_pack=True)` — confirms build, typecheck, tests, live Web/API server boot & HTTP response, AND generates `CHAY_SAN_PHAM.bat` + `HUONG_DAN_SU_DUNG.md` for non-tech users.
+4. **Visual / Browser QA (for Web Apps):** After `verify_and_smoke` passes, if the app has a web UI, open it briefly with Antigravity IDE's `browser` subagent to confirm the UI actually renders cleanly with zero white-screen or console JS errors.
+5. Record any non-trivial runtime/environment discoveries and refresh module signatures via `record_lesson(title, summary, repo_path=..., touched_files=[...])`.
+6. Deliver a clear plain-Vietnamese summary including **exact run instructions** (`CHAY_SAN_PHAM.bat`) and **what was verified live**.

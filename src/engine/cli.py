@@ -238,9 +238,46 @@ def status(config_path: Path = typer.Option(Path("config.yaml"), "--config")) ->
 
 
 @app.command(name="serve-mcp")
-def serve_mcp(config_path: Path = typer.Option(Path("config.yaml"), "--config")) -> None:
-    """Start the minimal 4-tool FastMCP stdio server for Antigravity IDE / App."""
-    run_mcp_server(config_path)
+def serve_mcp(
+    config_path: Path | None = typer.Option(None, "--config"),
+    ide_only: bool = typer.Option(False, "--ide-only", help="Expose only the 6 lean 0-token Antigravity IDE tools"),
+) -> None:
+    """Start the FastMCP stdio server for Antigravity IDE / App."""
+    run_mcp_server(config_path, ide_only=ide_only)
+
+
+@app.command(name="install-plugin")
+def install_plugin(
+    target_dir: Path | None = typer.Option(None, "--target", help="Custom plugin install directory"),
+) -> None:
+    """Install/sync the Auto-Prompt Architect plugin into ~/.gemini/config/plugins/ with machine-local Python path."""
+    import json
+    import shutil
+    import sys
+
+    src_dir = Path(__file__).resolve().parents[2] / "antigravity-plugin" / "auto-prompt-architect"
+    if not src_dir.is_dir():
+        console.print(f"[red]Plugin source directory not found: {src_dir}[/red]")
+        raise typer.Exit(code=1)
+
+    dst_dir = target_dir or (Path.home() / ".gemini" / "config" / "plugins" / "auto-prompt-architect")
+    shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
+
+    py_exe = Path(sys.executable).resolve().as_posix()
+    mcp_payload = {
+        "mcpServers": {
+            "auto-prompt-architect": {
+                "command": py_exe,
+                "args": ["-m", "engine.cli", "serve-mcp", "--ide-only"],
+            }
+        }
+    }
+    (dst_dir / "mcp_config.json").write_text(
+        json.dumps(mcp_payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    console.print(f"[green]Installed Auto-Prompt Architect plugin -> {dst_dir.as_posix()}[/green]")
+    console.print(f"[cyan]MCP Python: {py_exe} (-m engine.cli serve-mcp --ide-only)[/cyan]")
 
 
 def _print_report_table(summary: dict, halted_reason: str | None = None, final_ok: bool = True) -> None:

@@ -526,8 +526,15 @@ def test_antigravity_plugin_mcp_amplifier_tools(tmp_path: Path) -> None:
         assert (repo / "openspec" / "prd.md").is_file()
 
         lesson_fn = (await mcp.get_tool("record_lesson")).fn
-        res_les = lesson_fn(title="Auth Quirk", summary="Always trim whitespace on user input", repo_path=str(repo))
+        res_les = lesson_fn(
+            title="Auth Quirk",
+            summary="Always trim whitespace on user input",
+            repo_path=str(repo),
+            touched_files=["src/auth.py"],
+        )
         assert "RECORDED_LESSON" in res_les
+        assert (repo / ".auto-engine" / "handoff.md").is_file()
+        assert "def login" in (repo / ".auto-engine" / "handoff.md").read_text(encoding="utf-8")
 
         mem_fn = (await mcp.get_tool("load_project_memory")).fn
         mem_out = mem_fn(repo_path=str(repo))
@@ -538,12 +545,21 @@ def test_antigravity_plugin_mcp_amplifier_tools(tmp_path: Path) -> None:
         loc_out = loc_fn(query="fix login auth", repo_path=str(repo))
         assert "src/auth.py" in loc_out
 
+        # ide_only=True exposes ONLY the 6 lean IDE tools (no legacy Sprint tool bloat)
+        ide_mcp = create_mcp_server(None, ide_only=True)
+        ide_names = {t.name for t in await ide_mcp.list_tools()}
+        assert len(ide_names) == 6
+        assert "get_next_task" not in ide_names
+
     asyncio.run(_exercise())
 
-    # Validate bundled Antigravity plugin JSON files
+    # Validate bundled Antigravity plugin JSON & logo files
     plugin_root = Path(__file__).resolve().parents[1] / "antigravity-plugin" / "auto-prompt-architect"
     manifest = json.loads((plugin_root / "plugin.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "auto-prompt-architect"
+    assert manifest["version"] == "1.1.0"
+    assert manifest["logo"] == "assets/logo.svg"
+    assert (plugin_root / "assets" / "logo.svg").is_file()
     assert len(manifest["suggestedPrompts"]) == 3
     mcp_cfg = json.loads((plugin_root / "mcp_config.json").read_text(encoding="utf-8"))
     assert "auto-prompt-architect" in mcp_cfg["mcpServers"]

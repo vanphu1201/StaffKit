@@ -10,7 +10,7 @@ from pathlib import Path
 
 from fastmcp import FastMCP
 
-from engine.bootstrapper import detect_existing_stack
+from engine.bootstrapper import detect_existing_stack, generate_nontech_delivery_guide
 from engine.compiler import PromptCompiler
 from engine.database import StateDB
 from engine.git_guard import GitGuard
@@ -46,8 +46,8 @@ def _read_optional(path: Path, max_chars: int = 4000) -> str:
         return ""
 
 
-def create_mcp_server(config_path: Path | None = None) -> FastMCP:
-    """Instantiate FastMCP server exposing 0-token IDE Amplifier tools + Sprint tools."""
+def create_mcp_server(config_path: Path | None = None, *, ide_only: bool = False) -> FastMCP:
+    """Instantiate FastMCP server exposing 6 lean 0-token IDE Amplifier tools (+ optional legacy Sprint tools)."""
     if config_path is not None and config_path.is_file():
         config = EngineConfig.load(config_path)
     else:
@@ -189,8 +189,13 @@ def create_mcp_server(config_path: Path | None = None) -> FastMCP:
         return "SAVED_SPEC:\n" + "\n".join(f"- `{s}`" for s in saved) if saved else "NO_CONTENT_PROVIDED"
 
     @mcp.tool()
-    def record_lesson(title: str, summary: str, repo_path: str = "") -> str:
-        """Persist a verified root-cause discovery or runtime quirk into `.auto-engine/lessons.md` so future sessions never regress."""
+    def record_lesson(
+        title: str,
+        summary: str,
+        repo_path: str = "",
+        touched_files: list[str] | None = None,
+    ) -> str:
+        """Persist a verified root-cause discovery into `.auto-engine/lessons.md` and optionally refresh `.auto-engine/handoff.md` signatures (0-token)."""
         repo = _resolve_repo_path(repo_path, config.target_repo_path)
         auto_dir = repo / ".auto-engine"
         auto_dir.mkdir(parents=True, exist_ok=True)
@@ -211,11 +216,46 @@ def create_mcp_server(config_path: Path | None = None) -> FastMCP:
                         blocks.append(hdr)
         blocks.append(entry)
         lessons_path.write_text("\n\n".join(blocks[-12:]) + "\n", encoding="utf-8")
-        return f"RECORDED_LESSON -> `{lessons_path.as_posix()}` ({len(blocks[-12:])} lessons stored)"
+
+        handoff_note = ""
+        clean_touched = [str(f).strip().replace("\\", "/") for f in (touched_files or []) if str(f).strip()]
+        if clean_touched:
+            h_lines = [f"### {title.strip()}", f"- Touched files: {', '.join(f'`{p}`' for p in clean_touched[:6])}"]
+            for rel in clean_touched[:5]:
+                fp = repo / rel
+                if fp.is_file():
+                    skel = extract_fast_skeleton(fp, max_lines=10)
+                    if skel:
+                        sigs = " | ".join(ln.strip() for ln in skel.splitlines()[:8] if ln.strip() and not ln.startswith("..."))
+                        if sigs:
+                            h_lines.append(f"- `{rel}` signatures: `{sigs[:380]}`")
+            h_entry = "\n".join(h_lines)
+            handoff_path = auto_dir / "handoff.md"
+            h_blocks: list[str] = []
+            if handoff_path.is_file():
+                raw_h = handoff_path.read_text(encoding="utf-8", errors="replace").strip()
+                if raw_h:
+                    for idx, b in enumerate(raw_h.split("\n### ")):
+                        bc = b.strip()
+                        if not bc:
+                            continue
+                        hdr = bc if (idx == 0 and bc.startswith("### ")) else f"### {bc}"
+                        if not hdr.startswith(f"### {title.strip()}"):
+                            h_blocks.append(hdr)
+            h_blocks.append(h_entry)
+            handoff_path.write_text("\n\n".join(h_blocks[-10:]) + "\n", encoding="utf-8")
+            handoff_note = f" + updated `{handoff_path.as_posix()}`"
+
+        return f"RECORDED_LESSON -> `{lessons_path.as_posix()}` ({len(blocks[-12:])} lessons stored){handoff_note}"
 
     @mcp.tool()
-    def verify_and_smoke(repo_path: str = "", commands: list[str] | None = None, run_smoke: bool = True) -> str:
-        """Run 0-token independent verification (auto-detected build/typecheck/tests + live Web runtime smoke probe)."""
+    def verify_and_smoke(
+        repo_path: str = "",
+        commands: list[str] | None = None,
+        run_smoke: bool = True,
+        generate_delivery_pack: bool = True,
+    ) -> str:
+        """Run 0-token independent verification (build/typecheck/tests + live Web runtime smoke + non-tech Delivery Pack)."""
         repo = _resolve_repo_path(repo_path, config.target_repo_path)
         det_stack, det_vc, det_fc, _ = detect_existing_stack(repo)
         cmds = [c.strip() for c in (commands or []) if str(c).strip()] or det_fc or det_vc
@@ -239,6 +279,18 @@ def create_mcp_server(config_path: Path | None = None) -> FastMCP:
             smoke_ok, smoke_msg = run_web_runtime_smoke(repo)
             all_ok = all_ok and smoke_ok
             report.append(f"- Runtime Smoke Probe: **{'PASS' if smoke_ok else 'FAIL'}** — {smoke_msg}")
+
+        if all_ok and generate_delivery_pack:
+            try:
+                guide = generate_nontech_delivery_guide(repo, write_files=True)
+                report.append(
+                    f"- Non-Tech Delivery Pack: Generated `CHAY_SAN_PHAM.bat` & `HUONG_DAN_SU_DUNG.md` "
+                    f"(run=`{guide.get('run_command', '')}`"
+                    + (f", url=`{guide['web_url']}`" if guide.get("web_url") else "")
+                    + ")"
+                )
+            except Exception:
+                pass
 
         report.append(f"\n**OVERALL: {'PASS' if all_ok else 'FAIL'}**")
         return "\n".join(report)
@@ -282,6 +334,9 @@ def create_mcp_server(config_path: Path | None = None) -> FastMCP:
             return f"UNDONE: Rolled back `{repo.name}` cleanly to `{sha[:8]}`."
 
         return f"ERROR: Unknown action `{action}`. Use `snapshot` or `undo`."
+
+    if ide_only:
+        return mcp
 
     # =========================================================================
     # TIER 2: LEGACY SPRINT ORCHESTRATION TOOLS (100% Backward Compatible)
@@ -409,8 +464,8 @@ def create_mcp_server(config_path: Path | None = None) -> FastMCP:
     return mcp
 
 
-def run_mcp_server(config_path: Path | None = None) -> None:
+def run_mcp_server(config_path: Path | None = None, *, ide_only: bool = False) -> None:
     """Start the FastMCP server on stdio transport."""
-    server = create_mcp_server(config_path)
-    logger.info("Starting auto-prompt-architect FastMCP server (stdio)")
+    server = create_mcp_server(config_path, ide_only=ide_only)
+    logger.info("Starting auto-prompt-architect FastMCP server (stdio, ide_only=%s)", ide_only)
     server.run(transport="stdio")
