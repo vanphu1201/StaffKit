@@ -1,27 +1,43 @@
 ---
 name: brainstorm-to-product
-description: Adaptive multi-round product discovery, proactive suggestions, Project Constitution, Architecture Contract, and end-to-end verified build directly inside Antigravity IDE. Use whenever the user shares a vague or complex product idea, wants to design a new system from scratch, or wants to brainstorm a major feature upgrade before coding.
+description: Adaptive multi-round product discovery, solution-architecture option comparison, feasibility check, phased milestones, Project Constitution, Architecture Contract, and end-to-end verified build directly inside Antigravity IDE. Use whenever the user shares a vague or complex product idea, wants to design a new system from scratch, or wants to brainstorm a major feature with multiple possible approaches before coding.
 ---
 
-# Brainstorm-to-Product (Adaptive Multi-Round Discovery & Build)
+# Brainstorm-to-Product (Adaptive Discovery, Solution Options & Build)
 
-Turn any vague user idea — even a single sentence or pasted screenshot — into a crystal-clear, production-ready product built at 100% of Antigravity IDE's native power.
+Turn any vague user idea or complex major feature — even when the user doesn't know which technical approach is right — into a crystal-clear, production-ready product built at 100% of Antigravity IDE's native power.
 
 ## Phase 1: Adaptive Multi-Round Elicitation (NEVER rush to code)
 
 1. **Inspect Context First:**
    - If the user attached images/mockups/documents, examine them directly first.
-   - If working in an existing repository, call `load_project_memory(repo_path)` (0-token) so you never ask about things already built.
+   - If working in an existing repository, call `load_project_memory(repo_path)` and `locate_context(query, repo_path)` (0-token) so you understand the existing architecture and never ask about things already built.
 2. **Gauge Complexity & Ask Targeted Questions (using `ask_question` or structured plain-Vietnamese Q&A):**
    - **Simple tool (1 screen/script):** 3–4 focused questions.
    - **Standard app:** 5–7 questions grouped by category (*Luồng chính*, *Dữ liệu & Tích hợp thật*, *Trải nghiệm*).
-   - **Complex / multi-module / external-API system:** 7–11 deep questions grouped cleanly (*Luồng người dùng*, *Dữ liệu & Tích hợp thật*, *Xử lý lỗi & Ngoại lệ*, *UX & Bảo mật*).
+   - **Complex / multi-module / open-ended major feature:** 7–11 deep questions grouped cleanly (*Mục tiêu & Luồng người dùng*, *Dữ liệu & Tích hợp thật*, *An toàn / Quyền / Ngoại lệ*, *UX & Bảo mật*).
 3. **Proactive Value-Add Suggestions:**
-   - Always propose **3–5 smart features or safeguards** the user might not have thought of (e.g., auto-save, live service health check, retry/recovery, quick-start launcher, export/import), clearly explaining the real-world benefit in plain Vietnamese so the user can tick what they want.
+   - Always propose **3–5 smart features or safeguards** the user might not have thought of (e.g., auto-save, live health check, emergency stop / confirmation gates for risky actions, retry/recovery, quick-start launcher), clearly explaining the real-world benefit in plain Vietnamese so the user can tick what they want.
+
+## Phase 1.5: Solution Architecture Options, Feasibility & Phased Plan (For Standard / Complex Features)
+
+Whenever a feature is large, open-ended, or has multiple valid technical approaches (or the user says they don't know which way is right), **NEVER silently pick one approach and start coding**:
+
+1. **Feasibility & Current Best-Practice Check:**
+   - For unfamiliar/fast-moving tech domains (e.g., OS/Computer-Use agents, realtime sync, local AI, mobile/desktop bridges), run a quick `search_web` or check actual host/OS constraints first so recommendations are current and feasible — never guess outdated APIs or ignore OS security/permission limits.
+2. **Compare 2–3 Distinct Solution Approaches (Plain Vietnamese):**
+   - Present **2–3 genuinely different architectural options** (e.g., *Approach A: Pure Vision/GUI* vs *Approach B: OS Native / API / Shell* vs *Approach C: Hybrid*) in a crisp comparison table covering:
+     - *Cách hoạt động* (plain words, no jargon dump)
+     - *Ưu điểm chính*
+     - *Nhược điểm & Rủi ro ẩn* (latency, token cost, fragility, security/OS limits)
+     - *Độ phù hợp với hệ thống hiện tại*
+   - Clearly mark **1 Recommended Option** with concrete reasoning, and let the user pick via `ask_question`.
+3. **Phased Milestone Breakdown (For Large Features):**
+   - Break large features into **2–3 verifiable milestones** (*Chặng 1: Khung lõi chạy thật & an toàn* → *Chặng 2: Khả năng thông minh / nhiều bước* → *Chặng 3: Bảo vệ, tối ưu tốc độ & đồng bộ đa thiết bị*) so the user sees working software early instead of a risky big-bang rewrite.
 4. **Clarity Gate (User Decides When It's Enough):**
-   - After each round, summarize what is locked, report an estimated **Clarity Score (%)**, list any remaining open gaps, and explicitly let the user choose:
-     - **Hỏi sâu thêm (Vòng tiếp theo)** — drill ONLY into open gaps without repeating answered questions.
-     - **Đã đủ ý — Chốt đặc tả & Tiến hành xây dựng** — proceed to Phase 2 ONLY when the user confirms!
+   - Summarize the locked requirements, chosen approach, and milestone plan; report an estimated **Clarity Score (%)** and any remaining open gaps; and explicitly let the user choose:
+     - **Hỏi sâu / So sánh thêm (Vòng tiếp theo)** — drill ONLY into open gaps without repeating answered questions.
+     - **Chốt phương án & Tiến hành xây dựng (từ Chặng 1)** — proceed to Phase 2 ONLY when the user confirms!
 
 ## Phase 2: Lock Spec, Constitution & Contract (Zero Drift)
 
