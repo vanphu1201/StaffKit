@@ -23,7 +23,7 @@ from engine.database import StateDB
 from engine.git_guard import GitGuard
 from engine.indexer import IndexerError, extract_fast_skeleton, list_real_files, locate_relevant_files
 from engine.models import EngineConfig, ExecutionResult, TaskSpec, TokenUsage, normalize_posix_path, resolve_task_execution_profile
-from engine.verifier import Verifier, extract_error_locations
+from engine.verifier import Verifier, extract_error_locations, run_web_runtime_smoke
 
 
 class ExecutorProtocol(Protocol):
@@ -165,6 +165,33 @@ class Orchestrator:
             json.dumps(merged, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+
+    def _record_task_lesson(self, task: TaskSpec, verif_summary: str) -> None:
+        """Persist verified runtime discoveries to `.auto-engine/lessons.md` (0-token) so future runs never regress."""
+        cleaned = verif_summary.strip()
+        if not cleaned:
+            return
+        compact_lines = [ln.strip() for ln in cleaned.splitlines() if ln.strip()][:5]
+        entry = f"### {task.task_id}: {task.title}\n" + "\n".join(f"- {ln.lstrip('-* ')}" for ln in compact_lines)
+        auto_dir = self.config.auto_engine_dir
+        auto_dir.mkdir(parents=True, exist_ok=True)
+        lessons_path = auto_dir / "lessons.md"
+        blocks: list[str] = []
+        if lessons_path.is_file():
+            try:
+                raw = lessons_path.read_text(encoding="utf-8", errors="replace").strip()
+                if raw:
+                    for idx, b in enumerate(raw.split("\n### ")):
+                        b_clean = b.strip()
+                        if not b_clean:
+                            continue
+                        hdr = b_clean if (idx == 0 and b_clean.startswith("### ")) else f"### {b_clean}"
+                        if hdr != entry:
+                            blocks.append(hdr)
+            except OSError:
+                pass
+        blocks.append(entry)
+        lessons_path.write_text("\n\n".join(blocks[-10:]) + "\n", encoding="utf-8")
 
     def _record_task_handoff(self, task: TaskSpec) -> None:
         """Persist 0-token episodic handoff summary (`.auto-engine/handoff.md`) after a task completes."""
@@ -516,6 +543,7 @@ class Orchestrator:
             if verify_res.passed:
                 verif_summary = _extract_verification_summary(exec_res.raw_output)
                 if verif_summary:
+                    self._record_task_lesson(task, verif_summary)
                     emit_trace(
                         self.on_trace,
                         phase="executor",
@@ -962,6 +990,27 @@ class Orchestrator:
                 final_verify_passed = rt_recheck.passed
                 final_verify_error = rt_recheck.trimmed_error_log
                 summary = self.db.get_sprint_summary()
+
+        if (
+            halted_reason is None
+            and final_verify_passed
+            and summary["counts"]["DONE"] > 0
+            and not runtime_cmds
+            and self.config.project.blueprint in ("web_react", "fullstack_web")
+            and (self.config.target_repo_path / "package.json").is_file()
+        ):
+            smoke_ok, smoke_msg = run_web_runtime_smoke(self.config.target_repo_path)
+            emit_trace(
+                self.on_trace,
+                phase="verifier",
+                kind="verify_result",
+                title="[RUNTIME_SMOKE] PASS" if smoke_ok else "[RUNTIME_SMOKE] FAIL",
+                content=smoke_msg,
+                meta={"passed": smoke_ok, "verdict": "PASS" if smoke_ok else "VERIFY_FAIL"},
+            )
+            if not smoke_ok:
+                final_verify_passed = False
+                final_verify_error = smoke_msg
 
         if halted_reason is None and final_verify_passed:
             self._notify_webhook({"event": "SPRINT_DONE", "summary": summary})

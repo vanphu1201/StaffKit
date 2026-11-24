@@ -91,6 +91,14 @@ def should_use_fast_path(
         return False
     headings = sum(1 for ln in cleaned.splitlines() if _MD_HEADING_RE.match(ln))
     bullets = sum(1 for ln in cleaned.splitlines() if _MD_BULLET_RE.match(ln))
+    # Multi-feature upgrade requests should use Planner DAG (vertical slices) instead of overloading 1 Fast-Path task
+    low = cleaned.lower()
+    feature_verb_hits = len(
+        re.findall(r"\b(thêm|tạo mới|xây dựng|tích hợp|bổ sung|implement|build|add)\b", low)
+    )
+    multi_clause_sep = low.count(" và ") + low.count(" đồng thời ") + low.count(" ngoài ra ") + low.count(", ")
+    if feature_verb_hits >= 3 and multi_clause_sep >= 2 and len(real_files) > 8:
+        return False
     if len(real_files) <= 8:
         return len(cleaned) <= 2200 and headings <= 2 and bullets <= 10
     if located_targets and 1 <= len(located_targets) <= max_fast_path_targets:

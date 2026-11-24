@@ -440,3 +440,48 @@ def test_exoskeleton_architecture_prompt_effort_and_verification_summary(tmp_pat
     )
     extracted = _extract_verification_summary(raw_ndjson)
     assert "Live probe HTTP 200 OK" in extracted
+
+
+def test_five_power_upgrades_lessons_fastpath_cost_and_smoke(tmp_path: Path) -> None:
+    from engine.database import StateDB
+    from engine.git_guard import GitGuard
+    from engine.models import TokenUsage
+    from engine.orchestrator import Orchestrator
+    from engine.planner import should_use_fast_path
+    from engine.verifier import Verifier, run_web_runtime_smoke
+
+    repo = tmp_path / "power_repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "a.ts").write_text("export const a = 1;\n", encoding="utf-8")
+
+    cfg = EngineConfig(project=ProjectConfig(target_repo=str(repo)))
+    db = StateDB(cfg.state_db_path)
+    guard = GitGuard(repo)
+    compiler = PromptCompiler(cfg)
+    orch = Orchestrator(cfg, db, guard, Verifier(cfg, guard), compiler)
+
+    # 1. Lessons Learned memory persists and gets injected into PromptCompiler
+    task = TaskSpec(task_id="T-01", title="Fix bridge", objective="Fix", allowed_write_files=["src/a.ts"])
+    orch._record_task_lesson(task, "1) Port 17841 requires chatgpt-web/ prefix\n2) Verified HTTP 200 OK")
+    assert (cfg.auto_engine_dir / "lessons.md").is_file()
+    prompt, _ = compiler.compile(task)
+    assert "<lessons_learned>" in prompt
+    assert "Port 17841 requires chatgpt-web/ prefix" in prompt
+
+    # 2. Smart Fast-Path splits multi-feature upgrades on medium/large repos to Planner DAG
+    big_repo_files = {f"src/file_{i}.ts" for i in range(15)}
+    multi_req = "Thêm đăng nhập Google, thêm phân quyền admin, bổ sung trang thống kê doanh thu và tích hợp xuất Excel"
+    assert should_use_fast_path(multi_req, big_repo_files, "auto", located_targets=["src/file_1.ts"]) is False
+    single_req = "Sửa lỗi nút lưu không hoạt động ở src/file_1.ts"
+    assert should_use_fast_path(single_req, big_repo_files, "auto", located_targets=["src/file_1.ts"]) is True
+
+    # 3. Transparent API-equivalent estimated cost when CLI Pro reports cost_usd == 0
+    db.replace_plan([task], plan_hash="h1", approved=True)
+    db.record_run("T-01", 0, "gemini-4-neon", "high", TokenUsage(prompt_tokens=100_000, completion_tokens=20_000, cost_usd=0.0), 12.5, "PASS")
+    summary = db.get_sprint_summary()
+    assert summary["cost_is_estimated"] is True
+    assert summary["estimated_cost_usd"] > 0.15
+
+    # 4. Lightweight Web Runtime Smoke gracefully skips non-Node repos
+    ok, msg = run_web_runtime_smoke(repo)
+    assert ok is True and "Skipped" in msg

@@ -447,6 +447,7 @@ class DesktopAppController:
         constitution_md = ""
         contracts_md = ""
         handoff_md = ""
+        lessons_md = ""
         custom_bp_yaml = ""
         audit_report_md = ""
         detected_info: dict[str, Any] = {
@@ -477,6 +478,9 @@ class DesktopAppController:
             h_path = cfg.auto_engine_dir / "handoff.md"
             if h_path.is_file():
                 handoff_md = h_path.read_text(encoding="utf-8", errors="replace")
+            l_path = cfg.auto_engine_dir / "lessons.md"
+            if l_path.is_file():
+                lessons_md = l_path.read_text(encoding="utf-8", errors="replace")
             bp_path = cfg.auto_engine_dir / "blueprint.yaml"
             if bp_path.is_file():
                 custom_bp_yaml = bp_path.read_text(encoding="utf-8", errors="replace")
@@ -553,6 +557,7 @@ class DesktopAppController:
             "constitution_md": constitution_md,
             "contracts_md": contracts_md,
             "handoff_md": handoff_md,
+            "lessons_md": lessons_md,
             "custom_blueprint_yaml": custom_bp_yaml,
             "audit_report_md": audit_report_md,
             "delivery_guide": delivery_guide,

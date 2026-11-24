@@ -360,6 +360,22 @@ class PromptCompiler:
                 lines.append(f"- `{fpath}` ({name}, {mime or 'file'})")
         return "\n".join(lines) if len(lines) > 1 else ""
 
+    def _load_lessons_text(self, max_lines: int = 26) -> str:
+        """Load `.auto-engine/lessons.md` (0-token accumulated project lessons & verified runtime discoveries)."""
+        lessons_path = self.config.auto_engine_dir / "lessons.md"
+        if not lessons_path.is_file():
+            return ""
+        try:
+            raw = lessons_path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            return ""
+        if not raw:
+            return ""
+        lines = raw.splitlines()
+        if len(lines) > max_lines:
+            return "\n".join(lines[-max_lines:])
+        return raw
+
     def _load_constitution_text(self, max_lines: int = 28) -> str:
         """Load `.auto-engine/constitution.md` (spec-kit style immutable project principles)."""
         for candidate in (
@@ -485,6 +501,7 @@ class PromptCompiler:
         contract_text: str = "",
         handoff_text: str = "",
         constitution_text: str = "",
+        lessons_text: str = "",
         attachments_text: str = "",
         objective_override: str | None = None,
     ) -> str:
@@ -542,6 +559,16 @@ class PromptCompiler:
                     "</upstream_handoff>",
                 ]
             )
+        if lessons_text:
+            payload_lines.extend(
+                [
+                    "",
+                    "<lessons_learned>",
+                    "# PROJECT LESSONS & VERIFIED RUNTIME DISCOVERIES (Do Not Regress)",
+                    lessons_text,
+                    "</lessons_learned>",
+                ]
+            )
         payload_lines.extend(
             [
                 "",
@@ -596,6 +623,7 @@ class PromptCompiler:
         user_answers_text = self._load_user_answers_text()
         attachments_text = self._load_user_attachments_text()
         constitution_text = self._load_constitution_text(max_lines=28)
+        lessons_text = self._load_lessons_text(max_lines=26)
         contract_text = self._load_contract_text(max_lines=40)
         handoff_text = self._load_handoff_text(task.task_id, max_lines=28)
         repo_tree_text = self._format_repo_file_tree(task)
@@ -623,6 +651,7 @@ class PromptCompiler:
             contract_text=contract_text,
             handoff_text=handoff_text,
             constitution_text=constitution_text,
+            lessons_text=lessons_text,
             attachments_text=attachments_text,
             objective_override=compact_objective,
         )

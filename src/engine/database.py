@@ -431,14 +431,25 @@ class StateDB:
             phase_prompt = sum(int(r["value"]) for r in meta_rows if r["key"].endswith("_prompt_tokens"))
             phase_completion = sum(int(r["value"]) for r in meta_rows if r["key"].endswith("_completion_tokens"))
 
+        p_tok = int(totals["prompt_tokens"]) if totals else 0
+        c_tok = int(totals["completion_tokens"]) if totals else 0
+        raw_cost = float(totals["cost_usd"]) if totals else 0.0
+        total_in = p_tok + phase_prompt
+        total_out = c_tok + phase_completion
+        # When CLI uses a Pro subscription (cost_usd == 0), provide transparent API-equivalent cost estimate
+        est_cost = round((total_in * 1.25 + total_out * 5.0) / 1_000_000.0, 4)
+        cost_is_estimated = raw_cost <= 0.0 and (total_in + total_out) > 0
+
         return {
             "counts": counts,
             "total_tasks": sum(counts.values()),
-            "prompt_tokens": int(totals["prompt_tokens"]) if totals else 0,
-            "completion_tokens": int(totals["completion_tokens"]) if totals else 0,
+            "prompt_tokens": p_tok,
+            "completion_tokens": c_tok,
             "planning_prompt_tokens": phase_prompt,
             "planning_completion_tokens": phase_completion,
-            "cost_usd": float(totals["cost_usd"]) if totals else 0.0,
+            "cost_usd": raw_cost,
+            "estimated_cost_usd": raw_cost if raw_cost > 0.0 else est_cost,
+            "cost_is_estimated": cost_is_estimated,
             "duration_sec": round(total_duration_sec, 1),
             "verdicts": verdicts,
         }

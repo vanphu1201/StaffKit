@@ -1501,6 +1501,9 @@
       const handoffHtml = ins.handoff_md
         ? `<pre class="trace-content" style="max-height:220px; overflow-y:auto;">${esc(ins.handoff_md)}</pre>`
         : `<div style="color:var(--muted);">Chưa có bản bàn giao module (sẽ tự sinh sau khi hoàn thành task).</div>`;
+      const lessonsHtml = ins.lessons_md
+        ? `<pre class="trace-content" style="max-height:200px; overflow-y:auto;">${esc(ins.lessons_md)}</pre>`
+        : `<div style="color:var(--muted);">Chưa có bài học thực tế nào được ghi nhận (tự lưu sau mỗi lần kiểm chứng thành công).</div>`;
 
       box.innerHTML = `
         <div class="brief-sec">
@@ -1508,6 +1511,10 @@
           <div><b>Dự án:</b> ${esc(b.project_name)} · <span class="pill" style="font-size:11px;">${esc(b.stack)}</span> · ~${b.total_files} tệp</div>
           ${b.run_command ? `<div style="margin-top:4px;"><b>Lệnh chạy:</b> <code>${esc(b.run_command)}</code>${b.web_url ? ` → <b style="color:#86efac;">${esc(b.web_url)}</b>` : ""}</div>` : ""}
           <div class="row" style="margin-top:8px;">${foldersHtml}</div>
+        </div>
+        <div class="brief-sec">
+          <h4>💡 Bài học &amp; Phát hiện thực tế đã ghi nhớ (lessons.md)</h4>
+          ${lessonsHtml}
         </div>
         <div class="brief-sec">
           <h4>📜 Nhật ký những gì Hệ thống &amp; Antigravity đã làm</h4>
@@ -1534,12 +1541,14 @@
       document.getElementById("activeProjectBtn").title = repoPath || "Chọn thư mục dự án";
       document.getElementById("quickFixRepoInput").value = repoPath;
 
-      // Compact Metrics Pill (Token + $Cost + Duration)
+      // Compact Metrics Pill (Token + $Cost or ~$Est (Pro) + Duration)
       const sum = s.summary || {};
       const totalTok = (sum.prompt_tokens || 0) + (sum.completion_tokens || 0) + (sum.planning_prompt_tokens || 0) + (sum.planning_completion_tokens || 0);
-      const costUsd = Number(sum.cost_usd || 0).toFixed(4);
+      const rawCost = Number(sum.cost_usd || 0);
+      const estCost = Number(sum.estimated_cost_usd || rawCost || 0);
+      const costLabel = sum.cost_is_estimated ? `~$${estCost.toFixed(2)} (Pro)` : `$${rawCost.toFixed(4)}`;
       const totalDur = (Number(sum.duration_sec || 0)) + Number((s.worker && s.worker.elapsed_sec) || 0);
-      document.getElementById("metricsPill").textContent = `⚡ ${totalTok.toLocaleString()} tok · $${costUsd} · ${fmtDuration(totalDur)}`;
+      document.getElementById("metricsPill").textContent = `⚡ ${totalTok.toLocaleString()} tok · ${costLabel} · ${fmtDuration(totalDur)}`;
 
       // Worker Pill & Buttons
       const busy = s.worker && s.worker.status !== "idle";

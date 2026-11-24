@@ -60,6 +60,7 @@ class ProductInterviewer:
         effort: str,
         *,
         phase_label: str = "Interviewer Prompt → Antigravity",
+        allowed_attachment_paths: list[str] | None = None,
     ) -> str:
         schema_dir = self.config.auto_engine_dir if self.config.target_repo_path.is_dir() else Path.cwd() / ".auto-engine"
         schema_dir.mkdir(parents=True, exist_ok=True)
@@ -137,6 +138,12 @@ class ProductInterviewer:
         latest_usage = TokenUsage()
         delta_buf = TextDeltaBuffer(self.on_trace, phase="interviewer", model=used_model, effort=effort)
         deadline = time.monotonic() + min(180, self.config.executor.timeout_seconds)
+        allowed_att_norm = {
+            str(Path(p).expanduser().resolve()).replace("\\", "/").lower()
+            for p in (allowed_attachment_paths or [])
+            if str(p).strip()
+        }
+        attachment_reads = 0
 
         while True:
             if self.stop_event is not None and self.stop_event.is_set():
@@ -172,10 +179,42 @@ class ProductInterviewer:
                 delta = _extract_text_delta(ev)
                 if delta:
                     delta_buf.push(delta)
-                if _extract_tool_call(ev) is not None:
-                    delta_buf.flush()
-                    kill_process_tree(proc)
-                    raise InterviewerError("Interviewer đã cố gọi tool không cần thiết; đã ngắt để tiết kiệm token.")
+                tc = _extract_tool_call(ev)
+                if tc is not None:
+                    tool_name, tool_args = tc
+                    t_low = tool_name.lower()
+                    target_raw = str(
+                        tool_args.get("Path")
+                        or tool_args.get("path")
+                        or tool_args.get("AbsolutePath")
+                        or tool_args.get("file_path")
+                        or ""
+                    ).strip()
+                    target_norm = target_raw.replace("\\", "/").lower()
+                    is_allowed_att_read = (
+                        bool(allowed_att_norm)
+                        and t_low in {"read_file", "view_file"}
+                        and attachment_reads < 6
+                        and (
+                            target_norm in allowed_att_norm
+                            or "user_attachments/" in target_norm
+                        )
+                    )
+                    if is_allowed_att_read:
+                        attachment_reads += 1
+                        emit_trace(
+                            self.on_trace,
+                            phase="interviewer",
+                            kind="tool_call",
+                            title=f"{tool_name} (Đọc ảnh/tài liệu đính kèm)",
+                            content=target_raw,
+                            model=used_model,
+                            effort=effort,
+                        )
+                    else:
+                        delta_buf.flush()
+                        kill_process_tree(proc)
+                        raise InterviewerError("Interviewer đã cố gọi tool không cần thiết; đã ngắt để tiết kiệm token.")
 
         proc.wait(timeout=5)
         delta_buf.flush()
@@ -269,8 +308,15 @@ class ProductInterviewer:
             "Nếu thông tin đã cực kỳ đầy đủ, đặt `ready_to_build: true`, `clarity_score >= 90` và chỉ đưa 0–2 câu hỏi tinh chỉnh cuối cùng.\n"
         )
 
+        clean_atts = [str(a).strip() for a in (attachments or []) if str(a).strip()]
+        tool_policy_line = (
+            "QUY TẮC BẮT BUỘC: BẮT BUỘC dùng `read_file` xem trực tiếp các tệp ảnh/tài liệu đính kèm của người dùng dưới đây trước khi phân tích, KHÔNG gọi bất kỳ tool nào khác (`list_dir`, `run_command`...), sau đó trả về JSON đúng schema `InterviewOutput`."
+            if clean_atts
+            else "QUY TẮC BẮT BUỘC: TUYỆT ĐỐI KHÔNG gọi bất kỳ tool nào (`view_file`, `list_dir`, `run_command`...). Chỉ trả về JSON đúng schema `InterviewOutput` trong 1 lượt duy nhất."
+        )
+
         prompt = f"""Bạn là Product Architect & Chuyên gia Khám phá Sản phẩm (áp dụng chuẩn Brainstorming Elicitation của BMAD-METHOD & Superpowers) giúp người KHÔNG rành kỹ thuật làm rõ trọn vẹn nhu cầu trước khi xây dựng SẢN PHẨM CHẠY THẬT (không làm bản demo giả lập).
-QUY TẮC BẮT BUỘC: TUYỆT ĐỐI KHÔNG gọi bất kỳ tool nào (`view_file`, `list_dir`, `run_command`...). Chỉ trả về JSON đúng schema `InterviewOutput` trong 1 lượt duy nhất.
+{tool_policy_line}
 
 Ý tưởng gốc của người dùng:
 "{idea.strip()}"
@@ -291,8 +337,9 @@ Yêu cầu chi tiết:
             prompt,
             InterviewOutput.model_json_schema(),
             "interview_schema.json",
-            effort="medium" if round_number > 1 or len(idea) > 220 else "low",
+            effort="medium" if round_number > 1 or len(idea) > 220 or clean_atts else "low",
             phase_label=f"Phỏng vấn chuyên sâu Vòng {round_number} → Antigravity",
+            allowed_attachment_paths=clean_atts,
         )
         out = InterviewOutput.model_validate_json(_extract_plan_json_payload(raw))
         out.round_number = round_number
@@ -361,12 +408,14 @@ Yêu cầu:
    - Ranh giới file/module chính để các task chạy song song khớp tuyệt đối 100%.
 7. `verify_commands`, `runtime_verify_commands`, `preview_command`, `quality_rules`: Nếu sản phẩm dùng công nghệ mới ngoài các blueprint có sẵn (vd: Go, Rust, Flutter, Mobile, Game, Desktop, Chrome Extension, C#/.NET...), hãy điền các lệnh kiểm tra build/test chuẩn vào `verify_commands`, lệnh smoke test runtime vào `runtime_verify_commands`, lệnh chạy thử vào `preview_command`, và quy tắc chất lượng riêng vào `quality_rules` để hệ thống tự động tạo `.auto-engine/blueprint.yaml` cho dự án.
 """
+        clean_atts = [str(a).strip() for a in (attachments or []) if str(a).strip()]
         raw = self._call_agy_no_tools(
             prompt,
             ProductSpec.model_json_schema(),
             "product_spec_schema.json",
             effort="medium",
             phase_label="Tổng hợp đặc tả PRD & Hiến pháp dự án → Antigravity",
+            allowed_attachment_paths=clean_atts,
         )
         spec = ProductSpec.model_validate_json(_extract_plan_json_payload(raw))
         if target_hint is not None:
