@@ -301,7 +301,23 @@ def run_web_runtime_smoke(repo_path: Path, *, timeout_sec: float = 16.0) -> tupl
 
     pkg_path = repo_path / "package.json"
     if not pkg_path.is_file():
-        return True, "Skipped runtime smoke (no package.json)."
+        # Lightweight Python/CLI runtime smoke fallback when pyproject.toml exists
+        pyproj = repo_path / "pyproject.toml"
+        if pyproj.is_file():
+            py_bin = repo_path / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+            exe = str(py_bin) if py_bin.is_file() else "python"
+            probe_proc = subprocess.run(
+                [exe, "-c", "import sys; print('PY_RUNTIME_OK', sys.version.split()[0])"],
+                cwd=str(repo_path),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            if probe_proc.returncode == 0 and "PY_RUNTIME_OK" in probe_proc.stdout:
+                return True, f"Python Runtime Smoke PASS: {probe_proc.stdout.strip()}"
+            return False, f"Python Runtime Smoke FAIL: {(probe_proc.stderr or probe_proc.stdout)[:400]}"
+        return True, "Skipped runtime smoke (no package.json or pyproject.toml)."
     try:
         pkg = json.loads(pkg_path.read_text(encoding="utf-8", errors="replace"))
     except (json.JSONDecodeError, OSError):

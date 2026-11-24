@@ -215,7 +215,37 @@ def _extract_prd_identifiers(active_prd_text: str) -> list[str]:
             _add(word[:-1])
         elif word.endswith("s") and len(word) >= 5:
             _add(word[:-1])
+
+    # 0-token Vietnamese -> English software concept expansion so pure-Vietnamese requests locate English source files
+    vi_low = active_prd_text.lower()
+    for vi_phrase, en_terms in _VI_EN_LOCATOR_MAP:
+        if vi_phrase in vi_low:
+            for term in en_terms:
+                _add(term)
     return tokens
+
+
+_VI_EN_LOCATOR_MAP: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("cài đặt", ("settings", "config", "preferences")),
+    ("kết nối", ("client", "health", "connect", "bridge", "gateway", "api")),
+    ("giao diện", ("component", "components", "web", "ui", "view", "page", "app")),
+    ("nút", ("button", "component", "ui", "handler")),
+    ("giọng đọc", ("tts", "audio", "voice", "speech", "media")),
+    ("âm thanh", ("audio", "ffmpeg", "mixer", "sound", "media")),
+    ("video", ("video", "render", "renderer", "pipeline", "remotion", "mp4")),
+    ("kịch bản", ("script", "prompt", "pipeline", "generate")),
+    ("đăng nhập", ("auth", "login", "session", "token")),
+    ("phân quyền", ("auth", "role", "permission", "guard")),
+    ("cơ sở dữ liệu", ("db", "database", "sqlite", "schema", "storage")),
+    ("lưu trữ", ("storage", "db", "database", "store")),
+    ("hàng đợi", ("queue", "batch", "worker", "job")),
+    ("kiểm thử", ("test", "tests", "verify", "verifier")),
+    ("xuất file", ("export", "render", "output", "download")),
+    ("thống kê", ("stats", "analytics", "dashboard", "chart", "report")),
+    ("báo cáo", ("report", "export", "summary")),
+    ("cấu hình", ("config", "settings", "env")),
+    ("lỗi", ("error", "handler", "client", "validator")),
+)
 
 
 def _resolve_local_imports(rel_path: str, content: str, norm_real: set[str]) -> list[str]:

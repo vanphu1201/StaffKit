@@ -557,9 +557,10 @@ def test_antigravity_plugin_mcp_amplifier_tools(tmp_path: Path) -> None:
     plugin_root = Path(__file__).resolve().parents[1] / "antigravity-plugin" / "auto-prompt-architect"
     manifest = json.loads((plugin_root / "plugin.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "auto-prompt-architect"
-    assert manifest["version"] == "1.1.0"
+    assert manifest["version"] == "1.2.0"
     assert manifest["logo"] == "assets/logo.svg"
     assert (plugin_root / "assets" / "logo.svg").is_file()
+    assert (plugin_root / "skills" / "audit-and-evolve" / "SKILL.md").is_file()
     assert len(manifest["suggestedPrompts"]) == 3
     mcp_cfg = json.loads((plugin_root / "mcp_config.json").read_text(encoding="utf-8"))
     assert "auto-prompt-architect" in mcp_cfg["mcpServers"]
