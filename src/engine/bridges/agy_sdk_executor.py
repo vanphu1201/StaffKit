@@ -6,7 +6,14 @@ import asyncio
 import time
 from typing import Any
 
-from engine.models import EngineConfig, ExecutionResult, TaskSpec, TokenUsage, normalize_posix_path
+from engine.models import (
+    EngineConfig,
+    ExecutionResult,
+    TaskSpec,
+    TokenUsage,
+    compute_dynamic_tool_call_budget,
+    normalize_posix_path,
+)
 
 WRITE_TOOL_NAMES = {"edit_file", "write_file", "replace_file_content", "multi_replace_file_content"}
 PATH_ARG_KEYS = ("Path", "path", "file_path", "TargetFile", "target_file")
@@ -66,6 +73,9 @@ class AgySdkExecutor:
         raw_chunks: list[str] = []
         tool_count = 0
 
+        soft_tool_budget, hard_tool_ceiling, strict_tool_cap = compute_dynamic_tool_call_budget(task, self.config)
+        effective_sdk_limit = soft_tool_budget if strict_tool_cap else hard_tool_ceiling
+
         async with Agent(agent_cfg) as agent:
             response = await agent.chat(prompt)
 
@@ -81,8 +91,8 @@ class AgySdkExecutor:
                     viol = inspect_tool_call_scope(call.name, args, allowed, protected)
                     if viol:
                         return viol
-                    if tool_count > self.config.limits.max_tool_calls_per_attempt:
-                        return f"SDK watchdog exceeded max_tool_calls_per_attempt ({tool_count})"
+                    if tool_count > effective_sdk_limit:
+                        return f"SDK watchdog exceeded adaptive tool call limit ({tool_count} > {effective_sdk_limit})"
                 return None
 
             text_task = asyncio.create_task(_collect_text())

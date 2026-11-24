@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator
 
 Complexity = Literal["low", "medium", "high"]
 Effort = Literal["low", "medium", "high"]
+ExecutionProfile = Literal["build", "investigate_fix"]
 StackType = str
 ExecutorMode = Literal["agy_cli", "agy_sdk", "mcp_only", "aider", "opencode"]
 TaskStatus = Literal["PENDING", "RUNNING", "VERIFYING", "DONE", "BLOCKED"]
@@ -108,12 +109,15 @@ class AgyConfig(BaseModel):
 
 
 class LimitsConfig(BaseModel):
-    """Hard token, cost, retry, and circuit-breaker thresholds."""
+    """Adaptive or hard token, cost, retry, and circuit-breaker thresholds."""
 
+    adaptive_limits: bool = True
     max_retries_per_task: int = Field(default=2, ge=0)
     max_tokens_per_task: int = Field(default=350000, ge=500)
-    max_tool_calls_per_attempt: int = Field(default=30, ge=1)
-    max_prompt_tokens_per_call: int = Field(default=12000, ge=500)
+    # 0 = fully adaptive per task (complexity, files, profile, progress). Positive values >=15 act as soft floors when adaptive_limits=True.
+    max_tool_calls_per_attempt: int = Field(default=0, ge=0)
+    # 0 = fully adaptive per task. Positive values >=2000 act as soft floors when adaptive_limits=True.
+    max_prompt_tokens_per_call: int = Field(default=0, ge=0)
     inline_file_max_lines: int = Field(default=300, ge=20)
     max_budget_usd_per_sprint: float = Field(default=2.0, ge=0.0)
     max_files_per_task: int = Field(default=3, ge=1)
@@ -271,6 +275,7 @@ class TaskSpec(BaseModel):
     constraints: list[str] = Field(default_factory=list)
     user_questions: list[str] = Field(default_factory=list)
     strict_scope: bool = True
+    execution_profile: ExecutionProfile = "build"
     verify_commands: list[str] = Field(default_factory=list)
 
     @field_validator(
@@ -371,3 +376,100 @@ class BootstrapResult(BaseModel):
     final_verify_commands: list[str] = Field(default_factory=list)
     preview_command: str = ""
     is_new_repo: bool = False
+
+
+_INVESTIGATE_KEYWORDS = (
+    "sửa lỗi",
+    "sửa kết nối",
+    "chưa được kết nối",
+    "khắc phục",
+    "lỗi",
+    "bug",
+    "fix",
+    "debug",
+    "traceback",
+    "exception",
+    "502",
+    "500",
+    "401",
+    "404",
+    "timeout",
+    "econnrefused",
+    "nâng cấp",
+    "chỉnh sửa sản phẩm",
+)
+
+
+def resolve_task_execution_profile(task: TaskSpec, *, attempt: int = 0) -> ExecutionProfile:
+    """Infer whether a task is an open-ended investigation/fix or a structured greenfield build."""
+    if task.execution_profile == "investigate_fix":
+        return "investigate_fix"
+    if task.task_id.upper().startswith("T-FINAL-FIX") or attempt > 0:
+        return "investigate_fix"
+    haystack = f"{task.title}\n{task.objective[:600]}".lower()
+    if any(kw in haystack for kw in _INVESTIGATE_KEYWORDS):
+        return "investigate_fix"
+    return "build"
+
+
+def compute_dynamic_tool_call_budget(
+    task: TaskSpec,
+    config: EngineConfig,
+    *,
+    attempt: int = 0,
+) -> tuple[int, int, bool]:
+    """Compute (soft_budget, hard_ceiling, is_strict_cap) flexibly per task.
+
+    - If `max_tool_calls_per_attempt` is explicitly set to a small strict cap (<15) or
+      `adaptive_limits` is False with a positive limit, honor it strictly.
+    - Otherwise scale dynamically by complexity, target file count, acceptance criteria,
+      execution profile (`investigate_fix` gets extra exploration room), and retry attempt.
+    """
+    cfg_val = config.limits.max_tool_calls_per_attempt
+    if cfg_val > 0 and (not config.limits.adaptive_limits or cfg_val < 15):
+        return cfg_val, cfg_val, True
+
+    profile = resolve_task_execution_profile(task, attempt=attempt)
+    base_by_complexity = {"low": 35, "medium": 60, "high": 90}
+    target_count = len(dict.fromkeys(task.allowed_write_files + task.create_new_files))
+    ac_count = min(len(task.acceptance_criteria), 10)
+    computed = (
+        base_by_complexity.get(task.complexity, 60)
+        + target_count * 10
+        + ac_count * 3
+        + (30 if profile == "investigate_fix" else 0)
+        + attempt * 15
+    )
+    soft_budget = max(cfg_val, computed)
+    hard_ceiling = min(260, max(soft_budget + 45, int(soft_budget * 1.8)))
+    return soft_budget, hard_ceiling, False
+
+
+def compute_dynamic_prompt_budget(
+    task: TaskSpec,
+    config: EngineConfig,
+    *,
+    attempt: int = 0,
+) -> tuple[int, bool]:
+    """Compute (prompt_token_budget, is_strict_cap) flexibly per task.
+
+    - Explicit small caps (<2000) or `adaptive_limits=False` with a positive cap remain strict.
+    - Otherwise scale dynamically by complexity, file count, readonly context, profile, and retry.
+    """
+    cfg_val = config.limits.max_prompt_tokens_per_call
+    if cfg_val > 0 and (not config.limits.adaptive_limits or cfg_val < 2000):
+        return cfg_val, True
+
+    profile = resolve_task_execution_profile(task, attempt=attempt)
+    base_by_complexity = {"low": 14000, "medium": 24000, "high": 36000}
+    target_count = len(dict.fromkeys(task.allowed_write_files + task.create_new_files))
+    readonly_count = min(len(task.readonly_context_files), 8)
+    computed = (
+        base_by_complexity.get(task.complexity, 24000)
+        + target_count * 2500
+        + readonly_count * 1000
+        + (8000 if profile == "investigate_fix" else 0)
+        + attempt * 6000
+    )
+    budget = min(64000, max(cfg_val, computed))
+    return budget, False

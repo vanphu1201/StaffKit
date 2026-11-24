@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import posixpath
+import re
 from pathlib import Path
 
 from engine.blueprints import get_blueprint
@@ -16,8 +17,74 @@ from engine.indexer import (
     extract_symbol_windows,
     list_real_files,
 )
-from engine.models import EngineConfig, TaskSpec, normalize_posix_path
+from engine.models import (
+    EngineConfig,
+    ExecutionProfile,
+    TaskSpec,
+    compute_dynamic_prompt_budget,
+    normalize_posix_path,
+    resolve_task_execution_profile,
+)
 from engine.verifier import extract_error_locations
+
+_LOG_NOISE_NORM_RE = re.compile(
+    r'(\d{4}-\d{2}-\d{2}T[\d:.]+Z|\b\d{1,2}:\d{2}:\d{2}\s*(?:AM|PM)?\b|"request"\s*:\s*\d+|"elapsedMs"\s*:\s*\d+|\bpid:\s*\d+|\bport:\s*\d+)',
+    re.IGNORECASE,
+)
+
+
+def compress_and_offload_objective(
+    task: TaskSpec,
+    auto_engine_dir: Path,
+    *,
+    max_inline_chars: int = 2000,
+) -> str:
+    """Deduplicate repetitive log noise in long objectives and offload verbatim text to disk (0-token)."""
+    raw = (task.objective or "").strip()
+    if len(raw) <= max_inline_chars:
+        return raw
+
+    attach_dir = auto_engine_dir / "task_attachments"
+    attach_dir.mkdir(parents=True, exist_ok=True)
+    safe_id = re.sub(r"[^a-zA-Z0-9._-]+", "_", task.task_id) or "task"
+    attach_path = attach_dir / f"{safe_id}_objective.txt"
+    attach_path.write_text(raw + "\n", encoding="utf-8")
+    rel_attach = f".auto-engine/task_attachments/{safe_id}_objective.txt"
+
+    # Split either by newline or by timestamped single-line pasted log entries
+    chunks = raw.splitlines()
+    if len(chunks) <= 4 and len(raw) > max_inline_chars:
+        chunks = re.split(r"(?=\b\d{1,2}:\d{2}:\d{2}\s*(?:AM|PM)\b)", raw)
+
+    deduped: list[str] = []
+    seen_counts: dict[str, int] = {}
+    order_sigs: list[tuple[str, str]] = []
+    for chunk in chunks:
+        cleaned = chunk.strip()
+        if not cleaned:
+            continue
+        sig = _LOG_NOISE_NORM_RE.sub("<TS>", cleaned)[:140]
+        if sig in seen_counts:
+            seen_counts[sig] += 1
+        else:
+            seen_counts[sig] = 1
+            order_sigs.append((sig, cleaned))
+
+    for sig, sample in order_sigs:
+        cnt = seen_counts[sig]
+        if cnt > 1:
+            deduped.append(f"{sample[:320]}  [... lặp lại {cnt} lần]")
+        else:
+            deduped.append(sample[:420])
+
+    compact = "\n".join(deduped)
+    if len(compact) > max_inline_chars:
+        compact = compact[: max_inline_chars - 160].rstrip() + "\n... [đã rút gọn log dài để tiết kiệm token]"
+    return (
+        f"{compact}\n\n"
+        f"[Raw objective/log đầy đủ ({len(raw)} ký tự) đã được lưu tại `{rel_attach}` — "
+        f"dùng `read_file` nếu cần xem chi tiết từng dòng gốc]"
+    )
 
 
 class PromptTooLargeError(RuntimeError):
@@ -38,13 +105,29 @@ class PromptCompiler:
         self.config = config
         self.repo_path = config.target_repo_path
 
-    def build_static_prefix(self) -> str:
-        """Build the immutable system rules prefix (optionally appending shared_rules_file)."""
-        verify_rule = (
-            "- CHỈ sửa code theo đặc tả rồi kết thúc ngay. TUYỆT ĐỐI KHÔNG tự chạy lệnh test, build, typecheck hay lint bên trong phiên (hệ thống bên ngoài sẽ tự chạy verify và trả log rút gọn nếu cần)."
-            if self.config.agy.forbid_shell_verify_commands
-            else "- Tập trung 100% tạo/sửa đầy đủ các file được giao rồi kết thúc ngay. KHÔNG tự chạy `npm install`, `pip install`, hay lệnh build/test nặng bằng shell tool bên trong phiên — ngay sau khi bạn ghi xong các file, Engine bên ngoài sẽ TỰ ĐỘNG chạy toàn bộ `Verification Commands` ở mức 0 token và gửi log lỗi (nếu có) cho bạn."
-        )
+    def build_static_prefix(self, *, profile: ExecutionProfile = "build") -> str:
+        """Build the immutable system rules prefix with Head-Start (not handcuffs) empowerment."""
+        if self.config.agy.forbid_shell_verify_commands:
+            verify_rule = (
+                "- CHỈ sửa code theo đặc tả rồi kết thúc ngay. TUYỆT ĐỐI KHÔNG tự chạy lệnh test, build, typecheck hay lint "
+                "bên trong phiên (hệ thống bên ngoài sẽ tự chạy verify và trả log rút gọn nếu cần)."
+            )
+        elif profile == "investigate_fix":
+            verify_rule = (
+                "- CHẾ ĐỘ ĐIỀU TRA & SỬA LỖI SÂU (INVESTIGATE & FIX): Engine đã định vị sẵn bản đồ và các file nghi vấn nhất "
+                "làm bàn đạp để bạn tiết kiệm thời gian. Bạn ĐƯỢC TOÀN QUYỀN đọc thêm file liên quan và chạy các lệnh chẩn đoán "
+                "nhanh (như `curl`/HTTP probe dịch vụ local, kiểm tra port/process, chạy test đơn lẻ `npx vitest run <file>` / "
+                "`pytest <file>`, `tsc --noEmit`) để tự chứng minh bản vá chạy thật 100% trước khi kết thúc. Tránh chạy các lệnh "
+                "cài đặt nặng không cần thiết (`npm install` toàn bộ) nếu chưa thật sự cần; sau khi bạn xong, Engine bên ngoài "
+                "vẫn sẽ tự chạy toàn bộ Verification Commands độc lập."
+            )
+        else:
+            verify_rule = (
+                "- CHẾ ĐỘ XÂY DỰNG TỐI ƯU (HEAD-START, NOT HANDCUFFS): Engine đã chuẩn bị sẵn bản đồ, Contract và các file mục tiêu "
+                "để bạn giảm tối đa thao tác mò mẫm thừa. Nếu cần đọc mở rộng sang file liên quan hoặc chạy nhanh lệnh kiểm tra "
+                "cục bộ (typecheck/test lẻ) để chắc chắn code hoạt động thật 100%, bạn hoàn toàn chủ động thực hiện; tránh chạy "
+                "lệnh cài đặt/build nặng lặp lại vì ngay sau khi bạn xong, Engine bên ngoài sẽ tự động chạy toàn bộ Verification Commands ở mức 0 token."
+            )
         lines = [
             "[STATIC PREFIX]",
             "# SYSTEM RULES",
@@ -198,16 +281,21 @@ class PromptCompiler:
             return ""
 
         parts = ["# PREVIOUS ATTEMPT FEEDBACK"]
+        if last_verdict in {"MAX_TURNS_EXCEEDED", "TIMEOUT"}:
+            parts.append(
+                "## CONTINUATION RESUME (KHÔNG LÀM LẠI TỪ ĐẦU)\n"
+                "Phiên trước đã chạm giới hạn khi bạn đang thực hiện dở. Các thay đổi hợp lệ trên đĩa ĐÃ ĐƯỢC GIỮ NGUYÊN — "
+                "hãy đọc nhanh phần đã sửa/diff bên dưới, tiếp tục hoàn tất các file/test còn thiếu rồi xác nhận verify PASS."
+            )
         rolled_back_or_clean = last_verdict in {
             "SCOPE_VIOLATION",
             "TEST_GAMING",
             "EMPTY_DIFF",
-            "MAX_TURNS_EXCEEDED",
             "BUDGET_EXCEEDED",
         }
         # Avoid sending duplicate diff when target files <= 300 lines are already inlined on disk.
-        if not rolled_back_or_clean and not all_targets_inlined and compact_diff.strip():
-            parts.append("## Current Git Diff (Rút gọn):\n```diff\n" + compact_diff.strip() + "\n```")
+        if not rolled_back_or_clean and (not all_targets_inlined or last_verdict in {"MAX_TURNS_EXCEEDED", "TIMEOUT"}) and compact_diff.strip():
+            parts.append("## Current Git Diff / Partial Progress (Rút gọn):\n```diff\n" + compact_diff.strip() + "\n```")
 
         if last_error.strip():
             parts.append("## Trimmed Error Log / Violation Summary:\n```\n" + last_error.strip() + "\n```")
@@ -362,19 +450,21 @@ class PromptCompiler:
         repo_tree_text: str = "",
         contract_text: str = "",
         handoff_text: str = "",
+        objective_override: str | None = None,
     ) -> str:
         verify_cmds = task.verify_commands or self.config.executor.default_verify_commands
         is_strict = task.strict_scope and self.config.guards.scope_mode == "strict"
         scope_desc = (
             "STRICT (chỉ sửa/tạo các file trong danh sách trên)"
             if is_strict
-            else "SOFT / FLEXIBLE (Ưu tiên sửa/tạo các file trong Allowed Write Files; nếu lệnh build/verify cần cập nhật cấu hình ở `package.json`, `tsconfig.json`, `vite.config.ts` hoặc file cùng thư mục thì ĐƯỢC PHÉP sửa để build/test PASS; tuyệt đối không sửa PROTECTED_TEST_FILES)"
+            else "SOFT / FLEXIBLE (Ưu tiên sửa/tạo các file trong Allowed Write Files; nếu quá trình điều tra/build/verify phát hiện nguyên nhân gốc nằm ở file liên quan hoặc cấu hình như `package.json`, `tsconfig.json`, `vite.config.ts` thì ĐƯỢC PHÉP sửa để sản phẩm chạy thật 100%; tuyệt đối không sửa PROTECTED_TEST_FILES)"
         )
+        effective_objective = objective_override if objective_override is not None else task.objective
         payload_lines = [
             "---",
             "[DYNAMIC TASK PAYLOAD - PER TASK]",
             f"# TASK: {task.task_id} - {task.title}",
-            f"- Objective: {task.objective}",
+            f"- Objective: {effective_objective}",
             f"- Acceptance Criteria: {task.acceptance_criteria}",
             f"- Allowed Write Files: {task.allowed_write_files}",
             f"- Create New Files: {task.create_new_files}",
@@ -421,12 +511,14 @@ class PromptCompiler:
         compact_diff: str = "",
         repo_map_path: Path | None = None,
     ) -> tuple[str, int]:
-        """Compile a Surgical Prompt and enforce max_prompt_tokens_per_call."""
+        """Compile a Surgical Prompt with adaptive per-task token budgeting and 0-token log offloading."""
         map_path = repo_map_path or (self.config.auto_engine_dir / "repo_map.xml")
         lookup_paths = list(dict.fromkeys(task.readonly_context_files + task.allowed_write_files))
         skeletons = extract_file_skeletons(map_path, lookup_paths)
 
-        static_prefix = self.build_static_prefix()
+        profile = resolve_task_execution_profile(task, attempt=attempt)
+        static_prefix = self.build_static_prefix(profile=profile)
+        compact_objective = compress_and_offload_objective(task, self.config.auto_engine_dir)
         targets_text, all_inlined = self._format_target_files(task, skeletons)
         user_answers_text = self._load_user_answers_text()
         contract_text = self._load_contract_text(max_lines=40)
@@ -455,10 +547,11 @@ class PromptCompiler:
             repo_tree_text=repo_tree_text,
             contract_text=contract_text,
             handoff_text=handoff_text,
+            objective_override=compact_objective,
         )
         tokens = estimate_tokens(prompt)
 
-        cap = self.config.limits.max_prompt_tokens_per_call
+        cap, is_strict_cap = compute_dynamic_prompt_budget(task, self.config, attempt=attempt)
         if tokens > cap:
             compact_readonly = self._format_readonly_context(
                 task.readonly_context_files,
@@ -474,10 +567,11 @@ class PromptCompiler:
                 user_answers_text=user_answers_text,
                 repo_tree_text="",
                 contract_text=self._load_contract_text(max_lines=18),
+                objective_override=compact_objective,
             )
             tokens = estimate_tokens(prompt)
 
-        if tokens > cap and cap >= 2000:
+        if tokens > cap and (not is_strict_cap or cap >= 2000):
             for inline_cap, win_cap in ((60, 60), (0, 30)):
                 compact_targets, _ = self._format_target_files(
                     task,
@@ -499,10 +593,32 @@ class PromptCompiler:
                     user_answers_text=user_answers_text,
                     repo_tree_text="",
                     contract_text="",
+                    objective_override=compact_objective,
                 )
                 tokens = estimate_tokens(prompt)
                 if tokens <= cap:
                     break
+
+        if tokens > cap and not is_strict_cap:
+            # Adaptive graceful pointer-only fallback: never block a real task with PromptTooLargeError
+            pointer_targets = "\n".join(
+                f"- `{p}` (file đã có trên đĩa — dùng `read_file` có chọn lọc)"
+                for p in dict.fromkeys(task.allowed_write_files + task.create_new_files)
+            ) or "(Không có)"
+            pointer_readonly = "\n".join(f"- `{p}`" for p in task.readonly_context_files[:8]) or "(Không có)"
+            prompt = self._assemble_prompt(
+                static_prefix,
+                task,
+                pointer_readonly,
+                pointer_targets,
+                feedback_text[:6000],
+                user_answers_text=user_answers_text[:2000],
+                repo_tree_text="",
+                contract_text="",
+                objective_override=compact_objective[:2000],
+            )
+            tokens = estimate_tokens(prompt)
+            return prompt, tokens
 
         if tokens > cap:
             raise PromptTooLargeError(

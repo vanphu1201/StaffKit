@@ -16,13 +16,28 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from engine.models import EngineConfig, ExecutionResult, TaskSpec, TokenUsage
+from engine.models import (
+    EngineConfig,
+    ExecutionResult,
+    TaskSpec,
+    TokenUsage,
+    compute_dynamic_tool_call_budget,
+)
 
 FORBIDDEN_SHELL_CMD_RE = re.compile(
     r"\b(pytest|vitest|jest|tsc|mypy|ruff|eslint|cargo\s+test|go\s+test|npm\s+(test|run\s+(test|lint|build|typecheck))|npx\s+(tsc|vitest|jest))\b",
     re.IGNORECASE,
 )
 SHELL_TOOL_NAMES = {"run_command", "send_command_input", "bash", "shell", "terminal", "execute_command"}
+PROGRESS_WRITE_TOOL_NAMES = {
+    "write_file",
+    "edit_file",
+    "replace_file_content",
+    "multi_replace_file_content",
+    "write_to_file",
+    "create_file",
+    "apply_patch",
+}
 
 
 class LockError(RuntimeError):
@@ -424,9 +439,14 @@ class AgyCliExecutor:
         task: TaskSpec,
         model: str,
         effort: str,
+        *,
+        attempt: int = 0,
     ) -> ExecutionResult:
-        """Run one stateless `agy` session via stdin with real-time stream-json watchdog."""
+        """Run one stateless `agy` session via stdin with progress-aware stream-json watchdog."""
         start = time.monotonic()
+        soft_tool_budget, hard_tool_ceiling, strict_tool_cap = compute_dynamic_tool_call_budget(
+            task, self.config, attempt=attempt
+        )
         raw_base_timeout = self.config.executor.timeout_seconds
         focus_paths = list(dict.fromkeys(task.allowed_write_files + task.create_new_files))
         if raw_base_timeout >= 60:
@@ -502,6 +522,10 @@ class AgyCliExecutor:
             raw_lines: list[str] = []
             tool_calls = 0
             seen_tool_steps: set[int] = set()
+            recent_tool_sigs: list[str] = []
+            last_write_tool_call = 0
+            grace_announced = False
+            soft_budget_disk_mtime = 0.0
             latest_usage = TokenUsage()
             verdict_override: str | None = None
             err_msg = ""
@@ -585,6 +609,15 @@ class AgyCliExecutor:
                         if isinstance(step_idx, int):
                             seen_tool_steps.add(step_idx)
                         tool_calls += 1
+                        if tool_name.lower() in PROGRESS_WRITE_TOOL_NAMES:
+                            last_write_tool_call = tool_calls
+                        try:
+                            args_sig = json.dumps(args, sort_keys=True, ensure_ascii=False)[:180]
+                        except TypeError:
+                            args_sig = str(args)[:180]
+                        recent_tool_sigs.append(f"{tool_name.lower()}:{args_sig}")
+                        if len(recent_tool_sigs) > 8:
+                            del recent_tool_sigs[:-8]
                         delta_buf.flush()
                         emit_trace(
                             self.on_trace,
@@ -603,14 +636,63 @@ class AgyCliExecutor:
                             verdict_override = "MAX_TURNS_EXCEEDED"
                             err_msg = f"Stream watchdog aborted forbidden shell test/build command: {cmd_str}"
                             break
-                    if tool_calls > self.config.limits.max_tool_calls_per_attempt:
+                    if not strict_tool_cap and len(recent_tool_sigs) >= 5 and len(set(recent_tool_sigs[-5:])) == 1:
                         kill_process_tree(proc)
                         verdict_override = "MAX_TURNS_EXCEEDED"
                         err_msg = (
-                            f"Stream watchdog aborted: {tool_calls} tool calls > "
-                            f"limit {self.config.limits.max_tool_calls_per_attempt}"
+                            f"Stream watchdog aborted stuck loop: repeated identical tool call `{tool_name}` 5 times consecutively"
                         )
                         break
+                    if strict_tool_cap:
+                        if tool_calls > soft_tool_budget:
+                            kill_process_tree(proc)
+                            verdict_override = "MAX_TURNS_EXCEEDED"
+                            err_msg = (
+                                f"Stream watchdog aborted: {tool_calls} tool calls > "
+                                f"limit {soft_tool_budget}"
+                            )
+                            break
+                    elif tool_calls > soft_tool_budget:
+                        if soft_budget_disk_mtime == 0.0:
+                            soft_budget_disk_mtime = last_disk_mtime
+                        cur_disk_mtime = _latest_repo_activity_mtime(self.config.target_repo_path, focus_paths)
+                        if cur_disk_mtime > last_disk_mtime:
+                            last_disk_mtime = cur_disk_mtime
+                        making_progress = (
+                            (last_write_tool_call > 0 and (tool_calls - last_write_tool_call) <= 12)
+                            or (cur_disk_mtime > soft_budget_disk_mtime)
+                        )
+                        if tool_calls > hard_tool_ceiling:
+                            kill_process_tree(proc)
+                            verdict_override = "MAX_TURNS_EXCEEDED"
+                            err_msg = (
+                                f"Stream watchdog aborted: {tool_calls} tool calls > "
+                                f"adaptive ceiling {hard_tool_ceiling} (soft budget {soft_tool_budget})"
+                            )
+                            break
+                        if not making_progress and (tool_calls - soft_tool_budget) >= 12:
+                            kill_process_tree(proc)
+                            verdict_override = "MAX_TURNS_EXCEEDED"
+                            err_msg = (
+                                f"Stream watchdog aborted: {tool_calls} tool calls > "
+                                f"adaptive budget {soft_tool_budget} with no recent file progress"
+                            )
+                            break
+                        if making_progress and not grace_announced:
+                            grace_announced = True
+                            emit_trace(
+                                self.on_trace,
+                                phase="executor",
+                                kind="status",
+                                title="Adaptive Watchdog Grace",
+                                content=(
+                                    f"[{task.task_id}] Đang tiến triển thực tế trên đĩa ({tool_calls}/{soft_tool_budget} tool calls) "
+                                    f"→ tự động nới nhịp linh hoạt tối đa tới {hard_tool_ceiling} tool calls để Antigravity hoàn tất trọn vẹn."
+                                ),
+                                task_id=task.task_id,
+                                model=used_model,
+                                effort=effort,
+                            )
 
             proc.wait(timeout=5)
             delta_buf.flush()

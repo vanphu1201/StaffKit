@@ -383,6 +383,13 @@ class Orchestrator:
             exec_res: ExecutionResult | None = None
             for _dyn in range(3):
                 compact_diff = guard.get_compact_diff(task.allowed_write_files) if attempt > 0 else ""
+                if attempt > 0 and not compact_diff and last_verdict in ("MAX_TURNS_EXCEEDED", "TIMEOUT"):
+                    tracked_ch, untracked_ch = guard.get_changed_files()
+                    partial_files = tracked_ch + untracked_ch
+                    if partial_files:
+                        compact_diff = "# Files already modified/created on disk:\n" + "\n".join(
+                            f"- {p}" for p in partial_files[:15]
+                        )
 
                 try:
                     prompt, est_tok = compiler.compile(
@@ -400,7 +407,10 @@ class Orchestrator:
                     return False, False, None
 
                 self._emit("info", f"[{task.task_id}] Executing prompt (~{est_tok} tokens)...")
-                exec_res = executor.execute(prompt, task, model, effort)
+                if isinstance(executor, AgyCliExecutor):
+                    exec_res = executor.execute(prompt, task, model, effort, attempt=attempt)
+                else:
+                    exec_res = executor.execute(prompt, task, model, effort)
                 task_tokens += exec_res.usage.total_tokens
 
                 dyn_questions = _extract_need_user_input(exec_res.raw_output)
@@ -763,6 +773,7 @@ class Orchestrator:
             readonly_context_files=located.readonly_files,
             protected_test_files=located.protected_tests,
             strict_scope=False,
+            execution_profile="investigate_fix",
             verify_commands=list(failed_commands),
         )
         self._emit("warn", f"[FINAL_GATE] Auto-spawning `{repair_task.task_id}` on {combined_targets}...")

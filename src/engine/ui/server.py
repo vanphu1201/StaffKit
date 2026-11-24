@@ -948,6 +948,11 @@ class DesktopAppController:
                 self.emit_log("warn", "Yêu cầu cần làm rõ thêm trước khi sửa code.")
                 return
 
+            # Quick Update / Bugfix always runs in Investigate & Fix mode (empowered diagnostics + adaptive limits)
+            for t in plan_res.tasks:
+                t.execution_profile = "investigate_fix"
+                db.upsert_task(t)
+
             verifier = Verifier(cfg, guard)
             compiler = PromptCompiler(cfg)
             orch = Orchestrator(
