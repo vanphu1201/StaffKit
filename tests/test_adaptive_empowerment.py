@@ -379,3 +379,21 @@ def test_ui_attachments_dynamic_model_constitution_and_metrics(tmp_path: Path) -
     assert "Luôn test thật" in insights["constitution_md"]
     assert "GET /health" in insights["contracts_md"]
     assert "duration_sec" in c_res.json()["summary"]
+
+    # 5. Project Briefing (0-token) & Persistent traces.jsonl survive UI restart
+    assert "btnQuickFixInterview" in html_res.text
+    assert "rightTabBtnMap" in html_res.text
+    assert "toggleTraceExpand" in html_res.text
+    briefing = insights["project_briefing"]
+    assert briefing is not None
+    assert briefing["project_name"] == "demo_repo"
+    assert "demo_repo" in briefing["copyable_context"]
+
+    ctrl = app.state.controller
+    ctrl.emit_trace({"phase": "executor", "kind": "prompt_sent", "title": "Test Trace Persist", "content": "Full prompt body"})
+    assert (repo / ".auto-engine" / "traces.jsonl").is_file()
+
+    # Fresh app instance reloads persisted traces automatically
+    client2 = TestClient(create_ui_app(cfg_path))
+    st2 = client2.get("/api/state").json()
+    assert any(t.get("title") == "Test Trace Persist" for t in st2["traces"])

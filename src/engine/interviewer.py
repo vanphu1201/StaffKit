@@ -216,6 +216,7 @@ class ProductInterviewer:
         selected_suggestions: list[str] | None = None,
         user_notes: str = "",
         attachments: list[str] | None = None,
+        brownfield_context: str = "",
         round_number: int = 1,
     ) -> InterviewOutput:
         """Adaptive multi-round elicitation (BMAD + Superpowers brainstorming): scales depth by complexity & offers suggestions."""
@@ -228,6 +229,13 @@ class ProductInterviewer:
         bp_lines = "\n".join(f"  - `{bp.id}`: {bp.label} — {bp.description}" for bp in blueprints)
 
         history_section = ""
+        if brownfield_context.strip():
+            history_section += (
+                "\n=== NGỮ CẢNH DỰ ÁN HIỆN CÓ (NÂNG CẤP / SỬA LỖI TRÊN SẢN PHẨM ĐANG CHẠY) ===\n"
+                "Hãy đọc kỹ cấu trúc & hợp đồng hiện có dưới đây để đặt câu hỏi SÁT THỰC TẾ DỰ ÁN "
+                "(không hỏi lại những thứ dự án đã có sẵn, và chỉ ra rõ điểm nào có nguy cơ xung đột với tính năng cũ):\n"
+                f"{brownfield_context.strip()[:3500]}\n"
+            )
         if previous_qa or selected_suggestions or user_notes.strip():
             hist_parts: list[str] = [f"\n=== NGỮ CẢNH ĐÃ TRAO ĐỔI (VÒNG 1..{max(1, round_number - 1)}) ==="]
             if previous_qa:

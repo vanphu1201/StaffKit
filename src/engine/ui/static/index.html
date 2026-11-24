@@ -406,10 +406,37 @@
       white-space: pre-wrap;
       word-break: break-word;
       color: #cbd5e1;
-      max-height: 150px;
-      overflow-y: auto;
+      max-height: 120px;
+      overflow: hidden;
       margin: 0;
     }
+    .trace-item.expanded .trace-content {
+      max-height: none;
+      overflow: visible;
+    }
+    .trace-toggle {
+      font-size: 11px;
+      color: #60a5fa;
+      cursor: pointer;
+      margin-top: 4px;
+      display: inline-block;
+    }
+    .brief-box {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      height: 430px;
+      overflow-y: auto;
+      padding-right: 4px;
+      font-size: 12.5px;
+    }
+    .brief-sec {
+      background: #0f172a;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+    .brief-sec h4 { margin: 0 0 6px; font-size: 12.5px; color: #93c5fd; }
 
     /* Slide-over Drawer for Constitution & Contracts */
     .drawer-backdrop {
@@ -725,7 +752,33 @@
           </div>
 
           <div class="row" style="justify-content:flex-end; margin-top:12px;">
+            <button class="btn" id="btnQuickFixInterview" style="border-color:rgba(96,165,250,.55); color:#93c5fd;" onclick="submitQuickFixInterview(false)">💬 Hỏi làm rõ trước khi sửa</button>
             <button class="btn primary" id="btnWizQuickUpdate" onclick="submitWizardQuickUpdate()">✨ Gửi Antigravity Sửa ngay</button>
+          </div>
+        </div>
+
+        <!-- PHỎNG VẤN LÀM RÕ TRƯỚC KHI SỬA (BROWNFIELD MULTI-ROUND) -->
+        <div id="quickFixInterviewCard" class="card" style="display:none; margin-top:14px; border-color:rgba(59,130,246,.45);">
+          <div class="card-hdr">
+            <h3>💬 Làm rõ yêu cầu trên dự án hiện tại</h3>
+            <div class="row">
+              <span class="pill" id="qfRoundPill">Vòng 1</span>
+              <span class="pill status-idle" id="qfClarityPill">Độ rõ ràng: 70%</span>
+            </div>
+          </div>
+          <p id="qfSummaryVi" style="color:#93c5fd; margin:0 0 10px;"></p>
+          <div id="qfQuestionsList" style="display:flex; flex-direction:column; gap:10px;"></div>
+          <div id="qfSuggestionsWrap" style="display:none; margin-top:12px; padding:10px 12px; border:1px solid rgba(56,189,248,.35); border-radius:9px; background:rgba(14,165,233,.06);">
+            <div style="font-weight:700; color:#7dd3fc; margin-bottom:6px;">✨ Gợi ý nâng tầm / phòng tránh lỗi kèm theo:</div>
+            <div id="qfSuggestionsList" style="display:flex; flex-direction:column; gap:6px;"></div>
+          </div>
+          <textarea id="qfUserNotesInput" rows="2" style="margin-top:10px;" placeholder="Ghi chú thêm cho lần sửa này (tùy chọn)..."></textarea>
+          <div class="row" style="justify-content:space-between; margin-top:12px;">
+            <button class="btn sm" onclick="cancelQuickFixInterview()">✕ Đóng hỏi đáp</button>
+            <div class="row">
+              <button class="btn sm" id="btnQfFollowup" style="border-color:rgba(96,165,250,.55); color:#93c5fd;" onclick="submitQuickFixInterview(true)">🔍 Hỏi sâu thêm</button>
+              <button class="btn success sm" id="btnQfApply" onclick="submitQuickFixApply()">✅ Đã đủ ý — Thực hiện sửa ngay</button>
+            </div>
           </div>
         </div>
       </div>
@@ -756,23 +809,32 @@
         </div>
       </div>
 
-      <!-- TƯƠNG TÁC TRỰC TIẾP HỆ THỐNG <-> ANTIGRAVITY -->
+      <!-- TƯƠNG TÁC TRỰC TIẾP & HIỂU DỰ ÁN (CHỐNG ĐIỂM MÙ) -->
       <div class="card" style="flex:1; display:flex; flex-direction:column;">
         <div class="card-hdr">
-          <h3>🤖 Tương tác trực tiếp Hệ thống ↔ Antigravity</h3>
-          <div class="row">
+          <div class="tab-bar">
+            <button class="tab-btn active" id="rightTabBtnTrace" onclick="switchRightTab('trace')" style="padding:5px 10px; font-size:12px;">🤖 Tương tác trực tiếp</button>
+            <button class="tab-btn" id="rightTabBtnMap" onclick="switchRightTab('map')" style="padding:5px 10px; font-size:12px;">🗺️ Hiểu dự án &amp; Đã làm gì</button>
+          </div>
+          <div class="row" id="traceControlsRow">
             <select id="traceFilter" style="width:auto; padding:4px 8px; font-size:12px;" onchange="renderTraces()">
               <option value="all">Tất cả</option>
-              <option value="tools">Chỉ Tool calls &amp; Kết quả</option>
-              <option value="prompts">Chỉ Prompt gửi đi</option>
+              <option value="chat">Prompt &amp; Giải thích</option>
+              <option value="tools">Tool calls &amp; Kiểm tra</option>
             </select>
             <button class="btn sm" onclick="clearTraceView()">Xóa màn hình</button>
+          </div>
+          <div class="row" id="mapControlsRow" style="display:none;">
+            <button class="btn sm" onclick="copyProjectContext()">📋 Copy ngữ cảnh dự án</button>
           </div>
         </div>
         <div id="traceStreamBox" class="trace-box">
           <div style="color:var(--muted); font-size:12.5px; text-align:center; padding:24px 0;">
-            Luồng tương tác real-time (Prompt, Tool calls, Đọc ảnh/tài liệu, Verify) sẽ hiển thị tại đây.
+            Luồng tương tác real-time (được lưu bền vững vào dự án — bấm vào từng mục để đọc toàn bộ nội dung).
           </div>
+        </div>
+        <div id="projectMapBox" class="brief-box" style="display:none;">
+          <div style="color:var(--muted); text-align:center; padding:24px 0;">Đang đọc tổng quan dự án...</div>
         </div>
       </div>
     </div>
@@ -809,8 +871,12 @@
     let latestState = {};
     let localWizardStep = 1;
     let activeWorkTab = "create";
+    let activeRightTab = "trace";
     let wizardAnswers = {};
+    let quickFixAnswers = {};
     let traceItems = [];
+    let lastLoadedTraceRepo = "";
+    const expandedTraceSeqs = new Set();
     let currentAttachTarget = "idea";
     const attachmentsByBox = { idea: [], notes: [], quickfix: [], hitl: [] };
     let customModelMode = false;
@@ -856,6 +922,27 @@
       document.getElementById("panelQuickFix").style.display = tab === "quickfix" ? "block" : "none";
       document.getElementById("tabBtnCreate").classList.toggle("active", tab === "create");
       document.getElementById("tabBtnQuickFix").classList.toggle("active", tab === "quickfix");
+    }
+
+    function switchRightTab(tab) {
+      activeRightTab = tab;
+      document.getElementById("traceStreamBox").style.display = tab === "trace" ? "flex" : "none";
+      document.getElementById("projectMapBox").style.display = tab === "map" ? "flex" : "none";
+      document.getElementById("traceControlsRow").style.display = tab === "trace" ? "flex" : "none";
+      document.getElementById("mapControlsRow").style.display = tab === "map" ? "flex" : "none";
+      document.getElementById("rightTabBtnTrace").classList.toggle("active", tab === "trace");
+      document.getElementById("rightTabBtnMap").classList.toggle("active", tab === "map");
+    }
+
+    async function copyProjectContext() {
+      const ctx = latestState.engine_insights && latestState.engine_insights.project_briefing && latestState.engine_insights.project_briefing.copyable_context;
+      if (!ctx) return showToast("Chưa có ngữ cảnh dự án.");
+      try {
+        await navigator.clipboard.writeText(ctx);
+        showToast("Đã copy toàn bộ ngữ cảnh dự án vào clipboard!");
+      } catch (_) {
+        showToast("Không copy tự động được.");
+      }
     }
 
     function goWizardStep(step) {
@@ -1224,6 +1311,72 @@
       } catch (e) { showToast(e.message); }
     }
 
+    function selectQfOpt(btn, qIdx, oIdx) {
+      const qs = (latestState.wizard && latestState.wizard.quickfix && latestState.wizard.quickfix.interview && latestState.wizard.quickfix.interview.questions) || [];
+      const q = qs[qIdx];
+      if (!q) return;
+      const val = (q.options || [])[oIdx] || "";
+      quickFixAnswers[q.question] = val;
+      const card = btn.closest(".q-card");
+      if (card) {
+        card.querySelectorAll(".opt-btn").forEach(b => b.classList.remove("selected"));
+        btn.classList.add("selected");
+        const inp = card.querySelector("input[type='text']");
+        if (inp) inp.value = val;
+      }
+    }
+
+    function updateQfInput(qIdx, val) {
+      const qs = (latestState.wizard && latestState.wizard.quickfix && latestState.wizard.quickfix.interview && latestState.wizard.quickfix.interview.questions) || [];
+      const q = qs[qIdx];
+      if (q) quickFixAnswers[q.question] = val;
+    }
+
+    async function submitQuickFixInterview(isFollowup) {
+      const reqText = document.getElementById("wizQuickUpdateInput").value.trim();
+      if (!isFollowup && !reqText) return showToast("Vui lòng nhập yêu cầu muốn sửa hoặc thêm tính năng trước.");
+      const selectedSuggestions = Array.from(document.querySelectorAll(".qf-sugg-cb:checked")).map(el => el.value);
+      const userNotes = (document.getElementById("qfUserNotesInput")?.value || "").trim();
+      const atts = attachmentsByBox.quickfix.map(a => a.path);
+      try {
+        await api("/api/wizard/quick-update/interview", "POST", {
+          request_text: reqText,
+          target_dir: document.getElementById("quickFixRepoInput").value.trim(),
+          selected_model: document.getElementById("modelSelect").value,
+          attachments: atts,
+          answers: isFollowup ? quickFixAnswers : {},
+          selected_suggestions: isFollowup ? selectedSuggestions : [],
+          user_notes: isFollowup ? userNotes : "",
+          is_followup: isFollowup,
+        });
+        if (isFollowup) document.getElementById("qfUserNotesInput").value = "";
+        showToast(isFollowup ? "Đang đào sâu thêm câu hỏi..." : "Đang đọc ngữ cảnh dự án & tạo câu hỏi làm rõ...");
+        await refreshState();
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function submitQuickFixApply() {
+      const selectedSuggestions = Array.from(document.querySelectorAll(".qf-sugg-cb:checked")).map(el => el.value);
+      const userNotes = (document.getElementById("qfUserNotesInput")?.value || "").trim();
+      const atts = attachmentsByBox.quickfix.map(a => a.path);
+      try {
+        await api("/api/wizard/quick-update/apply-clarified", "POST", {
+          answers: quickFixAnswers,
+          selected_suggestions: selectedSuggestions,
+          user_notes: userNotes,
+          attachments: atts,
+          selected_model: document.getElementById("modelSelect").value,
+        });
+        document.getElementById("quickFixInterviewCard").style.display = "none";
+        showToast("Đã tổng hợp toàn bộ câu trả lời — Antigravity đang thực hiện sửa!");
+        await refreshState();
+      } catch (e) { showToast(e.message); }
+    }
+
+    function cancelQuickFixInterview() {
+      document.getElementById("quickFixInterviewCard").style.display = "none";
+    }
+
     /* ===== HITL (HỎI LẠI NGƯỜI DÙNG) ===== */
     async function submitHitlAnswers() {
       const inputs = Array.from(document.querySelectorAll(".hitl-ans-input"));
@@ -1278,30 +1431,92 @@
     }
 
     /* ===== RENDERING ===== */
+    function _traceLabel(it) {
+      const k = it.kind || "";
+      if (k === "prompt_sent") return "📤 " + (it.title || "Prompt gửi Antigravity");
+      if (k === "tool_call") return "🛠️ Tool: " + (it.title || "");
+      if (k === "text_delta") return "💬 Antigravity giải thích";
+      if (k === "verify_result") return "🛡️ " + (it.title || "Kết quả kiểm tra");
+      if (k === "response_done") return "🏁 " + (it.title || "Hoàn tất lượt");
+      if (k === "user_question") return "❓ " + (it.title || "Hỏi người dùng");
+      if (k === "user_answer") return "💡 " + (it.title || "Người dùng trả lời");
+      return it.title || k || "Event";
+    }
+
+    function toggleTraceExpand(key) {
+      if (expandedTraceSeqs.has(key)) expandedTraceSeqs.delete(key);
+      else expandedTraceSeqs.add(key);
+      renderTraces();
+    }
+
     function renderTraces() {
       const box = document.getElementById("traceStreamBox");
       const filter = document.getElementById("traceFilter").value;
       const filtered = traceItems.filter(it => {
         if (filter === "tools") return it.kind === "tool_call" || it.kind === "verify_result" || it.kind === "response_done";
-        if (filter === "prompts") return it.kind === "prompt_sent";
+        if (filter === "chat") return it.kind === "prompt_sent" || it.kind === "text_delta" || it.kind === "user_question" || it.kind === "user_answer";
         return true;
       });
       if (!filtered.length) {
         box.innerHTML = `<div style="color:var(--muted); font-size:12.5px; text-align:center; padding:24px 0;">Chưa có tương tác nào phù hợp bộ lọc.</div>`;
         return;
       }
-      box.innerHTML = filtered.slice(-80).map(it => {
+      box.innerHTML = filtered.slice(-100).map((it, idx) => {
+        const key = String(it.seq || `${it.time}_${idx}`);
+        const isExp = expandedTraceSeqs.has(key);
         const cls = it.kind === "log" ? `kind-log-${it.level || "info"}` : `kind-${it.kind || "info"}`;
         const tag = it.task_id ? `[${it.task_id}] ` : "";
-        return `<div class="trace-item ${cls}">
+        const content = String(it.content || "");
+        const needsToggle = content.length > 260 || content.split("\n").length > 5;
+        return `<div class="trace-item ${cls} ${isExp ? "expanded" : ""}">
           <div class="trace-meta">
-            <b>${esc(tag + (it.title || it.kind || "Event"))}</b>
+            <b>${esc(tag + _traceLabel(it))}</b>
             <span>${esc(it.time || "")}</span>
           </div>
-          ${it.content ? `<pre class="trace-content">${esc(it.content)}</pre>` : ""}
+          ${content ? `<pre class="trace-content">${esc(content)}</pre>` : ""}
+          ${needsToggle ? `<span class="trace-toggle" onclick="toggleTraceExpand('${esc(key)}')">${isExp ? "▲ Thu gọn" : "▼ Xem đầy đủ toàn bộ nội dung"}</span>` : ""}
         </div>`;
       }).join("");
-      box.scrollTop = box.scrollHeight;
+      if (!expandedTraceSeqs.size) box.scrollTop = box.scrollHeight;
+    }
+
+    function renderProjectMap(s) {
+      const box = document.getElementById("projectMapBox");
+      const ins = s.engine_insights || {};
+      const b = ins.project_briefing;
+      if (!b) {
+        box.innerHTML = `<div style="color:var(--muted); text-align:center; padding:24px 0;">Hãy chọn một thư mục dự án để xem bản đồ &amp; nhật ký thay đổi.</div>`;
+        return;
+      }
+      const foldersHtml = (b.top_folders || []).map(f => `<span class="pill" style="font-size:11px;">📁 ${esc(f.folder)} (${f.files})</span>`).join(" ");
+      const commitsHtml = (b.recent_commits || []).length
+        ? (b.recent_commits || []).map(c =>
+            `<div style="padding:5px 0; border-bottom:1px solid var(--border);">
+              <div><code style="color:#67e8f9;">${esc(c.sha)}</code> <span style="color:var(--muted); font-size:11px;">${esc(c.date)}</span> — <b>${esc(c.subject)}</b></div>
+              ${c.stat ? `<div style="color:var(--muted); font-size:11px;">${esc(c.stat)}</div>` : ""}
+            </div>`
+          ).join("")
+        : `<div style="color:var(--muted);">Chưa có lịch sử commit.</div>`;
+      const handoffHtml = ins.handoff_md
+        ? `<pre class="trace-content" style="max-height:220px; overflow-y:auto;">${esc(ins.handoff_md)}</pre>`
+        : `<div style="color:var(--muted);">Chưa có bản bàn giao module (sẽ tự sinh sau khi hoàn thành task).</div>`;
+
+      box.innerHTML = `
+        <div class="brief-sec">
+          <h4>🧭 Tổng quan dự án hiện tại</h4>
+          <div><b>Dự án:</b> ${esc(b.project_name)} · <span class="pill" style="font-size:11px;">${esc(b.stack)}</span> · ~${b.total_files} tệp</div>
+          ${b.run_command ? `<div style="margin-top:4px;"><b>Lệnh chạy:</b> <code>${esc(b.run_command)}</code>${b.web_url ? ` → <b style="color:#86efac;">${esc(b.web_url)}</b>` : ""}</div>` : ""}
+          <div class="row" style="margin-top:8px;">${foldersHtml}</div>
+        </div>
+        <div class="brief-sec">
+          <h4>📜 Nhật ký những gì Hệ thống &amp; Antigravity đã làm</h4>
+          ${commitsHtml}
+        </div>
+        <div class="brief-sec">
+          <h4>🧠 Các module &amp; giao diện đã xây dựng (Handoff Memory)</h4>
+          ${handoffHtml}
+        </div>
+      `;
     }
 
     function clearTraceView() {
@@ -1331,7 +1546,7 @@
       wPill.textContent = busy ? (s.worker.message || s.worker.status) : "Sẵn sàng";
       wPill.className = "pill " + (busy ? "status-busy" : "status-idle");
       document.getElementById("btnStopSafe").disabled = !busy;
-      ["btnWizInterview", "btnWizAutopilot", "btnWizFollowupRound", "btnWizSynthesize", "btnWizBuild", "btnWizQuickUpdate"].forEach(id => {
+      ["btnWizInterview", "btnWizAutopilot", "btnWizFollowupRound", "btnWizSynthesize", "btnWizBuild", "btnWizQuickUpdate", "btnQuickFixInterview", "btnQfFollowup", "btnQfApply"].forEach(id => {
         const b = document.getElementById(id);
         if (b) b.disabled = busy;
       });
@@ -1500,13 +1715,66 @@
         gCard.style.display = "none";
       }
 
-      // Seed traces on initial load
-      if (!traceItems.length && ((s.traces && s.traces.length) || (s.logs && s.logs.length))) {
+      // Quick Fix inline multi-round interview
+      const qf = w.quickfix || {};
+      const qfCard = document.getElementById("quickFixInterviewCard");
+      if (qfCard && qf.interview) {
+        qfCard.style.display = "block";
+        document.getElementById("qfSummaryVi").textContent = qf.interview.product_summary_vi || "";
+        const qr = qf.interview.round_number || qf.round || 1;
+        document.getElementById("qfRoundPill").textContent = `Vòng ${qr}`;
+        document.getElementById("qfClarityPill").textContent = `Độ rõ ràng: ${qf.interview.clarity_score ?? 70}%${qf.interview.ready_to_build ? " (Sẵn sàng)" : ""}`;
+        const qfBox = document.getElementById("qfQuestionsList");
+        const qfSig = JSON.stringify({ r: qr, q: qf.interview.questions });
+        if (qfBox.dataset.renderedFor !== qfSig) {
+          qfBox.dataset.renderedFor = qfSig;
+          quickFixAnswers = {};
+          qfBox.innerHTML = (qf.interview.questions || []).map((q, qIdx) => {
+            quickFixAnswers[q.question] = q.default_answer || (q.options && q.options[0]) || "";
+            const opts = (q.options || []).map((opt, oIdx) => `<button type="button" class="opt-btn" onclick="selectQfOpt(this, ${qIdx}, ${oIdx})">${esc(opt)}</button>`).join(" ");
+            const cat = q.category ? `<span class="pill" style="font-size:11px; width:fit-content;">${esc(q.category)}</span>` : "";
+            const why = q.why_it_matters ? `<div style="font-size:12px; color:var(--muted);">${esc(q.why_it_matters)}</div>` : "";
+            return `<div class="q-card">
+              ${cat}
+              <div style="font-weight:600;">${esc(q.question)}</div>
+              ${why}
+              <div class="row">${opts}</div>
+              <input type="text" value="${esc(quickFixAnswers[q.question]).replace(/"/g, "&quot;")}" oninput="updateQfInput(${qIdx}, this.value)" placeholder="Hoặc nhập câu trả lời riêng..." />
+            </div>`;
+          }).join("");
+        }
+        const qfSuggs = qf.interview.proactive_suggestions || [];
+        const qfSWrap = document.getElementById("qfSuggestionsWrap");
+        const qfSList = document.getElementById("qfSuggestionsList");
+        if (qfSuggs.length) {
+          qfSWrap.style.display = "block";
+          const sSig = JSON.stringify({ r: qr, s: qfSuggs });
+          if (qfSList.dataset.renderedFor !== sSig) {
+            qfSList.dataset.renderedFor = sSig;
+            qfSList.innerHTML = qfSuggs.map(sg => {
+              const val = `${sg.title}${sg.benefit_vi ? " — " + sg.benefit_vi : ""}`;
+              return `<label style="display:flex; gap:8px; align-items:flex-start; cursor:pointer; font-size:12.5px;">
+                <input type="checkbox" class="qf-sugg-cb" value="${esc(val).replace(/"/g, "&quot;")}" ${sg.recommended ? "checked" : ""} style="margin-top:3px;" />
+                <span><b>${esc(sg.title)}</b> — <span style="color:var(--muted);">${esc(sg.benefit_vi || "")}</span></span>
+              </label>`;
+            }).join("");
+          }
+        } else {
+          qfSWrap.style.display = "none";
+        }
+      }
+
+      // Render Project Map (0-token briefing)
+      renderProjectMap(s);
+
+      // Seed or reload persisted traces when switching projects or on initial load
+      if ((repoPath && repoPath !== lastLoadedTraceRepo) || (!traceItems.length && ((s.traces && s.traces.length) || (s.logs && s.logs.length)))) {
+        lastLoadedTraceRepo = repoPath;
         const merged = [
           ...(s.traces || []),
           ...(s.logs || []).map(l => ({ kind: "log", level: l.level, title: l.level.toUpperCase(), content: l.message, time: l.time })),
         ];
-        traceItems = merged.slice(-100);
+        traceItems = merged.slice(-120);
         renderTraces();
       }
     }
@@ -1525,6 +1793,8 @@
           const item = JSON.parse(ev.data);
           if (item.event_type === "log") {
             traceItems.push({ kind: "log", level: item.level, title: (item.level || "info").toUpperCase(), content: item.message, time: item.time });
+          } else if (item.event_type === "trace" && item.trace) {
+            traceItems.push(item.trace);
           } else {
             traceItems.push(item);
           }

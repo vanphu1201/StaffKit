@@ -158,6 +158,15 @@ class DesktopAppController:
         self.wizard_done_message: str = ""
         self.worker_started_at: float | None = None
         self.last_quick_update_snapshot: str = ""
+        # Quick Fix multi-round clarification state
+        self.quickfix_request: str = ""
+        self.quickfix_target_dir: str = ""
+        self.quickfix_interview: dict[str, Any] | None = None
+        self.quickfix_qa_history: dict[str, str] = {}
+        self.quickfix_selected_suggestions: list[str] = []
+        self.quickfix_user_notes: str = ""
+        self.quickfix_attachments: list[str] = []
+        self.quickfix_round: int = 0
 
         self._logs: deque[dict[str, str]] = deque(maxlen=400)
         self._traces: deque[dict[str, Any]] = deque(maxlen=400)
@@ -208,11 +217,131 @@ class DesktopAppController:
             sse_payload = {"event_type": "trace", "trace": enriched}
             self._sse_backlog.append(sse_payload)
             subs = list(self._subscribers)
+        # Persist conversation trace to `.auto-engine/traces.jsonl` (0-token) so history survives restarts
+        try:
+            cfg = self.load_config()
+            if cfg.target_repo_path.is_dir():
+                cfg.auto_engine_dir.mkdir(parents=True, exist_ok=True)
+                trace_file = cfg.auto_engine_dir / "traces.jsonl"
+                persisted = dict(enriched)
+                if isinstance(persisted.get("content"), str) and len(persisted["content"]) > 16000:
+                    persisted["content"] = persisted["content"][:16000] + "\n... [truncated for log storage]"
+                with trace_file.open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(persisted, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
         for loop, q in subs:
             try:
                 loop.call_soon_threadsafe(q.put_nowait, sse_payload)
             except RuntimeError:
                 pass
+
+    def _load_persisted_traces(self, cfg: EngineConfig, limit: int = 120) -> list[dict[str, Any]]:
+        """Load persisted Engine <-> Antigravity interaction traces from `.auto-engine/traces.jsonl`."""
+        trace_file = cfg.auto_engine_dir / "traces.jsonl"
+        if not trace_file.is_file():
+            return []
+        try:
+            lines = trace_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return []
+        out: list[dict[str, Any]] = []
+        for raw in lines[-limit:]:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw)
+                if isinstance(obj, dict):
+                    out.append(obj)
+            except json.JSONDecodeError:
+                continue
+        return out
+
+    def _build_project_briefing(
+        self,
+        cfg: EngineConfig,
+        *,
+        detected_info: dict[str, Any],
+        constitution_md: str,
+        contracts_md: str,
+        handoff_md: str,
+        tasks_out: list[dict[str, Any]],
+        delivery_guide: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Build a 0-token, always-current plain-Vietnamese Project Map & Changelog so the user never flies blind."""
+        repo = cfg.target_repo_path
+        recent_commits: list[dict[str, Any]] = []
+        folder_counts: dict[str, int] = {}
+        total_files = 0
+        if repo.is_dir():
+            if (repo / ".git").exists():
+                proc = subprocess.run(
+                    ["git", "log", "-n", "12", "--date=short", "--pretty=format:%h|%ad|%s", "--shortstat"],
+                    cwd=str(repo),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )
+                cur_commit: dict[str, Any] | None = None
+                for ln in proc.stdout.splitlines():
+                    s = ln.strip()
+                    if not s:
+                        continue
+                    if "|" in s and len(s.split("|")) >= 3 and len(s.split("|")[0]) <= 12:
+                        sha, dt, subj = s.split("|", 2)
+                        cur_commit = {"sha": sha, "date": dt, "subject": subj, "stat": ""}
+                        recent_commits.append(cur_commit)
+                    elif cur_commit is not None and ("file changed" in s or "files changed" in s):
+                        cur_commit["stat"] = s
+            ignore_dirs = {".git", ".auto-engine", "node_modules", ".venv", "__pycache__", "dist", "build", "data"}
+            for root, dirs, files in os.walk(repo):
+                dirs[:] = [d for d in dirs if d not in ignore_dirs]
+                rel_root = Path(root).relative_to(repo).as_posix()
+                top = "." if rel_root == "." else rel_root.split("/")[0]
+                folder_counts[top] = folder_counts.get(top, 0) + len(files)
+                total_files += len(files)
+                if total_files > 400:
+                    break
+
+        top_folders = [
+            {"folder": k, "files": v}
+            for k, v in sorted(folder_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
+        ]
+        run_cmd = (delivery_guide or {}).get("run_command") or detected_info.get("preview_command") or ""
+        web_url = (delivery_guide or {}).get("web_url") or ""
+        summary_lines = [
+            f"Dự án: {repo.name} ({detected_info.get('stack', 'generic')})",
+            f"Thư mục: {repo.as_posix()}",
+            f"Số tệp mã nguồn: ~{total_files} tệp ({', '.join(f'{f['folder']}/({f['files']})' for f in top_folders[:6])})",
+        ]
+        if run_cmd:
+            summary_lines.append(f"Lệnh chạy: {run_cmd}" + (f" | URL: {web_url}" if web_url else ""))
+        if recent_commits:
+            summary_lines.append("Thay đổi gần nhất:")
+            for cm in recent_commits[:6]:
+                summary_lines.append(f"- [{cm['sha']}] {cm['subject']}" + (f" ({cm['stat']})" if cm["stat"] else ""))
+        if handoff_md.strip():
+            summary_lines.append("\nTóm tắt các module đã xây dựng (handoff.md):\n" + handoff_md.strip()[:1200])
+        if contracts_md.strip():
+            summary_lines.append("\nHợp đồng kiến trúc (contracts.md):\n" + contracts_md.strip()[:1200])
+        if constitution_md.strip():
+            summary_lines.append("\nHiến pháp dự án (constitution.md):\n" + constitution_md.strip()[:1000])
+
+        return {
+            "project_name": repo.name,
+            "repo_path": repo.as_posix(),
+            "stack": detected_info.get("stack", "generic"),
+            "run_command": run_cmd,
+            "web_url": web_url,
+            "total_files": total_files,
+            "top_folders": top_folders,
+            "recent_commits": recent_commits,
+            "task_count": len(tasks_out),
+            "copyable_context": "\n".join(summary_lines),
+        }
 
     def request_user_input(self, task_id: str, title: str, questions: list[str]) -> dict[str, str] | None:
         """Pause worker and wait for the user to answer task-specific questions from the UI."""
@@ -369,7 +498,7 @@ class DesktopAppController:
             questions = list(self.clarifying_questions)
             pending_interaction = dict(self.pending_interaction) if self.pending_interaction else None
             logs = list(self._logs)
-            traces = list(self._traces)
+            mem_traces = list(self._traces)
             preview_cmd = self.wizard_preview_cmd or detected_info.get("preview_command", "")
             wizard = {
                 "step": self.wizard_step,
@@ -386,7 +515,17 @@ class DesktopAppController:
                 "preview_cmd": preview_cmd,
                 "done_message": self.wizard_done_message,
                 "can_undo": bool(self.last_quick_update_snapshot),
+                "quickfix": {
+                    "request": self.quickfix_request,
+                    "interview": self.quickfix_interview,
+                    "qa_history": dict(self.quickfix_qa_history),
+                    "selected_suggestions": list(self.quickfix_selected_suggestions),
+                    "round": self.quickfix_round,
+                },
             }
+
+        persisted_traces = self._load_persisted_traces(cfg, limit=120) if repo_exists else []
+        traces = mem_traces if len(mem_traces) >= len(persisted_traces) else persisted_traces
 
         delivery_guide: dict[str, Any] | None = None
         if repo_exists and summary.get("total_tasks", 0) > 0 and summary.get("counts", {}).get("DONE", 0) >= summary.get("total_tasks", 0):
@@ -394,6 +533,20 @@ class DesktopAppController:
                 delivery_guide = generate_nontech_delivery_guide(repo_dir, write_files=True)
             except Exception:
                 delivery_guide = None
+
+        project_briefing = (
+            self._build_project_briefing(
+                cfg,
+                detected_info=detected_info,
+                constitution_md=constitution_md,
+                contracts_md=contracts_md,
+                handoff_md=handoff_md,
+                tasks_out=tasks_out,
+                delivery_guide=delivery_guide,
+            )
+            if repo_exists
+            else None
+        )
 
         engine_insights = {
             "detected": detected_info,
@@ -403,6 +556,7 @@ class DesktopAppController:
             "custom_blueprint_yaml": custom_bp_yaml,
             "audit_report_md": audit_report_md,
             "delivery_guide": delivery_guide,
+            "project_briefing": project_briefing,
             "pillars": {
                 "locator_ast_brace": True,
                 "contract_first": bool(contracts_md.strip()),
@@ -1040,6 +1194,157 @@ class DesktopAppController:
 
         return self._start_worker("autopilot", "Đang chạy 1-Chạm Autopilot từ A-Z...", _job)
 
+    def start_quickfix_interview(
+        self,
+        *,
+        request_text: str = "",
+        target_dir: str = "",
+        selected_model: str = "",
+        attachments: list[str] | None = None,
+        answers: dict[str, str] | None = None,
+        selected_suggestions: list[str] | None = None,
+        user_notes: str = "",
+        is_followup: bool = False,
+    ) -> bool:
+        """Multi-round brownfield elicitation on an existing project before executing Quick Update."""
+        def _job() -> None:
+            cfg = self.load_config()
+            if selected_model.strip():
+                for tier_key in cfg.agy.tiers:
+                    cfg.agy.tiers[tier_key].model = selected_model.strip()
+            if target_dir.strip():
+                cfg.project.target_repo = Path(target_dir.strip()).expanduser().resolve().as_posix()
+                self.save_config(cfg.model_dump())
+
+            repo = cfg.target_repo_path
+            if not repo.is_dir():
+                self.emit_log("error", f"Thư mục dự án không tồn tại: {repo}")
+                return
+
+            det_stack, det_vc, det_fc, det_prev = detect_existing_stack(repo)
+            const_md = (cfg.auto_engine_dir / "constitution.md").read_text(encoding="utf-8", errors="replace") if (cfg.auto_engine_dir / "constitution.md").is_file() else ""
+            contr_md = (cfg.auto_engine_dir / "contracts.md").read_text(encoding="utf-8", errors="replace") if (cfg.auto_engine_dir / "contracts.md").is_file() else ""
+            handoff_md = (cfg.auto_engine_dir / "handoff.md").read_text(encoding="utf-8", errors="replace") if (cfg.auto_engine_dir / "handoff.md").is_file() else ""
+            briefing = self._build_project_briefing(
+                cfg,
+                detected_info={"stack": det_stack, "preview_command": det_prev},
+                constitution_md=const_md,
+                contracts_md=contr_md,
+                handoff_md=handoff_md,
+                tasks_out=[],
+                delivery_guide=None,
+            )
+
+            with self._lock:
+                if not is_followup:
+                    self.quickfix_request = request_text.strip()
+                    self.quickfix_target_dir = repo.as_posix()
+                    self.quickfix_interview = None
+                    self.quickfix_qa_history = {}
+                    self.quickfix_selected_suggestions = []
+                    self.quickfix_user_notes = ""
+                    self.quickfix_attachments = [str(a).strip() for a in (attachments or []) if str(a).strip()]
+                    self.quickfix_round = 1
+                else:
+                    for k, v in (answers or {}).items():
+                        if str(k).strip() and str(v).strip():
+                            self.quickfix_qa_history[str(k).strip()] = str(v).strip()
+                    self.quickfix_selected_suggestions = list(
+                        dict.fromkeys(
+                            self.quickfix_selected_suggestions
+                            + [str(s).strip() for s in (selected_suggestions or []) if str(s).strip()]
+                        )
+                    )
+                    if user_notes.strip():
+                        self.quickfix_user_notes = (
+                            f"{self.quickfix_user_notes}\n{user_notes.strip()}".strip()
+                            if self.quickfix_user_notes
+                            else user_notes.strip()
+                        )
+                    if attachments:
+                        self.quickfix_attachments = list(
+                            dict.fromkeys(self.quickfix_attachments + [str(a).strip() for a in attachments if str(a).strip()])
+                        )
+                    self.quickfix_round += 1
+
+                cur_req = self.quickfix_request
+                cur_round = self.quickfix_round
+                qa_snap = dict(self.quickfix_qa_history)
+                sugg_snap = list(self.quickfix_selected_suggestions)
+                notes_snap = self.quickfix_user_notes
+                att_snap = list(self.quickfix_attachments)
+
+            interviewer = ProductInterviewer(
+                cfg,
+                on_event=self.emit_log,
+                stop_event=self.stop_event,
+                on_trace=self.emit_trace,
+            )
+            out = interviewer.generate_interview(
+                cur_req,
+                stack_hint=det_stack,  # type: ignore[arg-type]
+                previous_qa=qa_snap,
+                selected_suggestions=sugg_snap,
+                user_notes=notes_snap,
+                attachments=att_snap,
+                brownfield_context=briefing["copyable_context"],
+                round_number=cur_round,
+            )
+            with self._lock:
+                self.quickfix_interview = out.model_dump()
+            self.emit_log(
+                "success",
+                f"💬 Đã phân tích yêu cầu nâng cấp Vòng {cur_round} (độ rõ ràng {out.clarity_score}%): {len(out.questions)} câu hỏi sát dự án `{repo.name}`.",
+            )
+
+        return self._start_worker("interviewing", "Đang đọc ngữ cảnh dự án & tạo câu hỏi làm rõ...", _job)
+
+    def start_quickfix_apply_clarified(
+        self,
+        *,
+        answers: dict[str, str] | None = None,
+        selected_suggestions: list[str] | None = None,
+        user_notes: str = "",
+        attachments: list[str] | None = None,
+        selected_model: str = "",
+    ) -> bool:
+        """Merge all clarified Q&A + chosen suggestions into a rich Quick Update and execute immediately."""
+        with self._lock:
+            merged_qa = dict(self.quickfix_qa_history)
+            for k, v in (answers or {}).items():
+                if str(k).strip() and str(v).strip():
+                    merged_qa[str(k).strip()] = str(v).strip()
+            merged_sugg = list(
+                dict.fromkeys(
+                    self.quickfix_selected_suggestions
+                    + [str(s).strip() for s in (selected_suggestions or []) if str(s).strip()]
+                )
+            )
+            combined_notes = self.quickfix_user_notes
+            if user_notes.strip():
+                combined_notes = f"{combined_notes}\n{user_notes.strip()}".strip() if combined_notes else user_notes.strip()
+            merged_atts = list(
+                dict.fromkeys(self.quickfix_attachments + [str(a).strip() for a in (attachments or []) if str(a).strip()])
+            )
+            base_req = self.quickfix_request
+            target_dir = self.quickfix_target_dir
+            self.quickfix_interview = None
+
+        parts = [base_req]
+        if merged_qa:
+            parts.append("## Chi tiết người dùng đã chốt qua phỏng vấn:\n" + "\n".join(f"- {k}: {v}" for k, v in merged_qa.items()))
+        if merged_sugg:
+            parts.append("## Gợi ý nâng tầm người dùng chọn tích hợp thêm:\n" + "\n".join(f"- {s}" for s in merged_sugg))
+        if combined_notes:
+            parts.append(f"## Ghi chú bổ sung:\n{combined_notes}")
+        enriched_req = "\n\n".join(p for p in parts if p.strip())
+        return self.start_wizard_quick_update(
+            request_text=enriched_req,
+            target_dir=target_dir,
+            selected_model=selected_model,
+            attachments=merged_atts,
+        )
+
     def start_wizard_quick_update(
         self,
         *,
@@ -1584,6 +1889,47 @@ def create_ui_app(config_path: Path) -> Starlette:
             return JSONResponse({"error": "Đang có tác vụ nền khác chạy."}, status_code=409)
         return JSONResponse({"started": True})
 
+    async def api_wizard_quick_update_interview(request: Request) -> JSONResponse:
+        body = await request.json()
+        is_followup = bool(body.get("is_followup", False))
+        req_txt = str(body.get("request_text", "")).strip()
+        if not is_followup and not req_txt:
+            return JSONResponse({"error": "Vui lòng nhập yêu cầu muốn nâng cấp hoặc sửa lỗi."}, status_code=400)
+        raw_atts = body.get("attachments")
+        atts = [str(x).strip() for x in raw_atts if str(x).strip()] if isinstance(raw_atts, list) else []
+        raw_sugg = body.get("selected_suggestions")
+        sugg = [str(x).strip() for x in raw_sugg if str(x).strip()] if isinstance(raw_sugg, list) else []
+        ok = controller.start_quickfix_interview(
+            request_text=req_txt,
+            target_dir=str(body.get("target_dir", "")),
+            selected_model=str(body.get("selected_model", "")),
+            attachments=atts,
+            answers=dict(body.get("answers") or {}),
+            selected_suggestions=sugg,
+            user_notes=str(body.get("user_notes", "")),
+            is_followup=is_followup,
+        )
+        if not ok:
+            return JSONResponse({"error": "Đang có tác vụ nền khác chạy."}, status_code=409)
+        return JSONResponse({"started": True})
+
+    async def api_wizard_quick_update_apply(request: Request) -> JSONResponse:
+        body = await request.json()
+        raw_atts = body.get("attachments")
+        atts = [str(x).strip() for x in raw_atts if str(x).strip()] if isinstance(raw_atts, list) else []
+        raw_sugg = body.get("selected_suggestions")
+        sugg = [str(x).strip() for x in raw_sugg if str(x).strip()] if isinstance(raw_sugg, list) else []
+        ok = controller.start_quickfix_apply_clarified(
+            answers=dict(body.get("answers") or {}),
+            selected_suggestions=sugg,
+            user_notes=str(body.get("user_notes", "")),
+            attachments=atts,
+            selected_model=str(body.get("selected_model", "")),
+        )
+        if not ok:
+            return JSONResponse({"error": "Đang có tác vụ nền khác chạy."}, status_code=409)
+        return JSONResponse({"started": True})
+
     async def api_wizard_quick_update(request: Request) -> JSONResponse:
         body = await request.json()
         req_txt = str(body.get("request_text", "")).strip()
@@ -1739,6 +2085,8 @@ def create_ui_app(config_path: Path) -> Starlette:
         Route("/api/wizard/build", api_wizard_build, methods=["POST"]),
         Route("/api/wizard/autopilot", api_wizard_autopilot, methods=["POST"]),
         Route("/api/wizard/quick-update", api_wizard_quick_update, methods=["POST"]),
+        Route("/api/wizard/quick-update/interview", api_wizard_quick_update_interview, methods=["POST"]),
+        Route("/api/wizard/quick-update/apply-clarified", api_wizard_quick_update_apply, methods=["POST"]),
         Route("/api/wizard/undo-last", api_wizard_undo_last, methods=["POST"]),
         Route("/api/wizard/retry-blocked", api_wizard_retry_blocked, methods=["POST"]),
         Route("/api/wizard/reset", api_wizard_reset, methods=["POST"]),
