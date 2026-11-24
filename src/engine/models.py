@@ -37,6 +37,13 @@ def normalize_posix_path(path_value: str) -> str:
     return cleaned
 
 
+def estimate_tokens(text: str) -> int:
+    """Fast 0-dependency token estimator (~4 chars/token) for prompt and schema budgeting."""
+    if not text:
+        return 0
+    return max(1, (len(text) + 3) // 4)
+
+
 def inline_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
     """Resolve all `#/$defs/...` `$ref` pointers inline so CLI validators need no external URI fetch."""
     defs: dict[str, Any] = copy.deepcopy(schema.get("$defs") or {})

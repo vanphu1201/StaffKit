@@ -5,8 +5,7 @@
       "args": [
         "-m",
         "engine.cli",
-        "serve-mcp",
-        "--ide-only"
+        "serve-mcp"
       ]
     }
   }

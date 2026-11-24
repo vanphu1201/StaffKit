@@ -1,52 +1,59 @@
-# Auto-Prompt Engine
+# Auto-Prompt Architect v2.0 — Antigravity IDE Native Plugin
 
-Bộ máy điều phối lập trình tự động tối ưu token và chống ảo giác cho **Antigravity (`agy` CLI / Python SDK / IDE)** theo kiến trúc 5 tầng (**Planner–Compiler–Executor–Verifier**).
+> **Bộ khung 0-token gắn trực tiếp vào Antigravity IDE** giúp biến ý tưởng mơ hồ thành sản phẩm chạy thật, gỡ lỗi tận gốc không báo PASS giả, và thẩm định / mở khóa nâng cấp dự án khi bị kẹt.
 
-Xem đặc tả kiến trúc chi tiết tại `auto_prompt_engine_architecture_implementation_spec.md`.
+*(Phiên bản App Studio headless cũ đã được lưu trữ an toàn tại git tag `v1.2-legacy-studio-archive`; nhánh `main` hiện tại tinh gọn 100% cho Antigravity IDE Native Plugin.)*
 
-## Cài đặt nhanh
+---
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-```
-
-Hoặc nếu đã cài `uv`:
+## Cài đặt nhanh (2 bước)
 
 ```bash
-uv sync --extra dev
+# 1. Cài package vào virtualenv cục bộ
+python -m venv .venv
+.venv/Scripts/python.exe -m pip install -e ".[dev]"   # Linux/macOS: .venv/bin/python -m pip install -e ".[dev]"
+
+# 2. Cài/đồng bộ plugin vào ~/.gemini/config/plugins/auto-prompt-architect
+.venv/Scripts/python.exe -m engine.cli install-plugin
 ```
 
-## Chạy bằng App Desktop (Khuyên dùng)
+Sau đó mở **Plugins Manager** trong Antigravity IDE để kiểm tra **Auto-Prompt Architect** đang ở trạng thái **Enabled** (nếu vừa nâng cấp từ bản cũ, tắt rồi bật lại công tắc 1 lần để nạp MCP server v2.0 mới).
 
-* **Cách 1 (1-click trên Windows):** Nhấp đúp vào file `AutoPromptEngine.bat`.
-* **Cách 2 (qua terminal):**
+---
 
-```powershell
-.\.venv\Scripts\engine.exe ui --config config.yaml
-```
+## 3 Chế độ làm việc (Skills tự động kích hoạt trong Antigravity IDE)
 
-Ứng dụng sẽ khởi động máy chủ nội bộ tại `127.0.0.1` và tự mở cửa sổ Desktop độc lập để bạn chọn thư mục dự án, nhập/mở PRD, lập kế hoạch, duyệt và theo dõi log chạy theo thời gian thực.
+1. **`brainstorm-to-product` (Ý tưởng mới / Tính năng lớn):**
+   - Phỏng vấn đa vòng linh hoạt theo độ phức tạp + Gợi ý chủ động các tính năng thực dụng + Lưu Hiến pháp (`constitution.md`) & Hợp đồng kiến trúc (`contracts.md`) trước khi code.
+2. **`deep-fix` (Gỡ lỗi tận gốc / Không báo PASS giả):**
+   - Nạp trí nhớ dự án -> Khoanh vùng 0-token bằng 1-hop Import/Export Graph + AST windows -> Snapshot Git an toàn -> Kiểm chứng hành vi thực tế (`verify_and_smoke`) -> Ghi nhớ bài học (`record_lesson`).
+3. **`audit-and-evolve` (Thẩm định sức khỏe dự án & Gỡ kẹt nâng cấp):**
+   - Chấm điểm 5 chiều trung thực bằng bằng chứng thực tế -> Săn lỗi ngầm -> Đề xuất lộ trình nâng cấp P0/P1/P2 tạo bước nhảy vọt -> Gợi ý hướng đi mới khi người dùng hết ý tưởng.
 
-## Quy trình sử dụng qua CLI
+---
 
-```powershell
-# 1. Kiểm tra công cụ sẵn sàng và tạo config.yaml
-engine init --check
-engine init --smoke-agy
+## 6 Công cụ MCP 0-token (`auto-prompt-architect`)
 
-# 2. Lập kế hoạch DAG từ PRD (hoặc import tasks.json)
-engine plan path/to/prd.md
+| Công cụ | Tác dụng |
+|---|---|
+| `load_project_memory` | Nạp `constitution.md`, `contracts.md`, `lessons.md`, `handoff.md` và **Cross-Project Global Playbook** (`~/.gemini/auto-prompt-playbooks/global_lessons.md`) trong 1 lần gọi. |
+| `locate_context` | Khoanh vùng file + **1-hop Import/Export Dependency Graph** (forward + reverse importers, ESM `.js`->`.ts`, `@/` alias) + cửa sổ AST + mở rộng từ khóa Việt→Anh. |
+| `save_project_spec` | Ghi và lưu bền vững Hiến pháp, Hợp đồng kiến trúc, Handoff vào `.auto-engine/`. |
+| `record_lesson` | Ghi nhận bài học nguyên nhân gốc để các phiên sau không tái phạm; hỗ trợ `global_playbook=True` để dùng chung mọi dự án. |
+| `verify_and_smoke` | Chạy build/test + kiểm chứng endpoint HTTP thực tế (`smoke_url`), chống báo PASS giả. |
+| `snapshot_or_undo` | Tạo snapshot Git trước khi refactor lớn hoặc hoàn tác tức thì nếu xảy ra hồi quy. |
 
-# 3. Duyệt kế hoạch trước khi thực thi
-engine approve
+---
 
-# 4. Chạy vòng lặp tự động qua Antigravity (`agy -p`)
-engine run
+## Lệnh CLI kiểm chứng sức khỏe plugin (0 token)
 
-# 5. Nếu gián đoạn giữa chừng, khôi phục sạch và chạy tiếp
-engine resume
+```bash
+# 1. Đo bảng điểm sức khỏe: overhead token, latency MCP, Recall commit replay, telemetry
+.venv/Scripts/python.exe -m engine.cli plugin-health --repo .
 
-# 6. Xem thống kê token / pass-fail
-engine report
+# 2. Chạy bộ Micro-Eval 3 kịch bản end-to-end (0 token, < 3 giây)
+.venv/Scripts/python.exe -m engine.cli plugin-eval
+
+# 3. Chạy toàn bộ unit & integration tests
+.venv/Scripts/pytest.exe -q
 ```

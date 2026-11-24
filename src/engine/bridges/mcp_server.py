@@ -1,9 +1,10 @@
-"""Mode B (Primary IDE Amplifier): FastMCP Server powering Antigravity IDE with 0-token Context, Memory, Spec & Verification."""
+"""Auto-Prompt Architect v2.0.0 — Pure 6-Tool 0-Token FastMCP Server for Antigravity IDE."""
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -13,20 +14,20 @@ from pathlib import Path
 from fastmcp import FastMCP
 
 from engine.bootstrapper import detect_existing_stack, generate_nontech_delivery_guide
-from engine.compiler import PromptCompiler
-from engine.database import StateDB
 from engine.git_guard import GitGuard
 from engine.indexer import extract_fast_skeleton, extract_symbol_windows, list_real_files, locate_relevant_files
-from engine.models import EngineConfig, ProjectConfig, TokenUsage
+from engine.models import EngineConfig, ProjectConfig
 from engine.verifier import Verifier, run_web_runtime_smoke
 
-# Ensure stdio MCP transport remains completely clean by routing all logs to stderr.
 logging.basicConfig(
     level=logging.INFO,
     stream=sys.stderr,
-    format="[auto-prompt-engine] %(levelname)s: %(message)s",
+    format="[auto-prompt-architect] %(levelname)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+GLOBAL_PLAYBOOK_DIR = Path.home() / ".gemini" / "auto-prompt-playbooks"
+GLOBAL_LESSONS_PATH = GLOBAL_PLAYBOOK_DIR / "global_lessons.md"
 
 
 def _resolve_repo_path(repo_path: str, fallback: Path) -> Path:
@@ -38,7 +39,7 @@ def _resolve_repo_path(repo_path: str, fallback: Path) -> Path:
     return fallback.resolve()
 
 
-def _read_optional(path: Path, max_chars: int = 4000) -> str:
+def _read_optional(path: Path, max_chars: int = 3500) -> str:
     if not path.is_file():
         return ""
     try:
@@ -46,6 +47,26 @@ def _read_optional(path: Path, max_chars: int = 4000) -> str:
         return txt[:max_chars] + ("\n... [trimmed]" if len(txt) > max_chars else "")
     except OSError:
         return ""
+
+
+def _append_markdown_entry(file_path: Path, header_prefix: str, entry: str, *, max_entries: int = 12) -> int:
+    """Append or replace a `### <title>` block in a markdown memory file cleanly."""
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    blocks: list[str] = []
+    if file_path.is_file():
+        raw = file_path.read_text(encoding="utf-8", errors="replace").strip()
+        if raw:
+            for idx, b in enumerate(raw.split("\n### ")):
+                bc = b.strip()
+                if not bc:
+                    continue
+                hdr = bc if (idx == 0 and bc.startswith("### ")) else f"### {bc}"
+                if hdr != entry and not hdr.startswith(header_prefix):
+                    blocks.append(hdr)
+    blocks.append(entry)
+    kept = blocks[-max_entries:]
+    file_path.write_text("\n\n".join(kept) + "\n", encoding="utf-8")
+    return len(kept)
 
 
 def _record_telemetry(repo: Path, tool_name: str, started: float, output_text: str, ok: bool = True) -> None:
@@ -66,22 +87,19 @@ def _record_telemetry(repo: Path, tool_name: str, started: float, output_text: s
         pass
 
 
-def create_mcp_server(config_path: Path | None = None, *, ide_only: bool = False) -> FastMCP:
-    """Instantiate FastMCP server exposing 6 lean 0-token IDE Amplifier tools (+ optional legacy Sprint tools)."""
+def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: Path | None = None) -> FastMCP:
+    """Instantiate pure 6-tool 0-token FastMCP server for Antigravity IDE."""
     if config_path is not None and config_path.is_file():
         config = EngineConfig.load(config_path)
     else:
         config = EngineConfig(project=ProjectConfig(target_repo=str(Path.cwd())))
 
+    playbook_path = global_playbook_path or GLOBAL_LESSONS_PATH
     mcp = FastMCP("auto-prompt-architect")
-
-    # =========================================================================
-    # TIER 1: 0-TOKEN ANTIGRAVITY IDE AMPLIFIER TOOLS (Work on ANY repo_path)
-    # =========================================================================
 
     @mcp.tool()
     def load_project_memory(repo_path: str = "") -> str:
-        """0-token X-ray briefing of a project: stack, verify/run commands, constitution, contracts, lessons, handoff & recent git log."""
+        """0-token X-ray briefing: stack, verify/preview commands, constitution, contracts, lessons, handoff, global playbook & recent git log."""
         t0 = time.monotonic()
         repo = _resolve_repo_path(repo_path, config.target_repo_path)
         auto_dir = repo / ".auto-engine"
@@ -100,36 +118,36 @@ def create_mcp_server(config_path: Path | None = None, *, ide_only: bool = False
             )
             commits = proc.stdout.strip()
 
-        constitution = _read_optional(auto_dir / "constitution.md", 2500)
-        contracts = _read_optional(auto_dir / "contracts.md", 2500)
-        lessons = _read_optional(auto_dir / "lessons.md", 2500)
-        handoff = _read_optional(auto_dir / "handoff.md", 2000)
+        constitution = _read_optional(auto_dir / "constitution.md", 2200)
+        contracts = _read_optional(auto_dir / "contracts.md", 2200)
+        lessons = _read_optional(auto_dir / "lessons.md", 2200)
+        handoff = _read_optional(auto_dir / "handoff.md", 1800)
+        global_lessons = _read_optional(playbook_path, 1600)
 
         sections = [
             f"# PROJECT MEMORY BRIEFING: `{repo.name}`",
-            f"- Path: `{repo.as_posix()}`",
-            f"- Detected Stack: `{det_stack}`",
-            f"- Verify Commands: `{det_vc}` | Final Gate: `{det_fc}` | Preview: `{det_prev or '(auto)'}`",
+            f"- Path: `{repo.as_posix()}` | Stack: `{det_stack}`",
+            f"- Verify: `{det_vc}` | Final Gate: `{det_fc}` | Preview: `{det_prev or '(auto)'}`",
         ]
         if commits:
             sections.append(f"\n## Recent Git Commits\n{commits}")
         if constitution:
-            sections.append(f"\n## Project Constitution (`.auto-engine/constitution.md`)\n{constitution}")
+            sections.append(f"\n## Project Constitution\n{constitution}")
         if contracts:
-            sections.append(f"\n## Architecture Contract (`.auto-engine/contracts.md`)\n{contracts}")
+            sections.append(f"\n## Architecture Contract\n{contracts}")
         if lessons:
-            sections.append(f"\n## Lessons Learned & Verified Discoveries (`.auto-engine/lessons.md`)\n{lessons}")
+            sections.append(f"\n## Project Lessons Learned\n{lessons}")
+        if global_lessons:
+            sections.append(f"\n## Cross-Project Global Playbook\n{global_lessons}")
         if handoff:
-            sections.append(f"\n## Module Handoff Memory (`.auto-engine/handoff.md`)\n{handoff}")
+            sections.append(f"\n## Module Handoff Memory\n{handoff}")
         out = "\n".join(sections)
         _record_telemetry(repo, "load_project_memory", t0, out, ok=True)
         return out
 
     @mcp.tool()
     def locate_context(query: str, repo_path: str = "", max_files: int = 5) -> str:
-        """0-token AST & brace-block locator: returns the most relevant starting files, signatures & symbol windows to save exploration tokens."""
-        import os
-
+        """0-token AST + VI-EN + 1-hop import-graph locator: returns relevant starting files, signatures & symbol windows."""
         t0 = time.monotonic()
         repo = _resolve_repo_path(repo_path, config.target_repo_path)
         try:
@@ -146,9 +164,9 @@ def create_mcp_server(config_path: Path | None = None, *, ide_only: bool = False
 
         located = locate_relevant_files(query, real_files, repo, max_targets=max(1, min(10, max_files)))
         lines = [
-            f"# 0-TOKEN CONTEXT LOCATOR (`{repo.name}` — {len(real_files)} tracked files)",
+            f"# 0-TOKEN CONTEXT LOCATOR (`{repo.name}` — {len(real_files)} files)",
             f"- Suggested Starting Points: {located.target_files}",
-            f"- Readonly Context / Interfaces: {located.readonly_files}",
+            f"- Dependency / Interface Context: {located.readonly_files}",
             f"- Protected Test Files: {located.protected_tests[:10]}",
         ]
         for rel in located.target_files[:max_files]:
@@ -174,7 +192,8 @@ def create_mcp_server(config_path: Path | None = None, *, ide_only: bool = False
         prd_md: str = "",
         acceptance_criteria: list[str] | None = None,
     ) -> str:
-        """Persist agreed Brainstorm outputs (Constitution, Architecture Contract, OpenSpec PRD & AC-1..AC-N) to the repo."""
+        """Persist agreed Brainstorm outputs (Constitution, Architecture Contract, OpenSpec PRD & AC-1..AC-N)."""
+        t0 = time.monotonic()
         repo = _resolve_repo_path(repo_path, config.target_repo_path)
         auto_dir = repo / ".auto-engine"
         auto_dir.mkdir(parents=True, exist_ok=True)
@@ -212,7 +231,9 @@ def create_mcp_server(config_path: Path | None = None, *, ide_only: bool = False
         if (repo / ".git").exists():
             GitGuard(repo, ignore_artifacts=config.guards.ignore_artifacts).ensure_git_exclude()
 
-        return "SAVED_SPEC:\n" + "\n".join(f"- `{s}`" for s in saved) if saved else "NO_CONTENT_PROVIDED"
+        out = "SAVED_SPEC:\n" + "\n".join(f"- `{s}`" for s in saved) if saved else "NO_CONTENT_PROVIDED"
+        _record_telemetry(repo, "save_project_spec", t0, out, ok=bool(saved))
+        return out
 
     @mcp.tool()
     def record_lesson(
@@ -220,33 +241,27 @@ def create_mcp_server(config_path: Path | None = None, *, ide_only: bool = False
         summary: str,
         repo_path: str = "",
         touched_files: list[str] | None = None,
+        global_playbook: bool = False,
     ) -> str:
-        """Persist a verified root-cause discovery into `.auto-engine/lessons.md` and optionally refresh `.auto-engine/handoff.md` signatures (0-token)."""
+        """Persist verified root-cause discovery to `.auto-engine/lessons.md`, refresh `handoff.md`, and optionally save to Cross-Project Global Playbook."""
+        t0 = time.monotonic()
         repo = _resolve_repo_path(repo_path, config.target_repo_path)
         auto_dir = repo / ".auto-engine"
-        auto_dir.mkdir(parents=True, exist_ok=True)
         lessons_path = auto_dir / "lessons.md"
 
+        clean_title = title.strip()
         clean_lines = [ln.strip() for ln in summary.strip().splitlines() if ln.strip()][:6]
-        entry = f"### {title.strip()}\n" + "\n".join(f"- {ln.lstrip('-* ')}" for ln in clean_lines)
-        blocks: list[str] = []
-        if lessons_path.is_file():
-            raw = lessons_path.read_text(encoding="utf-8", errors="replace").strip()
-            if raw:
-                for idx, b in enumerate(raw.split("\n### ")):
-                    bc = b.strip()
-                    if not bc:
-                        continue
-                    hdr = bc if (idx == 0 and bc.startswith("### ")) else f"### {bc}"
-                    if hdr != entry:
-                        blocks.append(hdr)
-        blocks.append(entry)
-        lessons_path.write_text("\n\n".join(blocks[-12:]) + "\n", encoding="utf-8")
+        entry = f"### {clean_title}\n" + "\n".join(f"- {ln.lstrip('-* ')}" for ln in clean_lines)
+        cnt = _append_markdown_entry(lessons_path, f"### {clean_title}", entry, max_entries=12)
 
-        handoff_note = ""
+        notes = [f"RECORDED_LESSON -> `{lessons_path.as_posix()}` ({cnt} repo lessons)"]
+        if global_playbook:
+            g_cnt = _append_markdown_entry(playbook_path, f"### {clean_title}", entry, max_entries=20)
+            notes.append(f"+ saved to Global Playbook `{playbook_path.as_posix()}` ({g_cnt} universal lessons)")
+
         clean_touched = [str(f).strip().replace("\\", "/") for f in (touched_files or []) if str(f).strip()]
         if clean_touched:
-            h_lines = [f"### {title.strip()}", f"- Touched files: {', '.join(f'`{p}`' for p in clean_touched[:6])}"]
+            h_lines = [f"### {clean_title}", f"- Touched files: {', '.join(f'`{p}`' for p in clean_touched[:6])}"]
             for rel in clean_touched[:5]:
                 fp = repo / rel
                 if fp.is_file():
@@ -255,24 +270,12 @@ def create_mcp_server(config_path: Path | None = None, *, ide_only: bool = False
                         sigs = " | ".join(ln.strip() for ln in skel.splitlines()[:8] if ln.strip() and not ln.startswith("..."))
                         if sigs:
                             h_lines.append(f"- `{rel}` signatures: `{sigs[:380]}`")
-            h_entry = "\n".join(h_lines)
-            handoff_path = auto_dir / "handoff.md"
-            h_blocks: list[str] = []
-            if handoff_path.is_file():
-                raw_h = handoff_path.read_text(encoding="utf-8", errors="replace").strip()
-                if raw_h:
-                    for idx, b in enumerate(raw_h.split("\n### ")):
-                        bc = b.strip()
-                        if not bc:
-                            continue
-                        hdr = bc if (idx == 0 and bc.startswith("### ")) else f"### {bc}"
-                        if not hdr.startswith(f"### {title.strip()}"):
-                            h_blocks.append(hdr)
-            h_blocks.append(h_entry)
-            handoff_path.write_text("\n\n".join(h_blocks[-10:]) + "\n", encoding="utf-8")
-            handoff_note = f" + updated `{handoff_path.as_posix()}`"
+            _append_markdown_entry(auto_dir / "handoff.md", f"### {clean_title}", "\n".join(h_lines), max_entries=10)
+            notes.append(f"+ updated `{(auto_dir / 'handoff.md').as_posix()}`")
 
-        return f"RECORDED_LESSON -> `{lessons_path.as_posix()}` ({len(blocks[-12:])} lessons stored){handoff_note}"
+        out = " ".join(notes)
+        _record_telemetry(repo, "record_lesson", t0, out, ok=True)
+        return out
 
     @mcp.tool()
     def verify_and_smoke(
@@ -281,7 +284,7 @@ def create_mcp_server(config_path: Path | None = None, *, ide_only: bool = False
         run_smoke: bool = True,
         generate_delivery_pack: bool = True,
     ) -> str:
-        """Run 0-token independent verification (build/typecheck/tests + live Web runtime smoke + non-tech Delivery Pack)."""
+        """Run 0-token independent verification (build/typecheck/tests + live Web/Python runtime smoke + Non-Tech Delivery Pack)."""
         t0 = time.monotonic()
         repo = _resolve_repo_path(repo_path, config.target_repo_path)
         det_stack, det_vc, det_fc, _ = detect_existing_stack(repo)
@@ -302,7 +305,7 @@ def create_mcp_server(config_path: Path | None = None, *, ide_only: bool = False
         else:
             report.append("- Static/Test Gate: (no commands detected; pass `commands=[...]` to run specific checks)")
 
-        if all_ok and run_smoke and det_stack in ("web_react", "fullstack_web") and (repo / "package.json").is_file():
+        if all_ok and run_smoke and ((repo / "package.json").is_file() or (repo / "pyproject.toml").is_file()):
             smoke_ok, smoke_msg = run_web_runtime_smoke(repo)
             all_ok = all_ok and smoke_ok
             report.append(f"- Runtime Smoke Probe: **{'PASS' if smoke_ok else 'FAIL'}** — {smoke_msg}")
@@ -326,7 +329,8 @@ def create_mcp_server(config_path: Path | None = None, *, ide_only: bool = False
 
     @mcp.tool()
     def snapshot_or_undo(action: str = "snapshot", message: str = "", repo_path: str = "") -> str:
-        """Create a safe Git snapshot commit before major edits (`action='snapshot'`) or rollback to the previous snapshot (`action='undo'`)."""
+        """Create a safe Git snapshot commit before major edits (`action='snapshot'`) or rollback cleanly (`action='undo'`)."""
+        t0 = time.monotonic()
         repo = _resolve_repo_path(repo_path, config.target_repo_path)
         if not (repo / ".git").exists():
             return f"ERROR: `{repo.as_posix()}` is not a Git repository."
@@ -347,7 +351,9 @@ def create_mcp_server(config_path: Path | None = None, *, ide_only: bool = False
                 json.dumps({"sha": sha, "message": message.strip()}, indent=2),
                 encoding="utf-8",
             )
-            return f"SNAPSHOT_SAVED: `{sha[:8]}` ({len(dirty)} files committed)"
+            out = f"SNAPSHOT_SAVED: `{sha[:8]}` ({len(dirty)} files committed)"
+            _record_telemetry(repo, "snapshot_or_undo", t0, out, ok=True)
+            return out
 
         if act == "undo":
             snap_file = repo / ".auto-engine" / "last_snapshot.json"
@@ -360,141 +366,17 @@ def create_mcp_server(config_path: Path | None = None, *, ide_only: bool = False
             if not sha:
                 return "ERROR: No saved snapshot found to undo."
             guard.hard_rollback(sha)
-            return f"UNDONE: Rolled back `{repo.name}` cleanly to `{sha[:8]}`."
+            out = f"UNDONE: Rolled back `{repo.name}` cleanly to `{sha[:8]}`."
+            _record_telemetry(repo, "snapshot_or_undo", t0, out, ok=True)
+            return out
 
         return f"ERROR: Unknown action `{action}`. Use `snapshot` or `undo`."
-
-    if ide_only:
-        return mcp
-
-    # =========================================================================
-    # TIER 2: LEGACY SPRINT ORCHESTRATION TOOLS (100% Backward Compatible)
-    # =========================================================================
-
-    def _sprint_deps() -> tuple[StateDB, GitGuard, Verifier, PromptCompiler]:
-        db = StateDB(config.state_db_path)
-        guard = GitGuard(config.target_repo_path, ignore_artifacts=config.guards.ignore_artifacts)
-        return db, guard, Verifier(config, guard), PromptCompiler(config)
-
-    @mcp.tool()
-    def get_next_task() -> str:
-        """Pull the next READY task, create a clean Git checkpoint, and return a Surgical Prompt."""
-        db, guard, _verifier, compiler = _sprint_deps()
-        approved = db.get_meta("plan_approved", "0")
-        if config.sprint.require_plan_approval and approved != "1":
-            return "BLOCKED: Plan is not approved yet. Run `engine approve` first."
-
-        task = db.get_next_ready_task()
-        if task is None:
-            summary = db.get_sprint_summary()
-            return f"NO_READY_TASKS: Summary = {summary['counts']}"
-
-        row = db.get_task_row(task.task_id)
-        attempt = int(row["retry_count"]) if row else 0
-        last_error = str(row["last_error"] or "") if row else ""
-
-        checkpoint = guard.create_checkpoint()
-        db.update_task_status(task.task_id, "RUNNING", checkpoint_sha=checkpoint)
-
-        compact_diff = guard.get_compact_diff(task.allowed_write_files) if attempt > 0 else ""
-        prompt, est_tokens = compiler.compile(
-            task,
-            attempt=attempt,
-            last_error=last_error,
-            compact_diff=compact_diff,
-        )
-        logger.info("Dispatched task %s (attempt=%d, ~%d tokens)", task.task_id, attempt, est_tokens)
-        return (
-            f"{prompt}\n\n"
-            "---\n"
-            f"[MCP REMINDER] Hoàn thành xong task `{task.task_id}`, hãy gọi `submit_and_verify(task_id=\"{task.task_id}\")`, "
-            "sau đó mở chat mới trước khi nhận task tiếp theo để giữ token ở mức thấp nhất."
-        )
-
-    @mcp.tool()
-    def submit_and_verify(task_id: str) -> str:
-        """Verify task changes (Empty Diff -> Scope -> Anti-Gaming -> rtk Commands) and commit or return trimmed error."""
-        db, guard, verifier, _compiler = _sprint_deps()
-        task = db.get_task_spec(task_id)
-        row = db.get_task_row(task_id)
-        if not task or not row:
-            return f"ERROR: Unknown task_id `{task_id}`."
-
-        db.update_task_status(task_id, "VERIFYING")
-        checkpoint = row["checkpoint_sha"] or guard.create_checkpoint()
-        attempt = int(row["retry_count"])
-        result = verifier.verify(task)
-
-        db.record_run(
-            task_id=task_id,
-            attempt=attempt,
-            model_used="antigravity-ide",
-            effort_used="interactive",
-            usage=TokenUsage(),
-            duration_sec=0.0,
-            verdict=result.verdict,
-            error_hash=result.error_hash,
-            trimmed_error_log=result.trimmed_error_log or None,
-        )
-
-        if result.passed:
-            sha = guard.commit_task(task.task_id, task.title, task.allowed_write_files + task.create_new_files)
-            db.update_task_status(task_id, "DONE", commit_sha=sha)
-            return f"PASS - Committed {sha}. Hãy mở phiên chat mới trước khi gọi `get_next_task()`."
-
-        if result.verdict in ("SCOPE_VIOLATION", "TEST_GAMING"):
-            guard.hard_rollback(checkpoint)
-
-        next_retry = attempt + 1
-        if next_retry > config.limits.max_retries_per_task:
-            guard.hard_rollback(checkpoint)
-            db.update_task_status(task_id, "BLOCKED", retry_count=next_retry, last_error=result.trimmed_error_log)
-            return (
-                f"BLOCKED ({result.verdict}): Vượt quá {config.limits.max_retries_per_task} lần retry. "
-                f"Đã rollback về {checkpoint[:8]}.\n{result.trimmed_error_log}"
-            )
-
-        db.update_task_status(
-            task_id,
-            "RUNNING",
-            retry_count=next_retry,
-            last_error=result.trimmed_error_log,
-            last_error_hash=result.error_hash,
-        )
-        return (
-            f"FAIL ({result.verdict}) - Retry {next_retry}/{config.limits.max_retries_per_task}:\n"
-            f"{result.trimmed_error_log}"
-        )
-
-    @mcp.tool()
-    def get_sprint_status() -> str:
-        """Return summary of DONE / PENDING / BLOCKED tasks and token consumption."""
-        db, _guard, _verifier, _compiler = _sprint_deps()
-        summary = db.get_sprint_summary()
-        return (
-            f"Sprint Status: {summary['counts']} | "
-            f"Tokens: prompt={summary['prompt_tokens']}, completion={summary['completion_tokens']} | "
-            f"Cost: ${summary['cost_usd']:.4f}"
-        )
-
-    @mcp.tool()
-    def rollback_current_task(task_id: str, reason: str) -> str:
-        """Rollback task to its clean checkpoint SHA and mark it BLOCKED."""
-        db, guard, _verifier, _compiler = _sprint_deps()
-        row = db.get_task_row(task_id)
-        if not row:
-            return f"ERROR: Unknown task_id `{task_id}`."
-        checkpoint = row["checkpoint_sha"]
-        if checkpoint:
-            guard.hard_rollback(checkpoint)
-        db.update_task_status(task_id, "BLOCKED", last_error=reason)
-        return f"ROLLED_BACK `{task_id}` to {checkpoint or 'HEAD'} and marked BLOCKED: {reason}"
 
     return mcp
 
 
-def run_mcp_server(config_path: Path | None = None, *, ide_only: bool = False) -> None:
-    """Start the FastMCP server on stdio transport."""
-    server = create_mcp_server(config_path, ide_only=ide_only)
-    logger.info("Starting auto-prompt-architect FastMCP server (stdio, ide_only=%s)", ide_only)
+def run_mcp_server(config_path: Path | None = None) -> None:
+    """Start the pure 6-tool FastMCP server on stdio transport."""
+    server = create_mcp_server(config_path)
+    logger.info("Starting auto-prompt-architect v2.0.0 FastMCP server (stdio, 6 tools)")
     server.run(transport="stdio")

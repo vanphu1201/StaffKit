@@ -31,7 +31,7 @@ _GUARD_CLAUSE_RE = re.compile(
 _BACKTICK_RE = re.compile(r"`([^`]+)`")
 _IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b")
 _DOTTED_SYMBOL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\b")
-_CAMEL_RE = re.compile(r"\b[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+\b")
+_CAMEL_RE = re.compile(r"\b[A-Za-z][a-z0-9]*(?:[A-Z][A-Za-z0-9]*)+\b")
 _PASCAL_WORD_RE = re.compile(r"\b[A-Z][a-z]{2,}[A-Za-z0-9_]*\b")
 _ACRONYM_RE = re.compile(r"\b[A-Z]{2,}[A-Z0-9_]*\b")
 _SNAKE_RE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
@@ -48,7 +48,7 @@ _COMMON_PROSE_CAPS = {
 }
 _PY_IMPORT_RE = re.compile(r"^\s*(?:from|import)\s+(\.*[A-Za-z0-9_.]*)(?:\s+import\s+([^\n#]+))?", re.MULTILINE)
 _JS_IMPORT_RE = re.compile(
-    r"""(?:from\s+|require\s*\(\s*|import\s*\(\s*)["'](\.[^"']+)["']"""
+    r"""(?:from\s+|require\s*\(\s*|import\s*\(\s*)["']((?:\.|@/|~/)[^"']+)["']"""
 )
 _STUB_MARKER_RE = re.compile(r"\bNotImplementedError\b|\bTODO\b|\bFIXME\b")
 _DECL_LINE_RE = re.compile(
@@ -280,17 +280,68 @@ def _resolve_local_imports(rel_path: str, content: str, norm_real: set[str]) -> 
 
     for match in _JS_IMPORT_RE.finditer(content):
         spec = match.group(1)
-        joined = posixpath.normpath(posixpath.join(parent_dir, spec))
-        if joined.startswith("../"):
-            continue
+        if spec.startswith(("@/", "~/")):
+            spec_tail = spec[2:]
+            base_candidates = [f"src/{spec_tail}", spec_tail]
+        else:
+            joined = posixpath.normpath(posixpath.join(parent_dir, spec))
+            if joined.startswith("../"):
+                continue
+            base_candidates = [joined]
+
+        # Handle TypeScript NodeNext ESM imports like `./client.js` -> `./client.ts` / `.tsx`
+        expanded_bases: list[str] = []
+        for base in base_candidates:
+            expanded_bases.append(base)
+            for js_ext in (".js", ".mjs", ".cjs", ".jsx"):
+                if base.endswith(js_ext):
+                    expanded_bases.append(base[: -len(js_ext)])
+                    break
+
         exts = ("", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".mts", "/index.ts", "/index.tsx", "/index.js", "/index.jsx")
-        for ext in exts:
-            cand = normalize_posix_path(f"{joined}{ext}")
-            if cand in norm_real and cand != rel_path and cand not in resolved:
-                resolved.append(cand)
+        found_match = False
+        for base in expanded_bases:
+            for ext in exts:
+                cand = normalize_posix_path(f"{base}{ext}")
+                if cand in norm_real and cand != rel_path and cand not in resolved:
+                    resolved.append(cand)
+                    found_match = True
+                    break
+            if found_match:
                 break
 
     return resolved
+
+
+def _find_reverse_importers(
+    target_files: list[str],
+    candidate_texts: dict[str, str],
+    norm_real: set[str],
+    *,
+    max_importers: int = 4,
+) -> list[str]:
+    """Find 1-hop reverse importers (files that import one of `target_files`) from already-loaded repo texts."""
+    if not target_files or not candidate_texts:
+        return []
+    target_set = set(target_files)
+    target_stems = {
+        t.rsplit("/", 1)[-1].rsplit(".", 1)[0].lower()
+        for t in target_files
+        if len(t.rsplit("/", 1)[-1].rsplit(".", 1)[0]) >= 3
+    }
+    importers: list[str] = []
+    for rel, text in candidate_texts.items():
+        if rel in target_set or not text:
+            continue
+        low = text.lower()
+        if not any(stem in low for stem in target_stems):
+            continue
+        imported = _resolve_local_imports(rel, text, norm_real)
+        if any(imp in target_set for imp in imported):
+            importers.append(rel)
+            if len(importers) >= max_importers:
+                break
+    return importers
 
 
 def _git_grep_candidate_files(
@@ -508,7 +559,7 @@ def locate_relevant_files(
                 or any(c.isupper() for c in ident)
             )
             if is_high_spec and df <= 3:
-                token_pts.append((idf ** 1.4) * 7.5)
+                token_pts.append(max(22.0, (idf ** 1.4) * 8.5))
             elif is_high_spec:
                 token_pts.append(idf * 5.0)
             else:
@@ -579,6 +630,25 @@ def locate_relevant_files(
                         break
             if len(readonly_files) >= max_readonly:
                 break
+
+    # 1-hop Reverse Importers (callers/consumers of top target_files)
+    if repo_path is not None and target_files and len(readonly_files) < max_readonly:
+        reverse_pool = dict(file_texts)
+        if len(reverse_pool) < 80:
+            for rel in non_test_files:
+                if rel in reverse_pool or _is_doc_or_meta_path(rel):
+                    continue
+                full_path = repo_path / rel
+                if full_path.is_file() and full_path.stat().st_size <= 262_144:
+                    reverse_pool[rel] = full_path.read_text(encoding="utf-8", errors="replace")
+                if len(reverse_pool) >= 120:
+                    break
+        for caller in _find_reverse_importers(target_files[:3], reverse_pool, norm_set, max_importers=4):
+            if caller not in seen_ro and not _is_test_path(caller):
+                seen_ro.add(caller)
+                readonly_files.append(caller)
+                if len(readonly_files) >= max_readonly:
+                    break
 
     if len(readonly_files) < max_readonly:
         for rel in sorted(guarded_paths):
