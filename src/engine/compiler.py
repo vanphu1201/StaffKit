@@ -106,40 +106,33 @@ class PromptCompiler:
         self.repo_path = config.target_repo_path
 
     def build_static_prefix(self, *, profile: ExecutionProfile = "build") -> str:
-        """Build the immutable system rules prefix with Head-Start (not handcuffs) empowerment."""
+        """Build a concise, high-signal Exoskeleton system prefix that amplifies Antigravity's full engineering autonomy."""
         if self.config.agy.forbid_shell_verify_commands:
-            verify_rule = (
+            mode_rule = (
                 "- CHỈ sửa code theo đặc tả rồi kết thúc ngay. TUYỆT ĐỐI KHÔNG tự chạy lệnh test, build, typecheck hay lint "
-                "bên trong phiên (hệ thống bên ngoài sẽ tự chạy verify và trả log rút gọn nếu cần)."
+                "bên trong phiên (hệ thống bên ngoài sẽ tự chạy verify)."
             )
         elif profile == "investigate_fix":
-            verify_rule = (
-                "- CHẾ ĐỘ ĐIỀU TRA & SỬA LỖI SÂU (INVESTIGATE & FIX — chuẩn `superpowers:systematic-debugging` + `OpenSpec`):\n"
-                "  1. **Reproduce & Probe thật:** ĐƯỢC TOÀN QUYỀN đọc mở rộng file liên quan và chạy lệnh chẩn đoán nhanh (`curl`/HTTP probe dịch vụ local, kiểm tra port/process, chạy test đơn lẻ `npx vitest run <file>` / `pytest <file>`, `tsc --noEmit`) để nhìn thấy hành vi thật trước khi sửa, TUYỆT ĐỐI KHÔNG đoán mò.\n"
-                "  2. **Isolate Root Cause:** Truy tận nguyên nhân gốc (kiểm tra payload/status thật, hợp đồng dữ liệu, cấu hình).\n"
-                "  3. **Minimal Targeted Fix & Preserve Invariants:** Sửa triệt để đúng gốc rễ nhưng bảo toàn 100% các tính năng và test đang chạy tốt.\n"
-                "  4. **Verify thật & Regression Test:** Tự chạy kiểm chứng nhanh bản vá + thêm/cập nhật test bao phủ kịch bản lỗi trước khi kết thúc (Engine bên ngoài vẫn sẽ chạy toàn bộ Verification Commands độc lập)."
+            mode_rule = (
+                "- CHẾ ĐỘ ĐIỀU TRA & SỬA LỖI SÂU (INVESTIGATE & FIX): Bạn có toàn quyền kỹ thuật như một Senior Engineer:\n"
+                "  1. **Reproduce & Probe thật:** Đọc toàn bộ ảnh/tài liệu đính kèm (`<user_attachments>`) trước tiên; tự chạy lệnh chẩn đoán/probe thực tế trên runtime, port, service hoặc luồng đang lỗi — KHÔNG đoán mò.\n"
+                "  2. **Isolate Root Cause:** Truy tận nguyên nhân gốc ở bất kỳ file, config hay giao thức nào (coi `Suggested Starting Points` chỉ là điểm xuất phát gợi ý).\n"
+                "  3. **Sửa triệt để, cấm đối phó:** TUYỆT ĐỐI KHÔNG 'sửa' bằng cách viết lại thông báo lỗi đẹp hơn hay viết mock test khớp với suy đoán sai.\n"
+                "  4. **Kiểm chứng hành vi thật (Behavioral Reality Check):** Build/unit test là điều kiện cần nhưng CHƯA đủ — hãy tự xác minh hành vi/endpoint/luồng thật hoạt động thành công rồi mới kết thúc."
             )
         else:
-            verify_rule = (
-                "- CHẾ ĐỘ XÂY DỰNG TỐI ƯU (HEAD-START, NOT HANDCUFFS): Engine đã chuẩn bị sẵn bản đồ, Contract và các file mục tiêu "
-                "để bạn giảm tối đa thao tác mò mẫm thừa. Nếu cần đọc mở rộng sang file liên quan hoặc chạy nhanh lệnh kiểm tra "
-                "cục bộ (typecheck/test lẻ) để chắc chắn code hoạt động thật 100%, bạn hoàn toàn chủ động thực hiện; tránh chạy "
-                "lệnh cài đặt/build nặng lặp lại vì ngay sau khi bạn xong, Engine bên ngoài sẽ tự động chạy toàn bộ Verification Commands ở mức 0 token."
+            mode_rule = (
+                "- CHẾ ĐỘ KỸ SƯ TỰ CHỦ (EXOSKELETON — HEAD-START, NOT HANDCUFFS): Coi bản đồ, Contract và `Suggested Starting Points` là bàn đạp giúp tiết kiệm thời gian đọc thừa. "
+                "Bạn toàn quyền đọc mở rộng, kiểm tra runtime/test cục bộ và tự xác minh hành vi thực tế của sản phẩm (build/unit test chỉ là điều kiện cần, không phải điều kiện đủ)."
             )
         lines = [
             "[STATIC PREFIX]",
-            "# SYSTEM RULES",
-            "- Thực thi chính xác theo đặc tả TASK bên dưới.",
-            "- Tuân thủ phạm vi file được giao; tuyệt đối không sửa `PROTECTED_TEST_FILES`.",
-            verify_rule,
-            "- KHÔNG lách luật bằng `@ts-ignore`, `eslint-disable`, `# type: ignore`, `# noqa`, `.skip()`, `.only()`, hoặc xóa bỏ assertion trong test.",
-            "- Ưu tiên sửa gọn trực tiếp (targeted edit), không viết lại phần code không liên quan.",
-            "- QUY TẮC GHI FILE TỪNG BƯỚC (INCREMENTAL WRITE): Khi TASK cần tạo mới hoặc sửa từ 2 file trở lên, BẮT BUỘC gọi tool `write_file` / `edit_file` cho TỪNG FILE MỘT (1 file mỗi lượt gọi tool) theo thứ tự phụ thuộc để lưu tiến độ ngay xuống đĩa; TUYỆT ĐỐI KHÔNG dồn tạo 3–5 file lớn vào cùng 1 lượt phản hồi duy nhất.",
-            "- Kiểm tra và xử lý đầy đủ toàn bộ Acceptance Criteria cùng các nhánh biên (edge cases / input validation) nêu trong TASK và ARCHITECTURE CONTRACT để vượt qua cả kiểm thử đơn vị lẫn kiểm thử tích hợp cuối.",
-            "- Tương thích môi trường thực thi (Windows / Node.js / Python): nếu một package C++ native (`node-gyp` như `better-sqlite3` trên Node v24 chưa cài Visual Studio C++) gây lỗi cài đặt hoặc thiếu binary, hãy chủ động dùng phiên bản prebuilt hoặc module tương đương có sẵn (`node:sqlite` `DatabaseSync` của Node 22+/24+ hoặc adapter tương thích cùng interface) để lệnh verify vượt qua 100%.",
-            "- Thực thi sản phẩm thật, sạch sẽ theo đặc tả TASK; KHÔNG tạo tài khoản/dữ liệu demo, stub giữ chỗ hay bỏ qua chức năng thật.",
-            "- Nếu thiếu thông tin hoặc tài nguyên thật từ người dùng (API key, cấu hình DB, tài khoản, file media/dữ liệu, hoặc quyết định nghiệp vụ) mà không thể suy ra an toàn, hãy dừng và xuất dòng `NEED_USER_INPUT: <câu hỏi cụ thể bằng tiếng Việt>` — hệ thống sẽ hỏi người dùng và truyền câu trả lời thật cho bạn ngay.",
+            "# ENGINEERING PRINCIPLES",
+            mode_rule,
+            "- Nếu có `<user_attachments>`, BẮT BUỘC gọi `read_file` xem trực tiếp ảnh/tài liệu đính kèm trước khi thiết kế hoặc sửa code.",
+            "- Sản phẩm thật & trung thực: KHÔNG tạo mock/dữ liệu giả thay chức năng thật; KHÔNG xóa/skip assertion test cũ hoặc sửa `PROTECTED_TEST_FILES`; KHÔNG lách luật bằng `@ts-ignore`/`eslint-disable`/`# type: ignore`. Trên Windows/Node hiện đại, ưu tiên thư viện không lỗi native `node-gyp` (`node:sqlite`/pure-JS).",
+            "- Nếu cần tạo/sửa nhiều file lớn, ghi từng file theo thứ tự phụ thuộc để bảo toàn tiến độ. Nếu thực sự thiếu tài nguyên/API key thật từ người dùng mà không thể suy ra an toàn, dừng và xuất `NEED_USER_INPUT: <câu hỏi tiếng Việt>`.",
+            "- Kết thúc phiên bằng 1 khối ngắn `VERIFICATION_SUMMARY:` bằng tiếng Việt nêu rõ: (1) Nguyên nhân gốc / giải pháp đã áp dụng, (2) Lệnh kiểm chứng hành vi thực tế đã chạy & kết quả thật, (3) Các file đã thay đổi.",
         ]
 
         bp = get_blueprint(self.config.project.blueprint, self.repo_path)
@@ -500,8 +493,9 @@ class PromptCompiler:
         scope_desc = (
             "STRICT (chỉ sửa/tạo các file trong danh sách trên)"
             if is_strict
-            else "SOFT / FLEXIBLE (Ưu tiên sửa/tạo các file trong Allowed Write Files; nếu quá trình điều tra/build/verify phát hiện nguyên nhân gốc nằm ở file liên quan hoặc cấu hình như `package.json`, `tsconfig.json`, `vite.config.ts` thì ĐƯỢC PHÉP sửa để sản phẩm chạy thật 100%; tuyệt đối không sửa PROTECTED_TEST_FILES)"
+            else "AUTONOMOUS (Danh sách file trên chỉ là điểm xuất phát gợi ý — bạn toàn quyền mở rộng sang bất kỳ file/config liên quan nào để giải quyết triệt để vấn đề; chỉ giữ nguyên PROTECTED_TEST_FILES)"
         )
+        files_label = "Allowed Write Files" if is_strict else "Suggested Starting Points"
         effective_objective = objective_override if objective_override is not None else task.objective
         payload_lines = [
             "---",
@@ -510,7 +504,7 @@ class PromptCompiler:
             f"# TASK: {task.task_id} - {task.title}",
             f"- Objective: {effective_objective}",
             f"- Acceptance Criteria: {task.acceptance_criteria}",
-            f"- Allowed Write Files: {task.allowed_write_files}",
+            f"- {files_label}: {task.allowed_write_files}",
             f"- Create New Files: {task.create_new_files}",
             f"- Scope Mode: {scope_desc}",
             f"- Protected Test Files (DO NOT TOUCH): {self._format_protected_tests(task)}",

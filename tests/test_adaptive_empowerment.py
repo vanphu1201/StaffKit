@@ -397,3 +397,46 @@ def test_ui_attachments_dynamic_model_constitution_and_metrics(tmp_path: Path) -
     client2 = TestClient(create_ui_app(cfg_path))
     st2 = client2.get("/api/state").json()
     assert any(t.get("title") == "Test Trace Persist" for t in st2["traces"])
+
+
+def test_exoskeleton_architecture_prompt_effort_and_verification_summary(tmp_path: Path) -> None:
+    from engine.database import StateDB
+    from engine.git_guard import GitGuard
+    from engine.orchestrator import Orchestrator, _extract_verification_summary
+    from engine.verifier import Verifier
+
+    repo = tmp_path / "exo_repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "app.ts").write_text("export const v = 1;\n", encoding="utf-8")
+
+    cfg = EngineConfig(project=ProjectConfig(target_repo=str(repo)))
+    compiler = PromptCompiler(cfg)
+    fix_task = TaskSpec(
+        task_id="T-01",
+        title="Sửa lỗi kết nối dịch vụ",
+        complexity="low",
+        objective="Sửa lỗi kết nối thực tế",
+        allowed_write_files=["src/app.ts"],
+        strict_scope=False,
+        execution_profile="investigate_fix",
+    )
+    prompt, _ = compiler.compile(fix_task)
+    # 1. Exoskeleton uses Suggested Starting Points (not restrictive Allowed Write Files cage) & Behavioral Reality Check
+    assert "Suggested Starting Points" in prompt
+    assert "AUTONOMOUS" in prompt
+    assert "VERIFICATION_SUMMARY:" in prompt
+    assert "Behavioral Reality Check" in prompt
+
+    # 2. Smart Effort: investigate_fix tasks NEVER get dumbed down to coder_low/coder_medium
+    db = StateDB(cfg.state_db_path)
+    guard = GitGuard(repo)
+    orch = Orchestrator(cfg, db, guard, Verifier(cfg, guard), compiler)
+    tier, _model, effort = orch._select_tier(fix_task, attempt=0, force_escalation=False)
+    assert tier == "escalation" and effort == "high"
+
+    # 3. Verification summary extraction works on NDJSON stream-json output
+    raw_ndjson = json.dumps(
+        {"event": "result", "result": {"response": "Done.\n\nVERIFICATION_SUMMARY:\n1) Root cause verified\n2) Live probe HTTP 200 OK"}}
+    )
+    extracted = _extract_verification_summary(raw_ndjson)
+    assert "Live probe HTTP 200 OK" in extracted

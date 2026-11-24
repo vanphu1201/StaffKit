@@ -22,7 +22,7 @@ from engine.compiler import PromptCompiler, PromptTooLargeError
 from engine.database import StateDB
 from engine.git_guard import GitGuard
 from engine.indexer import IndexerError, extract_fast_skeleton, list_real_files, locate_relevant_files
-from engine.models import EngineConfig, ExecutionResult, TaskSpec, TokenUsage, normalize_posix_path
+from engine.models import EngineConfig, ExecutionResult, TaskSpec, TokenUsage, normalize_posix_path, resolve_task_execution_profile
 from engine.verifier import Verifier, extract_error_locations
 
 
@@ -52,13 +52,13 @@ def build_executor(
 
 
 _NEED_INPUT_LINE_RE = re.compile(r"(?im)^NEED_USER_INPUT:\s*(.+)$")
+_VERIF_SUMMARY_RE = re.compile(r"(?is)VERIFICATION_SUMMARY:\s*(.+)$")
 
 
-def _extract_need_user_input(raw_output: str) -> list[str]:
-    """Extract unique `NEED_USER_INPUT: <question>` lines from plain or NDJSON stream-json output."""
-    if not raw_output or "NEED_USER_INPUT:" not in raw_output:
-        return []
-
+def _extract_stream_text(raw_output: str) -> str:
+    """Extract readable assistant response text from plain or NDJSON stream-json output."""
+    if not raw_output:
+        return ""
     stream_deltas: list[str] = []
     result_text = ""
     plain_lines: list[str] = []
@@ -79,8 +79,26 @@ def _extract_need_user_input(raw_output: str) -> list[str]:
         res_obj = ev.get("result")
         if isinstance(res_obj, dict) and isinstance(res_obj.get("response"), str):
             result_text = res_obj["response"]
+    return result_text or "".join(stream_deltas) or "\n".join(plain_lines) or raw_output
 
-    candidate = result_text or "".join(stream_deltas) or "\n".join(plain_lines) or raw_output
+
+def _extract_verification_summary(raw_output: str) -> str:
+    """Extract Antigravity's `VERIFICATION_SUMMARY:` behavioral proof block for UI visibility."""
+    if not raw_output or "VERIFICATION_SUMMARY:" not in raw_output:
+        return ""
+    text = _extract_stream_text(raw_output)
+    match = _VERIF_SUMMARY_RE.search(text)
+    if not match:
+        return ""
+    return match.group(1).strip()[:2000]
+
+
+def _extract_need_user_input(raw_output: str) -> list[str]:
+    """Extract unique `NEED_USER_INPUT: <question>` lines from plain or NDJSON stream-json output."""
+    if not raw_output or "NEED_USER_INPUT:" not in raw_output:
+        return []
+
+    candidate = _extract_stream_text(raw_output)
     seen: list[str] = []
     for m in _NEED_INPUT_LINE_RE.finditer(candidate):
         q = m.group(1).strip()
@@ -240,9 +258,15 @@ class Orchestrator:
             self.on_event(level, message)
 
     def _select_tier(self, task: TaskSpec, attempt: int, force_escalation: bool) -> tuple[str, str, str]:
-        """Select (tier_name, model, effort) based on complexity, retry index, and escalation."""
+        """Select (tier_name, model, effort) without artificially dumbing down complex or investigative tasks."""
         tiers = self.config.agy.tiers
-        if force_escalation or attempt >= self.config.limits.max_retries_per_task or task.complexity == "high":
+        profile = resolve_task_execution_profile(task, attempt=attempt)
+        if (
+            force_escalation
+            or profile == "investigate_fix"
+            or attempt >= self.config.limits.max_retries_per_task
+            or task.complexity == "high"
+        ):
             t_name = "escalation"
         elif attempt == 0 and task.complexity == "low":
             t_name = "coder_low"
@@ -490,6 +514,17 @@ class Orchestrator:
             )
 
             if verify_res.passed:
+                verif_summary = _extract_verification_summary(exec_res.raw_output)
+                if verif_summary:
+                    emit_trace(
+                        self.on_trace,
+                        phase="executor",
+                        kind="verification_summary",
+                        title=f"[{task.task_id}] Báo cáo Kiểm chứng Thực tế từ Antigravity",
+                        content=verif_summary,
+                        task_id=task.task_id,
+                        attempt=attempt,
+                    )
                 commit_sha = guard.commit_task(
                     task.task_id,
                     task.title,

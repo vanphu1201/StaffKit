@@ -561,6 +561,11 @@ Hãy phân tích PRD và Repo Skeleton Map dưới đây để trả về JSON �
                 title=title or "Direct implementation",
                 complexity="medium",
                 objective=prd_text.strip(),
+                acceptance_criteria=[
+                    "AC-1: Xác minh chính xác nguyên nhân gốc / yêu cầu trên ngữ cảnh thực tế của dự án (đọc toàn bộ ảnh/tài liệu đính kèm nếu có, không đoán mò).",
+                    "AC-2: Kiểm chứng hành vi thực tế end-to-end hoạt động thành công trên runtime thật (không chỉ dựa vào compile hay mock test, không đối phó bằng cách chỉ đổi thông báo lỗi).",
+                    "AC-3: Bảo toàn toàn bộ tính năng và bộ kiểm thử hiện có của dự án.",
+                ],
                 allowed_write_files=allowed_targets,
                 readonly_context_files=readonly_ctx,
                 protected_test_files=protected_tests,
