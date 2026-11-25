@@ -326,3 +326,34 @@ def test_v3_adr_decisions_and_team_yaml_policy(tmp_path: Path) -> None:
     assert "Diff Sanity Gate (anti-mock/anti-skip): **FAIL**" in ver_out
     assert "Team Sensitive-Zone Warning" in ver_out
     assert "migrations/001_init.sql" in ver_out
+
+
+def test_core_smoke_commands_blocks_core_flow_regression(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    (tmp_path / "downloader.py").write_text("def download_drive_video(): return False  # regressed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=str(tmp_path), check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=str(tmp_path), check=True, capture_output=True)
+
+    import sys
+
+    py_exe = f'"{sys.executable}"' if " " in sys.executable else sys.executable
+    auto_dir = tmp_path / ".auto-engine"
+    auto_dir.mkdir(parents=True, exist_ok=True)
+    (auto_dir / "team.yaml").write_text(
+        f'core_smoke_commands:\n  - \'{py_exe} -c "import downloader; assert downloader.download_drive_video() is True"\'\n',
+        encoding="utf-8",
+    )
+
+    mcp = mcp_server.create_mcp_server(None)
+
+    async def _probe() -> str:
+        return (await mcp.get_tool("verify_and_smoke")).fn(
+            repo_path=str(tmp_path),
+            commands=[],
+            run_smoke=False,
+        )
+
+    out = asyncio.run(_probe())
+    assert "Core-Flow E2E Smoke Gate" in out
+    assert "**FAIL**" in out
+    assert "**OVERALL: FAIL**" in out

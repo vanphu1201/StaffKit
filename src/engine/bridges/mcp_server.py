@@ -331,6 +331,7 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
         det_stack, det_vc, det_fc, _ = detect_existing_stack(repo)
         team_cfg = _load_team_config(repo)
         team_cmds = [str(c).strip() for c in (team_cfg.get("verify_commands") or []) if str(c).strip()]
+        core_smoke_cmds = [str(c).strip() for c in (team_cfg.get("core_smoke_commands") or []) if str(c).strip()]
         cmds = [c.strip() for c in (commands or []) if str(c).strip()] or team_cmds or det_fc or det_vc
         local_cfg = config.model_copy(deep=True)
         local_cfg.project.target_repo = repo.as_posix()
@@ -372,6 +373,13 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
                 report.append(f"```\n{res.trimmed_error_log}\n```")
         else:
             report.append("- Static/Test Gate: (no commands detected; pass `commands=[...]` to run specific checks)")
+
+        if all_ok and core_smoke_cmds:
+            core_res = verifier.run_commands(core_smoke_cmds)
+            all_ok = all_ok and core_res.passed
+            report.append(f"- Core-Flow E2E Smoke Gate ({core_smoke_cmds}): **{'PASS' if core_res.passed else 'FAIL'}**")
+            if core_res.trimmed_error_log:
+                report.append(f"```\n{core_res.trimmed_error_log}\n```")
 
         if all_ok and smoke_url.strip():
             ep_ok, ep_msg = probe_http_endpoint(smoke_url.strip(), expected_status=expected_status)

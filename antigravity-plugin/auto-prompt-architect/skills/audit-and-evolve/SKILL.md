@@ -40,6 +40,6 @@ Present a concise, brutally honest Scorecard in plain Vietnamese — every weakn
 1. **STOP after presenting the Scorecard & Roadmap** — ask the user which item(s) (`P0`, `P1`, or `P2`) they want to execute first (use `ask_question` when there are clear strategic choices).
 2. Once the user picks a direction:
    - Call `snapshot_or_undo(action="snapshot", message="before audit-and-evolve upgrade", repo_path=...)`.
-   - Implement cleanly at 100% of Antigravity IDE's native power (honor `.auto-engine/constitution.md`).
-   - Run `verify_and_smoke(repo_path=...)` + live behavioral/browser verification.
+   - Implement cleanly at 100% of Antigravity IDE's native power (honor `.auto-engine/constitution.md` and **NEVER silently rewrite or break an already-working core flow**).
+   - Run `verify_and_smoke(repo_path=...)` + live end-to-end verification of the core user flow; if any previously working core flow regresses and cannot be proven fixed live, immediately call `snapshot_or_undo(action="undo", repo_path=...)`.
    - Call `record_lesson(title=..., summary=..., repo_path=..., touched_files=[...])` so the architectural improvement is permanently remembered.
