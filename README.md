@@ -2,7 +2,6 @@
 
 > **Bộ khung 0-token gắn trực tiếp vào Antigravity IDE** dành cho Developer chuyên nghiệp & Team: từ thiết kế kiến trúc đa phương án, gỡ lỗi tận gốc không báo PASS giả, review PR cấp Staff Engineer (Blast Radius), refactor legacy an toàn, đến X-quang bảo mật & quản trị quyết định kiến trúc (ADR).
 
-*(Phiên bản App Studio headless cũ đã được lưu trữ an toàn tại git tag `v1.2-legacy-studio-archive`; nhánh `main` hiện tại tinh gọn 100% cho Antigravity IDE Native Plugin.)*
 
 ---
 
