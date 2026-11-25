@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="https://github.com/vanphu1201/automatic-promt.git"
+REPO_URL="https://github.com/vanphu1201/StaffKit.git"
 INSTALL_DIR="${STAFFKIT_INSTALL_DIR:-$HOME/.local/share/staffkit}"
 
 echo "==> Installing StaffKit v3.0.1 into $INSTALL_DIR"

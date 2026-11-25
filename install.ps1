@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$RepoUrl = "https://github.com/vanphu1201/automatic-promt.git"
+$RepoUrl = "https://github.com/vanphu1201/StaffKit.git"
 $InstallDir = if ($env:STAFFKIT_INSTALL_DIR) { $env:STAFFKIT_INSTALL_DIR } else { Join-Path $HOME ".local\share\staffkit" }
 
 Write-Host "==> Installing StaffKit v3.0.1 into $InstallDir" -ForegroundColor Cyan

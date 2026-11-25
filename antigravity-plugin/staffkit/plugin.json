@@ -4,7 +4,7 @@
   "version": "3.0.1",
   "logo": "assets/logo.svg",
   "description": "Bộ đồ nghề 0-token cấp Staff Engineer cho Antigravity IDE: Thiết kế đa phương án (ADR) + Định vị X-Quang + Khóa hồi quy & chống PASS giả + PR Blast-Radius Review + Safe Refactor.",
-  "repository": "https://github.com/vanphu1201/automatic-promt",
+  "repository": "https://github.com/vanphu1201/StaffKit",
   "suggestedPrompts": [
     "/brainstorm-to-product Thiết kế và so sánh các phương án kiến trúc cho tính năng này...",
     "/audit-and-evolve Đánh giá sức khỏe dự án này, tìm lỗi ngầm và đề xuất lộ trình nâng cấp",

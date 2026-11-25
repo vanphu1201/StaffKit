@@ -9,11 +9,11 @@
 
 - **Linux / macOS / Remote SSH Server:**
   ```bash
-  curl -fsSL https://raw.githubusercontent.com/vanphu1201/automatic-promt/main/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/vanphu1201/StaffKit/main/install.sh | bash
   ```
 - **Windows (PowerShell):**
   ```powershell
-  irm https://raw.githubusercontent.com/vanphu1201/automatic-promt/main/install.ps1 | iex
+  irm https://raw.githubusercontent.com/vanphu1201/StaffKit/main/install.ps1 | iex
   ```
 
 ### Hoặc cài thủ công từ mã nguồn (2 bước)
