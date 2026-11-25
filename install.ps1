@@ -23,8 +23,13 @@ if (Test-Path (Join-Path $InstallDir ".git")) {
 
 $VenvPy = Join-Path $InstallDir ".venv\Scripts\python.exe"
 $VenvPip = Join-Path $InstallDir ".venv\Scripts\pip.exe"
-if (-not (Test-Path $VenvPy)) {
-    Write-Host "==> Creating Python virtualenv..."
+$VenvOk = (Test-Path $VenvPy) -and (Test-Path $VenvPip)
+if ($VenvOk) {
+    try { & $VenvPip --version | Out-Null } catch { $VenvOk = $false }
+}
+if (-not $VenvOk) {
+    Write-Host "==> Creating/repairing Python virtualenv..."
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $InstallDir ".venv")
     & $PyCmd -m venv (Join-Path $InstallDir ".venv")
 }
 

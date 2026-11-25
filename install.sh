@@ -25,8 +25,9 @@ else
   git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
 fi
 
-if [ ! -d "$INSTALL_DIR/.venv" ]; then
-  echo "==> Creating Python virtualenv..."
+if [ ! -x "$INSTALL_DIR/.venv/bin/python" ] || ! "$INSTALL_DIR/.venv/bin/pip" --version >/dev/null 2>&1; then
+  echo "==> Creating/repairing Python virtualenv..."
+  rm -rf "$INSTALL_DIR/.venv"
   "$PY_BIN" -m venv "$INSTALL_DIR/.venv"
 fi
 

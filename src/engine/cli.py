@@ -294,5 +294,49 @@ def plugin_stats(
     console.print(ev_table)
 
 
+@app.command(name="init-team")
+def init_team(
+    repo: Path = typer.Option(Path("."), "--repo", help="Target repository to scaffold `.auto-engine/team.yaml`"),
+    force: bool = typer.Option(False, "--force", help="Overwrite existing `.auto-engine/team.yaml`"),
+) -> None:
+    """Auto-detect repo stack and scaffold a clean `.auto-engine/team.yaml` (verify_commands, core_smoke_commands, sensitive_paths, forbid_patterns)."""
+    import yaml
+
+    from engine.bootstrapper import detect_existing_stack
+
+    repo_path = repo.expanduser().resolve()
+    auto_dir = repo_path / ".auto-engine"
+    team_path = auto_dir / "team.yaml"
+    if team_path.is_file() and not force:
+        console.print(f"[yellow]Already exists:[/yellow] {team_path.as_posix()} (pass `--force` to overwrite).")
+        return
+
+    stack, verify_cmds, _fc, _prev = detect_existing_stack(repo_path)
+    sensitive: list[str] = []
+    for cand in ("migrations/", "prisma/", "infra/", "terraform/", ".github/workflows/"):
+        if (repo_path / cand.rstrip("/")).exists():
+            sensitive.append(cand)
+    if not sensitive:
+        sensitive = ["migrations/", ".github/workflows/"]
+
+    forbid = ["debugger"] if stack in ("web_react", "fullstack_web") else []
+    payload = {
+        "verify_commands": verify_cmds,
+        "core_smoke_commands": [],
+        "sensitive_paths": sensitive,
+        "forbid_patterns": forbid,
+    }
+    auto_dir.mkdir(parents=True, exist_ok=True)
+    header = (
+        f"# StaffKit Team Policy for `{repo_path.name}` (detected stack: {stack})\n"
+        "# Add real end-to-end checks to `core_smoke_commands` to lock critical flows against regressions.\n"
+    )
+    team_path.write_text(
+        header + yaml.safe_dump(payload, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    console.print(f"[green]Created Team Policy -> {team_path.as_posix()}[/green] (stack=`{stack}`)")
+
+
 if __name__ == "__main__":
     app()

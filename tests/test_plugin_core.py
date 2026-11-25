@@ -405,3 +405,28 @@ def test_global_evidence_telemetry_and_plugin_stats_global(tmp_path: Path, monke
     assert "1 caught (diff_sanity=1" in res.output
     assert "project_alpha" in res.output
     assert "project_beta" in res.output
+
+
+def test_init_team_scaffolds_team_yaml_for_detected_stack(tmp_path: Path) -> None:
+    import yaml
+    from typer.testing import CliRunner
+
+    from engine.cli import app
+
+    (tmp_path / "package.json").write_text(
+        json.dumps({"name": "demo-app", "scripts": {"build": "vite build", "test": "vitest run"}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "prisma").mkdir()
+
+    runner = CliRunner()
+    res = runner.invoke(app, ["init-team", "--repo", str(tmp_path)])
+    assert res.exit_code == 0, res.output
+
+    team_file = tmp_path / ".auto-engine" / "team.yaml"
+    assert team_file.is_file()
+    data = yaml.safe_load(team_file.read_text(encoding="utf-8"))
+    assert "npm run build" in data["verify_commands"]
+    assert "prisma/" in data["sensitive_paths"]
+    assert "debugger" in data["forbid_patterns"]
+    assert data["core_smoke_commands"] == []
