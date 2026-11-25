@@ -24,14 +24,14 @@ def _init_git_repo(repo_dir: Path) -> None:
 def test_plugin_manifest_and_always_on_overhead_under_1000_tokens() -> None:
     plugin_root = Path(__file__).resolve().parents[1] / "antigravity-plugin" / "auto-prompt-architect"
     manifest = json.loads((plugin_root / "plugin.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "2.2.0"
+    assert manifest["version"] == "3.0.0"
     assert (plugin_root / manifest["logo"]).is_file()
 
     rules_text = (plugin_root / "rules" / "AGENTS.md").read_text(encoding="utf-8")
     rules_tok = estimate_tokens(rules_text)
 
     skills = sorted(p.parent.name for p in (plugin_root / "skills").glob("*/SKILL.md"))
-    assert skills == ["audit-and-evolve", "brainstorm-to-product", "deep-fix"]
+    assert skills == ["audit-and-evolve", "brainstorm-to-product", "deep-fix", "pr-review", "refactor-safe"]
 
     mcp = mcp_server.create_mcp_server(None)
 
@@ -281,3 +281,48 @@ def test_pro_hardening_git_cochange_security_xray_and_clean_default_verify(tmp_p
     # Default verify_and_smoke MUST NOT pollute pro repos with .bat / .md delivery pack files
     assert not (tmp_path / "CHAY_SAN_PHAM.bat").exists()
     assert not (tmp_path / "HUONG_DAN_SU_DUNG.md").exists()
+
+
+def test_v3_adr_decisions_and_team_yaml_policy(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    (tmp_path / "migrations").mkdir()
+    (tmp_path / "migrations" / "001_init.sql").write_text("CREATE TABLE users(id INT);\n", encoding="utf-8")
+    (tmp_path / "app.ts").write_text("export const x = 1;\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=str(tmp_path), check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=str(tmp_path), check=True, capture_output=True)
+
+    auto_dir = tmp_path / ".auto-engine"
+    auto_dir.mkdir(parents=True, exist_ok=True)
+    (auto_dir / "team.yaml").write_text(
+        "verify_commands: []\n"
+        "sensitive_paths:\n  - migrations/\n"
+        "forbid_patterns:\n  - 'debugger'\n",
+        encoding="utf-8",
+    )
+
+    # Touch sensitive migration + forbidden team pattern `debugger`
+    (tmp_path / "migrations" / "001_init.sql").write_text("CREATE TABLE users(id INT, email TEXT);\n", encoding="utf-8")
+    (tmp_path / "app.ts").write_text("debugger;\nexport const x = 2;\n", encoding="utf-8")
+
+    mcp = mcp_server.create_mcp_server(None)
+
+    async def _run() -> tuple[str, str, str]:
+        spec_out = (await mcp.get_tool("save_project_spec")).fn(
+            repo_path=str(tmp_path),
+            decisions_md="## ADR-001: Hybrid OS Agent\n- Chose Shell/API first with Vision fallback.",
+        )
+        mem_out = (await mcp.get_tool("load_project_memory")).fn(repo_path=str(tmp_path))
+        ver_out = (await mcp.get_tool("verify_and_smoke")).fn(
+            repo_path=str(tmp_path),
+            commands=[],
+            run_smoke=False,
+        )
+        return spec_out, mem_out, ver_out
+
+    spec_out, mem_out, ver_out = asyncio.run(_run())
+    assert "decisions.md" in spec_out
+    assert "ADR-001: Hybrid OS Agent" in mem_out
+    assert "Team Policy (`team.yaml`)" in mem_out
+    assert "Diff Sanity Gate (anti-mock/anti-skip): **FAIL**" in ver_out
+    assert "Team Sensitive-Zone Warning" in ver_out
+    assert "migrations/001_init.sql" in ver_out

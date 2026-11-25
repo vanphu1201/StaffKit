@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $RepoUrl = "https://github.com/vanphu1201/automatic-promt.git"
 $InstallDir = if ($env:APA_INSTALL_DIR) { $env:APA_INSTALL_DIR } else { Join-Path $HOME ".local\share\auto-prompt-architect" }
 
-Write-Host "==> Installing Auto-Prompt Architect v2.1.0 into $InstallDir" -ForegroundColor Cyan
+Write-Host "==> Installing Auto-Prompt Architect v3.0.0 into $InstallDir" -ForegroundColor Cyan
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Write-Error "git is required."

@@ -65,7 +65,8 @@ def detect_existing_stack(project_dir: Path) -> tuple[str, list[str], list[str],
             py = _quote_exe(str(venv_nix))
         else:
             py = _default_python_cmd()
-        return "python_app", [f"{py} -m pytest -q"], [f"{py} -m pytest -v"], f"{py} -m src.app"
+        preview = f"{py} -m src.app" if (project_dir / "src" / "app.py").is_file() else ""
+        return "python_app", [f"{py} -m pytest -q"], [f"{py} -m pytest -v"], preview
 
     if (project_dir / "Cargo.toml").is_file():
         return "rust_app", ["cargo check"], ["cargo test"], "cargo run"

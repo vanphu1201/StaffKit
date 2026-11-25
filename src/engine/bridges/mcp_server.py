@@ -10,7 +10,9 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
+import yaml
 from fastmcp import FastMCP
 
 from engine.bootstrapper import detect_existing_stack, generate_nontech_delivery_guide
@@ -53,6 +55,18 @@ def _read_optional(path: Path, max_chars: int = 3500) -> str:
         return txt[:max_chars] + ("\n... [trimmed]" if len(txt) > max_chars else "")
     except OSError:
         return ""
+
+
+def _load_team_config(repo: Path) -> dict[str, Any]:
+    """Load optional `.auto-engine/team.yaml` (verify_commands, sensitive_paths, forbid_patterns)."""
+    p = repo / ".auto-engine" / "team.yaml"
+    if not p.is_file():
+        return {}
+    try:
+        data = yaml.safe_load(p.read_text(encoding="utf-8", errors="replace"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, yaml.YAMLError):
+        return {}
 
 
 def _append_markdown_entry(file_path: Path, header_prefix: str, entry: str, *, max_entries: int = 12) -> int:
@@ -126,15 +140,21 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
 
         constitution = _read_optional(auto_dir / "constitution.md", 2200)
         contracts = _read_optional(auto_dir / "contracts.md", 2200)
+        decisions = _read_optional(auto_dir / "decisions.md", 1800)
         lessons = _read_optional(auto_dir / "lessons.md", 2200)
         handoff = _read_optional(auto_dir / "handoff.md", 1800)
         global_lessons = _read_optional(playbook_path, 1600)
+        team_cfg = _load_team_config(repo)
 
         sections = [
             f"# PROJECT MEMORY BRIEFING: `{repo.name}`",
             f"- Path: `{repo.as_posix()}` | Stack: `{det_stack}`",
-            f"- Verify: `{det_vc}` | Final Gate: `{det_fc}` | Preview: `{det_prev or '(auto)'}`",
+            f"- Verify: `{team_cfg.get('verify_commands') or det_vc}` | Final Gate: `{det_fc}` | Preview: `{det_prev or '(auto)'}`",
         ]
+        if team_cfg:
+            sens = team_cfg.get("sensitive_paths") or []
+            forb = team_cfg.get("forbid_patterns") or []
+            sections.append(f"- Team Policy (`team.yaml`): sensitive_paths=`{sens}` | forbid_patterns=`{forb}`")
         if include_audit:
             sections.append(f"\n## 0-Token Tech-Debt & Health X-Ray\n{scan_repo_tech_debt(repo)}")
         if commits:
@@ -143,6 +163,8 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
             sections.append(f"\n## Project Constitution\n{constitution}")
         if contracts:
             sections.append(f"\n## Architecture Contract\n{contracts}")
+        if decisions:
+            sections.append(f"\n## Architecture Decisions (ADR)\n{decisions}")
         if lessons:
             sections.append(f"\n## Project Lessons Learned\n{lessons}")
         if global_lessons:
@@ -197,10 +219,11 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
         repo_path: str = "",
         constitution_md: str = "",
         contracts_md: str = "",
+        decisions_md: str = "",
         prd_md: str = "",
         acceptance_criteria: list[str] | None = None,
     ) -> str:
-        """Persist agreed Brainstorm outputs (Constitution, Architecture Contract, OpenSpec PRD & AC-1..AC-N)."""
+        """Persist Constitution, Contracts, ADR decisions.md, OpenSpec PRD & AC-1..AC-N."""
         t0 = time.monotonic()
         repo = _resolve_repo_path(repo_path, config.target_repo_path)
         auto_dir = repo / ".auto-engine"
@@ -227,6 +250,14 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
         if contract_parts:
             p = auto_dir / "contracts.md"
             p.write_text("\n\n".join(contract_parts) + "\n", encoding="utf-8")
+            saved.append(p.as_posix())
+
+        if decisions_md.strip():
+            p = auto_dir / "decisions.md"
+            existing = p.read_text(encoding="utf-8", errors="replace").strip() if p.is_file() else ""
+            new_body = decisions_md.strip()
+            combined = f"{existing}\n\n{new_body}" if (existing and new_body not in existing) else (existing or new_body)
+            p.write_text(combined + "\n", encoding="utf-8")
             saved.append(p.as_posix())
 
         if prd_md.strip():
@@ -298,7 +329,9 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
         t0 = time.monotonic()
         repo = _resolve_repo_path(repo_path, config.target_repo_path)
         det_stack, det_vc, det_fc, _ = detect_existing_stack(repo)
-        cmds = [c.strip() for c in (commands or []) if str(c).strip()] or det_fc or det_vc
+        team_cfg = _load_team_config(repo)
+        team_cmds = [str(c).strip() for c in (team_cfg.get("verify_commands") or []) if str(c).strip()]
+        cmds = [c.strip() for c in (commands or []) if str(c).strip()] or team_cmds or det_fc or det_vc
         local_cfg = config.model_copy(deep=True)
         local_cfg.project.target_repo = repo.as_posix()
         guard = GitGuard(repo, ignore_artifacts=local_cfg.guards.ignore_artifacts)
@@ -307,10 +340,11 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
         report: list[str] = [f"# INDEPENDENT VERIFICATION (`{repo.name}`, stack=`{det_stack}`)"]
         all_ok = True
         if (repo / ".git").exists():
-            _, untracked = guard.get_changed_files()
+            tracked, untracked = guard.get_changed_files()
+            extra_forbid = [str(p) for p in (team_cfg.get("forbid_patterns") or []) if str(p).strip()]
             sanity_ok, gaming_hits = guard.check_diff_sanity(
                 untracked,
-                local_cfg.guards.forbid_diff_patterns,
+                [*local_cfg.guards.forbid_diff_patterns, *extra_forbid],
                 forbid_assertion_deletion=local_cfg.guards.forbid_test_assertion_deletion,
                 forbid_demo_patterns=local_cfg.guards.forbid_demo_patterns,
                 enforce_production_only=local_cfg.guards.enforce_production_only,
@@ -321,6 +355,15 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
                 report.append("```\n" + "\n".join(gaming_hits[:10]) + "\n```")
             else:
                 report.append("- Diff Sanity Gate (anti-mock/anti-skip): **PASS**")
+
+            sensitive_prefixes = [str(s).strip().replace("\\", "/") for s in (team_cfg.get("sensitive_paths") or []) if str(s).strip()]
+            if sensitive_prefixes:
+                touched_sensitive = [
+                    f for f in (tracked + untracked)
+                    if any(f == pref.rstrip("/") or f.startswith(pref.rstrip("/") + "/") for pref in sensitive_prefixes)
+                ]
+                if touched_sensitive:
+                    report.append(f"- Team Sensitive-Zone Warning (`team.yaml`): modified `{touched_sensitive[:6]}` — double-check before merge!")
         if cmds:
             res = verifier.run_commands(cmds)
             all_ok = all_ok and res.passed

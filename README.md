@@ -1,6 +1,6 @@
-# Auto-Prompt Architect v2.0 — Antigravity IDE Native Plugin
+# Auto-Prompt Architect v3.0 — Antigravity IDE Native Pro Plugin
 
-> **Bộ khung 0-token gắn trực tiếp vào Antigravity IDE** giúp biến ý tưởng mơ hồ thành sản phẩm chạy thật, gỡ lỗi tận gốc không báo PASS giả, và thẩm định / mở khóa nâng cấp dự án khi bị kẹt.
+> **Bộ khung 0-token gắn trực tiếp vào Antigravity IDE** dành cho Developer chuyên nghiệp & Team: từ thiết kế kiến trúc đa phương án, gỡ lỗi tận gốc không báo PASS giả, review PR cấp Staff Engineer (Blast Radius), refactor legacy an toàn, đến X-quang bảo mật & quản trị quyết định kiến trúc (ADR).
 
 *(Phiên bản App Studio headless cũ đã được lưu trữ an toàn tại git tag `v1.2-legacy-studio-archive`; nhánh `main` hiện tại tinh gọn 100% cho Antigravity IDE Native Plugin.)*
 
@@ -29,14 +29,20 @@ Sau đó mở **Plugins Manager** trong Antigravity IDE để kiểm tra **Auto-
 
 ---
 
-## 3 Chế độ làm việc (Skills tự động kích hoạt trong Antigravity IDE)
+## 5 Chế độ làm việc (Skills tự động kích hoạt trong Antigravity IDE)
 
-1. **`brainstorm-to-product` (Ý tưởng mới / Tính năng lớn):**
-   - Phỏng vấn đa vòng linh hoạt theo độ phức tạp + Gợi ý chủ động các tính năng thực dụng + Lưu Hiến pháp (`constitution.md`) & Hợp đồng kiến trúc (`contracts.md`) trước khi code.
-2. **`deep-fix` (Gỡ lỗi tận gốc / Không báo PASS giả):**
-   - Nạp trí nhớ dự án -> Khoanh vùng 0-token bằng 1-hop Import/Export Graph + AST windows -> Snapshot Git an toàn -> Kiểm chứng hành vi thực tế (`verify_and_smoke`) -> Ghi nhớ bài học (`record_lesson`).
-3. **`audit-and-evolve` (Thẩm định sức khỏe dự án & Gỡ kẹt nâng cấp):**
-   - Chấm điểm 5 chiều trung thực bằng bằng chứng thực tế -> Săn lỗi ngầm -> Đề xuất lộ trình nâng cấp P0/P1/P2 tạo bước nhảy vọt -> Gợi ý hướng đi mới khi người dùng hết ý tưởng.
+1. **`/brainstorm-to-product` (Ý tưởng mới / Tính năng lớn):** Phỏng vấn đa vòng + tra cứu khả thi + so sánh 2–3 phương án kiến trúc + chia chặng + lưu Hiến pháp (`constitution.md`), Hợp đồng (`contracts.md`) & Quyết định kiến trúc (`decisions.md`).
+2. **`/deep-fix` (Gỡ lỗi tận gốc / Không báo PASS giả):** Khoanh vùng 0-token bằng 1-hop Import Graph + Git Co-Change + AST windows → Snapshot Git → Kiểm chứng Diff Sanity + HTTP thực tế (`verify_and_smoke`) → Ghi nhớ bài học (`record_lesson`).
+3. **`/audit-and-evolve` (Thẩm định sức khỏe dự án & Gỡ kẹt nâng cấp):** X-Quang 0-token (file lớn, TODO thật, `.env`/secret lộ, tỷ lệ test) + bảng điểm 5 chiều trung thực + lộ trình P0/P1/P2.
+4. **`/pr-review` (Staff-Level Pre-Merge Review & Blast Radius):** Đọc `git diff` + 1-hop callers + Git Co-Change để chỉ ra bán kính ảnh hưởng và săn lỗi production thật (race condition, N+1, SQLi/XSS/IDOR, breaking contract).
+5. **`/refactor-safe` (Refactor Legacy Không Vỡ Hành Vi):** Snapshot Git → khóa **Characterization Tests** trước → tách bước atomic → `verify_and_smoke` sau từng bước → rollback tức thì nếu hồi quy.
+
+### Cấu hình Chuẩn Team theo từng Repo (Tùy chọn: `.auto-engine/team.yaml`)
+```yaml
+verify_commands: ["pnpm turbo typecheck", "pytest -q"]
+sensitive_paths: ["migrations/", "infra/", ".github/workflows/"]
+forbid_patterns: ["console.log(", "debugger"]
+```
 
 ---
 

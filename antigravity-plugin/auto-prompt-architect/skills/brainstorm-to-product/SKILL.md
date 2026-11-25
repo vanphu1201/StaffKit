@@ -46,9 +46,10 @@ Once the user confirms they are ready:
    - **Project Constitution (`constitution.md`, 15–25 lines):** Immutable principles (architecture, real data/no mocks, UX/error clarity, OS/runtime compatibility).
    - **Architecture & Interface Contract (`contracts.md`, <= 35 lines):** Shared schemas, API signatures, module boundaries.
    - **Acceptance Criteria (`AC-1..AC-N`):** Concrete, testable real-world outcomes.
+   - **Architecture Decisions (`decisions.md`, ADR):** Concise record of why the chosen Phase 1.5 approach won over rejected alternatives and key trade-offs.
    - **OpenSpec PRD (`openspec/prd.md`):** Clean implementation blueprint.
 2. Persist all of them with one MCP call:
-   `save_project_spec(repo_path=..., constitution_md=..., contracts_md=..., prd_md=..., acceptance_criteria=[...])`.
+   `save_project_spec(repo_path=..., constitution_md=..., contracts_md=..., decisions_md=..., prd_md=..., acceptance_criteria=[...])`.
 
 ## Phase 3: Native Antigravity IDE Execution & Behavioral Reality Verification
 

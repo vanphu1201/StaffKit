@@ -4,7 +4,7 @@ set -euo pipefail
 REPO_URL="https://github.com/vanphu1201/automatic-promt.git"
 INSTALL_DIR="${APA_INSTALL_DIR:-$HOME/.local/share/auto-prompt-architect}"
 
-echo "==> Installing Auto-Prompt Architect v2.1.0 into $INSTALL_DIR"
+echo "==> Installing Auto-Prompt Architect v3.0.0 into $INSTALL_DIR"
 
 if ! command -v git >/dev/null 2>&1; then
   echo "ERROR: git is required." >&2
