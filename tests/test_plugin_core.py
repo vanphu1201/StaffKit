@@ -359,3 +359,49 @@ def test_core_smoke_commands_blocks_core_flow_regression(tmp_path: Path) -> None
     assert "Core-Flow E2E Smoke Gate" in out
     assert "**FAIL**" in out
     assert "**OVERALL: FAIL**" in out
+
+
+def test_global_evidence_telemetry_and_plugin_stats_global(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from typer.testing import CliRunner
+
+    from engine.cli import app
+
+    fake_global_tel = tmp_path / "global_telemetry.jsonl"
+    fake_global_pb = tmp_path / "global_lessons.md"
+    monkeypatch.setattr(mcp_server, "GLOBAL_TELEMETRY_PATH", fake_global_tel)
+
+    repo_a = tmp_path / "project_alpha"
+    repo_b = tmp_path / "project_beta"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    _init_git_repo(repo_a)
+    (repo_a / "app.ts").write_text("export const a = 1;\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=str(repo_a), check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo_a), check=True, capture_output=True)
+
+    mcp = mcp_server.create_mcp_server(
+        None,
+        global_playbook_path=fake_global_pb,
+        global_telemetry_path=fake_global_tel,
+    )
+
+    async def _simulate_real_usage() -> None:
+        snap = (await mcp.get_tool("snapshot_or_undo")).fn
+        ver = (await mcp.get_tool("verify_and_smoke")).fn
+        rec = (await mcp.get_tool("record_lesson")).fn
+
+        snap(action="snapshot", repo_path=str(repo_a))
+        (repo_a / "app.ts").write_text("// @ts-ignore\nexport const a = 2;\n", encoding="utf-8")
+        ver(repo_path=str(repo_a), commands=[], run_smoke=False)
+        snap(action="undo", repo_path=str(repo_a))
+        rec(title="Universal Rule", summary="Never skip types.", repo_path=str(repo_b), global_playbook=True)
+
+    asyncio.run(_simulate_real_usage())
+
+    runner = CliRunner()
+    res = runner.invoke(app, ["plugin-stats", "--global"])
+    assert res.exit_code == 0, res.output
+    assert "ALL PROJECTS (Global)" in res.output
+    assert "1 caught (diff_sanity=1" in res.output
+    assert "project_alpha" in res.output
+    assert "project_beta" in res.output

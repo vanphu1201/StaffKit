@@ -67,7 +67,8 @@ forbid_patterns: ["console.log(", "debugger"]
 # 2. Chạy bộ Micro-Eval 3 kịch bản end-to-end (0 token, < 3 giây)
 .venv/Scripts/python.exe -m engine.cli plugin-eval
 
-# 3. Xem thống kê telemetry dùng thật (lượt gọi, độ trễ, token đầu ra)
+# 3. Xem bảng bằng chứng hiệu quả thực tế (lỗi chặn được, rollback, bài học) theo repo hoặc xuyên MỌI dự án
+.venv/Scripts/python.exe -m engine.cli plugin-stats --global
 .venv/Scripts/python.exe -m engine.cli plugin-stats --repo .
 
 # 4. Chạy toàn bộ unit & integration tests

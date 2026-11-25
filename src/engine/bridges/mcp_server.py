@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 GLOBAL_PLAYBOOK_DIR = Path.home() / ".gemini" / "staffkit-playbooks"
 GLOBAL_LESSONS_PATH = GLOBAL_PLAYBOOK_DIR / "global_lessons.md"
+GLOBAL_TELEMETRY_PATH = GLOBAL_PLAYBOOK_DIR / "global_telemetry.jsonl"
 _LEGACY_GLOBAL_LESSONS_PATH = Path.home() / ".gemini" / "auto-prompt-playbooks" / "global_lessons.md"
 
 
@@ -90,25 +91,49 @@ def _append_markdown_entry(file_path: Path, header_prefix: str, entry: str, *, m
     return len(kept)
 
 
-def _record_telemetry(repo: Path, tool_name: str, started: float, output_text: str, ok: bool = True) -> None:
-    """Append 1 lightweight 0-token telemetry row to `.auto-engine/plugin_telemetry.jsonl`."""
+def _record_telemetry(
+    repo: Path,
+    tool_name: str,
+    started: float,
+    output_text: str,
+    ok: bool = True,
+    *,
+    event: str = "",
+    global_telemetry_path: Path | None = None,
+) -> None:
+    """Append 1 lightweight 0-token telemetry row to repo `.auto-engine/plugin_telemetry.jsonl` and global evidence log."""
+    entry = {
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        "repo": repo.name,
+        "tool": tool_name,
+        "latency_ms": round((time.monotonic() - started) * 1000, 1),
+        "output_tokens": max(1, int(len(output_text) / 3.5)) if output_text else 0,
+        "ok": ok,
+        "event": event,
+    }
+    line = json.dumps(entry, ensure_ascii=False) + "\n"
     try:
         auto_dir = repo / ".auto-engine"
         auto_dir.mkdir(parents=True, exist_ok=True)
-        entry = {
-            "ts": datetime.now().isoformat(timespec="seconds"),
-            "tool": tool_name,
-            "latency_ms": round((time.monotonic() - started) * 1000, 1),
-            "output_tokens": max(1, int(len(output_text) / 3.5)) if output_text else 0,
-            "ok": ok,
-        }
         with (auto_dir / "plugin_telemetry.jsonl").open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            fh.write(line)
     except Exception:
         pass
+    if global_telemetry_path is not None:
+        try:
+            global_telemetry_path.parent.mkdir(parents=True, exist_ok=True)
+            with global_telemetry_path.open("a", encoding="utf-8") as fh:
+                fh.write(line)
+        except Exception:
+            pass
 
 
-def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: Path | None = None) -> FastMCP:
+def create_mcp_server(
+    config_path: Path | None = None,
+    *,
+    global_playbook_path: Path | None = None,
+    global_telemetry_path: Path | None = None,
+) -> FastMCP:
     """Instantiate pure 6-tool 0-token FastMCP server for Antigravity IDE."""
     if config_path is not None and config_path.is_file():
         config = EngineConfig.load(config_path)
@@ -116,6 +141,7 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
         config = EngineConfig(project=ProjectConfig(target_repo=str(Path.cwd())))
 
     playbook_path = global_playbook_path or GLOBAL_LESSONS_PATH
+    telemetry_path = global_telemetry_path if global_telemetry_path is not None else GLOBAL_TELEMETRY_PATH
     mcp = FastMCP("staffkit")
 
     @mcp.tool()
@@ -175,7 +201,7 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
         if handoff:
             sections.append(f"\n## Module Handoff Memory\n{handoff}")
         out = "\n".join(sections)
-        _record_telemetry(repo, "load_project_memory", t0, out, ok=True)
+        _record_telemetry(repo, "load_project_memory", t0, out, ok=True, event="audit_xray" if include_audit else "memory_load", global_telemetry_path=telemetry_path)
         return out
 
     @mcp.tool()
@@ -214,7 +240,7 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
             if win:
                 lines.append(f"// Matched symbol windows:\n```\n{win}\n```")
         out = "\n".join(lines)
-        _record_telemetry(repo, "locate_context", t0, out, ok=True)
+        _record_telemetry(repo, "locate_context", t0, out, ok=True, event="locate_hit" if located.target_files else "locate_miss", global_telemetry_path=telemetry_path)
         return out
 
     @mcp.tool()
@@ -274,7 +300,7 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
             GitGuard(repo, ignore_artifacts=config.guards.ignore_artifacts).ensure_git_exclude()
 
         out = "SAVED_SPEC:\n" + "\n".join(f"- `{s}`" for s in saved) if saved else "NO_CONTENT_PROVIDED"
-        _record_telemetry(repo, "save_project_spec", t0, out, ok=bool(saved))
+        _record_telemetry(repo, "save_project_spec", t0, out, ok=bool(saved), event="spec_saved" if saved else "", global_telemetry_path=telemetry_path)
         return out
 
     @mcp.tool()
@@ -316,7 +342,7 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
             notes.append(f"+ updated `{(auto_dir / 'handoff.md').as_posix()}`")
 
         out = " ".join(notes)
-        _record_telemetry(repo, "record_lesson", t0, out, ok=True)
+        _record_telemetry(repo, "record_lesson", t0, out, ok=True, event="global_lesson" if global_playbook else "repo_lesson", global_telemetry_path=telemetry_path)
         return out
 
     @mcp.tool()
@@ -407,7 +433,15 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
 
         report.append(f"\n**OVERALL: {'PASS' if all_ok else 'FAIL'}**")
         out = "\n".join(report)
-        _record_telemetry(repo, "verify_and_smoke", t0, out, ok=all_ok)
+        if all_ok:
+            ev = "verify_pass"
+        elif "Diff Sanity Gate (anti-mock/anti-skip): **FAIL**" in out:
+            ev = "caught_diff_sanity"
+        elif "Core-Flow E2E Smoke Gate" in out and "**FAIL**" in out:
+            ev = "caught_core_regression"
+        else:
+            ev = "caught_runtime_or_test"
+        _record_telemetry(repo, "verify_and_smoke", t0, out, ok=all_ok, event=ev, global_telemetry_path=telemetry_path)
         return out
 
     @mcp.tool()
@@ -435,7 +469,7 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
                 encoding="utf-8",
             )
             out = f"SNAPSHOT_SAVED: `{sha[:8]}` ({len(dirty)} files committed)"
-            _record_telemetry(repo, "snapshot_or_undo", t0, out, ok=True)
+            _record_telemetry(repo, "snapshot_or_undo", t0, out, ok=True, event="snapshot", global_telemetry_path=telemetry_path)
             return out
 
         if act == "undo":
@@ -450,7 +484,7 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
                 return "ERROR: No saved snapshot found to undo."
             guard.hard_rollback(sha)
             out = f"UNDONE: Rolled back `{repo.name}` cleanly to `{sha[:8]}`."
-            _record_telemetry(repo, "snapshot_or_undo", t0, out, ok=True)
+            _record_telemetry(repo, "snapshot_or_undo", t0, out, ok=True, event="undo_rollback", global_telemetry_path=telemetry_path)
             return out
 
         return f"ERROR: Unknown action `{action}`. Use `snapshot` or `undo`."

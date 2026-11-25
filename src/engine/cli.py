@@ -194,19 +194,37 @@ def plugin_eval() -> None:
 @app.command(name="plugin-stats")
 def plugin_stats(
     repo: Path = typer.Option(Path("."), "--repo", help="Target repo containing .auto-engine/plugin_telemetry.jsonl"),
+    is_global: bool = typer.Option(False, "--global", help="Aggregate concrete effectiveness evidence across ALL projects"),
+    days: int = typer.Option(0, "--days", min=0, help="Filter telemetry to last N days (0 = all time)"),
 ) -> None:
-    """Analyze real MCP usage telemetry (calls, success rate, avg latency, output tokens) from `.auto-engine/plugin_telemetry.jsonl`."""
-    repo_path = repo.expanduser().resolve()
-    tel_path = repo_path / ".auto-engine" / "plugin_telemetry.jsonl"
+    """Analyze real MCP telemetry & concrete effectiveness evidence (catches, rollbacks, lessons) per repo or --global."""
+    from datetime import datetime, timedelta
+
+    from engine.bridges.mcp_server import GLOBAL_TELEMETRY_PATH
+
+    if is_global:
+        tel_path = GLOBAL_TELEMETRY_PATH
+        scope_label = "ALL PROJECTS (Global)"
+    else:
+        repo_path = repo.expanduser().resolve()
+        tel_path = repo_path / ".auto-engine" / "plugin_telemetry.jsonl"
+        scope_label = repo_path.name
+
     if not tel_path.is_file():
-        console.print(f"[yellow]No telemetry recorded yet at {tel_path.as_posix()}. Use the plugin in Antigravity IDE first.[/yellow]")
+        console.print(f"[yellow]No telemetry recorded yet at {tel_path.as_posix()}. Use StaffKit in Antigravity IDE first.[/yellow]")
         return
 
+    cutoff = (datetime.now() - timedelta(days=days)) if days > 0 else None
     stats: dict[str, dict[str, float]] = {}
+    events: dict[str, int] = {}
+    repos_seen: set[str] = set()
     total_calls = 0
     for ln in tel_path.read_text(encoding="utf-8", errors="replace").splitlines():
         try:
             obj = json.loads(ln)
+            if cutoff is not None and obj.get("ts"):
+                if datetime.fromisoformat(str(obj["ts"])) < cutoff:
+                    continue
             name = str(obj.get("tool") or "unknown")
             row = stats.setdefault(name, {"calls": 0.0, "ok": 0.0, "latency_ms": 0.0, "tokens": 0.0})
             row["calls"] += 1
@@ -214,15 +232,20 @@ def plugin_stats(
                 row["ok"] += 1
             row["latency_ms"] += float(obj.get("latency_ms", 0.0))
             row["tokens"] += float(obj.get("output_tokens", 0.0))
+            if obj.get("repo"):
+                repos_seen.add(str(obj["repo"]))
+            ev = str(obj.get("event") or "")
+            if ev:
+                events[ev] = events.get(ev, 0) + 1
             total_calls += 1
         except Exception:
             continue
 
     if total_calls == 0:
-        console.print("[yellow]Telemetry file is empty.[/yellow]")
+        console.print("[yellow]No matching telemetry entries found.[/yellow]")
         return
 
-    table = Table(title=f"StaffKit — Live Telemetry Stats ({repo_path.name}, {total_calls} calls)")
+    table = Table(title=f"StaffKit — Live Telemetry Stats ({scope_label}, {total_calls} calls)")
     table.add_column("MCP Tool", style="cyan", no_wrap=True)
     table.add_column("Calls", justify="right")
     table.add_column("Success", justify="right")
@@ -244,6 +267,31 @@ def plugin_stats(
             f"~{int(r['tokens']):,}",
         )
     console.print(table)
+
+    # Concrete Effectiveness Evidence Summary
+    diff_catches = events.get("caught_diff_sanity", 0)
+    core_catches = events.get("caught_core_regression", 0)
+    run_catches = events.get("caught_runtime_or_test", 0)
+    total_catches = diff_catches + core_catches + run_catches
+    verify_passes = events.get("verify_pass", 0)
+    undo_saves = events.get("undo_rollback", 0)
+    lessons_total = events.get("repo_lesson", 0) + events.get("global_lesson", 0)
+
+    ev_table = Table(title=f"StaffKit — Concrete Effectiveness Evidence ({len(repos_seen) or 1} project(s))")
+    ev_table.add_column("Evidence Metric", style="cyan")
+    ev_table.add_column("Observed Value", style="green")
+    ev_table.add_row(
+        "Bugs / False-Greens Caught Before Delivery",
+        f"{total_catches} caught (diff_sanity={diff_catches}, core_regression={core_catches}, test/http={run_catches}) | {verify_passes} clean PASS",
+    )
+    ev_table.add_row("Regression Rollbacks Saved (`undo`)", str(undo_saves))
+    ev_table.add_row(
+        "Compounded Lessons Recorded",
+        f"{lessons_total} (repo={events.get('repo_lesson', 0)}, global={events.get('global_lesson', 0)})",
+    )
+    if repos_seen:
+        ev_table.add_row("Tracked Projects", ", ".join(sorted(repos_seen)[:8]))
+    console.print(ev_table)
 
 
 if __name__ == "__main__":

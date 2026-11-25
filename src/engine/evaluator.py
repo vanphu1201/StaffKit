@@ -281,7 +281,15 @@ def run_plugin_micro_evals() -> PluginMicroEvalReport:
     from engine.bridges.mcp_server import create_mcp_server
 
     async def _run_all() -> list[MicroEvalScenarioResult]:
-        mcp = create_mcp_server(None)
+        with tempfile.TemporaryDirectory(prefix="staffkit_eval_global_") as eval_gdir:
+            mcp = create_mcp_server(
+                None,
+                global_playbook_path=Path(eval_gdir) / "global_lessons.md",
+                global_telemetry_path=Path(eval_gdir) / "global_telemetry.jsonl",
+            )
+            return await _run_scenarios(mcp)
+
+    async def _run_scenarios(mcp: object) -> list[MicroEvalScenarioResult]:
         tools_list = await mcp.list_tools()
         tool_names = {t.name for t in tools_list}
         expected_tools = {
