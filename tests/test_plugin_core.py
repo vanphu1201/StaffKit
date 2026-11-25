@@ -33,7 +33,7 @@ def test_plugin_manifest_and_always_on_overhead_under_1000_tokens() -> None:
     rules_tok = estimate_tokens(rules_text)
 
     skills = sorted(p.parent.name for p in (plugin_root / "skills").glob("*/SKILL.md"))
-    assert skills == ["audit-and-evolve", "brainstorm-to-product", "deep-fix", "pr-review", "refactor-safe", "ui-craft"]
+    assert skills == ["audit-and-evolve", "brainstorm-to-product", "deep-fix", "handoff", "pr-review", "refactor-safe", "ui-craft"]
 
     mcp = mcp_server.create_mcp_server(None)
 
@@ -430,3 +430,35 @@ def test_init_team_scaffolds_team_yaml_for_detected_stack(tmp_path: Path) -> Non
     assert "prisma/" in data["sensitive_paths"]
     assert "debugger" in data["forbid_patterns"]
     assert data["core_smoke_commands"] == []
+
+
+def test_session_handoff_and_install_plugin_preserves_venv_symlink(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    from typer.testing import CliRunner
+
+    from engine.cli import app
+
+    # 1. Verify session_handoff.md persists & loads at top of load_project_memory
+    mcp = mcp_server.create_mcp_server(None, global_telemetry_path=tmp_path / "gt.jsonl")
+
+    async def _run_handoff() -> tuple[str, str]:
+        s = (await mcp.get_tool("save_project_spec")).fn(
+            repo_path=str(tmp_path),
+            session_handoff_md="### Current Goal\nFinish Drive stream caching.\n### Next Step\nBenchmark /api/stream.",
+        )
+        m = (await mcp.get_tool("load_project_memory")).fn(repo_path=str(tmp_path))
+        return s, m
+
+    saved_out, mem_out = asyncio.run(_run_handoff())
+    assert "session_handoff.md" in saved_out
+    assert "Active Session Handoff (Resume Here)" in mem_out
+    assert "Finish Drive stream caching." in mem_out
+
+    # 2. Verify install-plugin uses abspath (does NOT dereference Linux .venv/bin/python symlink)
+    fake_venv_py = str(tmp_path / "my_venv" / "bin" / "python")
+    monkeypatch.setattr(sys, "executable", fake_venv_py)
+    dst = tmp_path / "installed_plugin"
+    res = CliRunner().invoke(app, ["install-plugin", "--target", str(dst)])
+    assert res.exit_code == 0, res.output
+    cfg = json.loads((dst / "mcp_config.json").read_text(encoding="utf-8"))
+    assert cfg["mcpServers"]["staffkit"]["command"].endswith("/my_venv/bin/python")

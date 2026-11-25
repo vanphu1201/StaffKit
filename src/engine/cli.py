@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import sys
 import time
@@ -48,7 +49,9 @@ def install_plugin(
     dst_dir = target_dir or (Path.home() / ".gemini" / "config" / "plugins" / "staffkit")
     shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
 
-    py_exe = Path(sys.executable).resolve().as_posix()
+    # IMPORTANT: Do NOT call `.resolve()` on sys.executable — on Linux/macOS `.venv/bin/python` is a symlink
+    # to `/usr/bin/python3.x`, and dereferencing it bypasses the virtualenv's site-packages (`ModuleNotFoundError: engine`).
+    py_exe = Path(os.path.abspath(sys.executable)).as_posix()
     mcp_payload = {
         "mcpServers": {
             "staffkit": {

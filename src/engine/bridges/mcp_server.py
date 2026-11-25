@@ -165,6 +165,7 @@ def create_mcp_server(
             )
             commits = proc.stdout.strip()
 
+        session_handoff = _read_optional(auto_dir / "session_handoff.md", 2200)
         constitution = _read_optional(auto_dir / "constitution.md", 2200)
         contracts = _read_optional(auto_dir / "contracts.md", 2200)
         decisions = _read_optional(auto_dir / "decisions.md", 1800)
@@ -184,6 +185,8 @@ def create_mcp_server(
             sens = team_cfg.get("sensitive_paths") or []
             forb = team_cfg.get("forbid_patterns") or []
             sections.append(f"- Team Policy (`team.yaml`): sensitive_paths=`{sens}` | forbid_patterns=`{forb}`")
+        if session_handoff:
+            sections.append(f"\n## Active Session Handoff (Resume Here)\n{session_handoff}")
         if include_audit:
             sections.append(f"\n## 0-Token Tech-Debt & Health X-Ray\n{scan_repo_tech_debt(repo)}")
         if commits:
@@ -249,10 +252,11 @@ def create_mcp_server(
         constitution_md: str = "",
         contracts_md: str = "",
         decisions_md: str = "",
+        session_handoff_md: str = "",
         prd_md: str = "",
         acceptance_criteria: list[str] | None = None,
     ) -> str:
-        """Persist Constitution, Contracts, ADR decisions.md, OpenSpec PRD & AC-1..AC-N."""
+        """Persist Constitution, Contracts, ADR decisions, session_handoff, PRD & AC-1..AC-N."""
         t0 = time.monotonic()
         repo = _resolve_repo_path(repo_path, config.target_repo_path)
         auto_dir = repo / ".auto-engine"
@@ -287,6 +291,11 @@ def create_mcp_server(
             new_body = decisions_md.strip()
             combined = f"{existing}\n\n{new_body}" if (existing and new_body not in existing) else (existing or new_body)
             p.write_text(combined + "\n", encoding="utf-8")
+            saved.append(p.as_posix())
+
+        if session_handoff_md.strip():
+            p = auto_dir / "session_handoff.md"
+            p.write_text(session_handoff_md.strip() + "\n", encoding="utf-8")
             saved.append(p.as_posix())
 
         if prd_md.strip():
