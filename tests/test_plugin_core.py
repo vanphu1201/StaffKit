@@ -33,7 +33,7 @@ def test_plugin_manifest_and_always_on_overhead_under_1000_tokens() -> None:
     rules_tok = estimate_tokens(rules_text)
 
     skills = sorted(p.parent.name for p in (plugin_root / "skills").glob("*/SKILL.md"))
-    assert skills == ["audit-and-evolve", "brainstorm-to-product", "deep-fix", "pr-review", "refactor-safe"]
+    assert skills == ["audit-and-evolve", "brainstorm-to-product", "deep-fix", "pr-review", "refactor-safe", "ui-craft"]
 
     mcp = mcp_server.create_mcp_server(None)
 

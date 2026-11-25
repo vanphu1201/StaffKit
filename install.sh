@@ -42,4 +42,4 @@ echo "==> Running 0-token self-verification (plugin-eval)..."
 
 echo ""
 echo "DONE! Reload Antigravity IDE (or toggle StaffKit in Plugins Manager) to start using:"
-echo "  /brainstorm-to-product  |  /deep-fix  |  /audit-and-evolve  |  /pr-review  |  /refactor-safe"
+echo "  /brainstorm-to-product  |  /deep-fix  |  /audit-and-evolve  |  /pr-review  |  /refactor-safe  |  /ui-craft"

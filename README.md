@@ -28,13 +28,14 @@ Sau đó mở **Plugins Manager** trong Antigravity IDE để kiểm tra **Staff
 
 ---
 
-## 5 Chế độ làm việc (Skills tự động kích hoạt trong Antigravity IDE)
+## 6 Chế độ làm việc (Skills tự động kích hoạt trong Antigravity IDE)
 
 1. **`/brainstorm-to-product` (Ý tưởng mới / Tính năng lớn):** Phỏng vấn đa vòng + tra cứu khả thi + so sánh 2–3 phương án kiến trúc + chia chặng + lưu Hiến pháp (`constitution.md`), Hợp đồng (`contracts.md`) & Quyết định kiến trúc (`decisions.md`).
 2. **`/deep-fix` (Gỡ lỗi tận gốc / Không báo PASS giả):** Khoanh vùng 0-token bằng 1-hop Import Graph + Git Co-Change + AST windows → Snapshot Git → Kiểm chứng Diff Sanity + HTTP thực tế (`verify_and_smoke`) → Ghi nhớ bài học (`record_lesson`).
 3. **`/audit-and-evolve` (Thẩm định sức khỏe dự án & Gỡ kẹt nâng cấp):** X-Quang 0-token (file lớn, TODO thật, `.env`/secret lộ, tỷ lệ test) + bảng điểm 5 chiều trung thực + lộ trình P0/P1/P2.
 4. **`/pr-review` (Staff-Level Pre-Merge Review & Blast Radius):** Đọc `git diff` + 1-hop callers + Git Co-Change để chỉ ra bán kính ảnh hưởng và săn lỗi production thật (race condition, N+1, SQLi/XSS/IDOR, breaking contract).
 5. **`/refactor-safe` (Refactor Legacy Không Vỡ Hành Vi):** Snapshot Git → khóa **Characterization Tests** trước → tách bước atomic → `verify_and_smoke` sau từng bước → rollback tức thì nếu hồi quy.
+6. **`/ui-craft` (Thiết kế & Trau chuốt Giao diện Chống AI-Slop):** Điều phối thông minh các skill thiết kế sẵn có trong Antigravity (`taste-skill`, `ui-ux-pro-max`, `design-system`, `google-design-md`, `ui-styling`, `emil-design-eng`, `impeccable`) theo 4 pha gọn nhẹ, bảo vệ luồng lõi bằng snapshot/verify và bắt buộc kiểm tra giao diện thật trên trình duyệt (Desktop & Mobile).
 
 ### Cấu hình Chuẩn Team theo từng Repo (Tùy chọn: `.auto-engine/team.yaml`)
 ```yaml

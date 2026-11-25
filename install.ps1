@@ -44,4 +44,4 @@ Write-Host "==> Running 0-token self-verification (plugin-eval)..."
 
 Write-Host ""
 Write-Host "DONE! Open Antigravity IDE Plugins Manager to verify StaffKit is Enabled:" -ForegroundColor Green
-Write-Host "  /brainstorm-to-product  |  /deep-fix  |  /audit-and-evolve  |  /pr-review  |  /refactor-safe"
+Write-Host "  /brainstorm-to-product  |  /deep-fix  |  /audit-and-evolve  |  /pr-review  |  /refactor-safe  |  /ui-craft"
