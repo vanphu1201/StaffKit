@@ -1,9 +1,9 @@
 $ErrorActionPreference = "Stop"
 
 $RepoUrl = "https://github.com/vanphu1201/automatic-promt.git"
-$InstallDir = if ($env:APA_INSTALL_DIR) { $env:APA_INSTALL_DIR } else { Join-Path $HOME ".local\share\auto-prompt-architect" }
+$InstallDir = if ($env:STAFFKIT_INSTALL_DIR) { $env:STAFFKIT_INSTALL_DIR } else { Join-Path $HOME ".local\share\staffkit" }
 
-Write-Host "==> Installing Auto-Prompt Architect v3.0.0 into $InstallDir" -ForegroundColor Cyan
+Write-Host "==> Installing StaffKit v3.0.1 into $InstallDir" -ForegroundColor Cyan
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Write-Error "git is required."
@@ -31,12 +31,12 @@ if (-not (Test-Path $VenvPy)) {
 Write-Host "==> Installing package dependencies..."
 & $VenvPip install --quiet -e $InstallDir
 
-Write-Host "==> Registering plugin in ~/.gemini/config/plugins/auto-prompt-architect..."
+Write-Host "==> Registering plugin in ~/.gemini/config/plugins/staffkit..."
 & $VenvPy -m engine.cli install-plugin
 
 Write-Host "==> Running 0-token self-verification (plugin-eval)..."
 & $VenvPy -m engine.cli plugin-eval
 
 Write-Host ""
-Write-Host "DONE! Open Antigravity IDE Plugins Manager to verify Auto-Prompt Architect is Enabled:" -ForegroundColor Green
-Write-Host "  /brainstorm-to-product  |  /deep-fix  |  /audit-and-evolve"
+Write-Host "DONE! Open Antigravity IDE Plugins Manager to verify StaffKit is Enabled:" -ForegroundColor Green
+Write-Host "  /brainstorm-to-product  |  /deep-fix  |  /audit-and-evolve  |  /pr-review  |  /refactor-safe"

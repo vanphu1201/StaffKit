@@ -1,4 +1,4 @@
-# Auto-Prompt Architect v3.0 — Antigravity IDE Native Pro Plugin
+# StaffKit v3.0 — Antigravity IDE Pro Engineering Plugin
 
 > **Bộ khung 0-token gắn trực tiếp vào Antigravity IDE** dành cho Developer chuyên nghiệp & Team: từ thiết kế kiến trúc đa phương án, gỡ lỗi tận gốc không báo PASS giả, review PR cấp Staff Engineer (Blast Radius), refactor legacy an toàn, đến X-quang bảo mật & quản trị quyết định kiến trúc (ADR).
 
@@ -25,7 +25,7 @@ python -m venv .venv
 .venv/Scripts/python.exe -m engine.cli install-plugin
 ```
 
-Sau đó mở **Plugins Manager** trong Antigravity IDE để kiểm tra **Auto-Prompt Architect** đang ở trạng thái **Enabled** (nếu vừa nâng cấp từ bản cũ, tắt rồi bật lại công tắc 1 lần để nạp MCP server v2.0 mới).
+Sau đó mở **Plugins Manager** trong Antigravity IDE để kiểm tra **StaffKit** đang ở trạng thái **Enabled**.
 
 ---
 
@@ -46,7 +46,7 @@ forbid_patterns: ["console.log(", "debugger"]
 
 ---
 
-## 6 Công cụ MCP 0-token (`auto-prompt-architect`)
+## 6 Công cụ MCP 0-token (`staffkit`)
 
 | Công cụ | Tác dụng |
 |---|---|

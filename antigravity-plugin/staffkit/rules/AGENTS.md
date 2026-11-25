@@ -1,4 +1,4 @@
-# Auto-Prompt Architect Rules
+# StaffKit Rules
 
 1. **0-Token Memory First:** On existing repos, call `load_project_memory` + `locate_context` before scanning files. Honor `constitution.md`, `contracts.md`, `lessons.md`, and global playbook lessons.
 2. **Vague Idea → `brainstorm-to-product`:** Elicit across adaptive rounds with proactive suggestions; wait for user confirmation before coding.

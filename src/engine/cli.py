@@ -1,4 +1,4 @@
-"""Typer + Rich CLI entrypoint for Auto-Prompt Architect v2.0 (Antigravity IDE Native Plugin)."""
+"""Typer + Rich CLI entrypoint for StaffKit v3.0 (Antigravity IDE Pro Engineering Plugin)."""
 
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ from engine.evaluator import audit_historical_commits, run_plugin_micro_evals
 from engine.models import estimate_tokens
 
 app = typer.Typer(
-    name="engine",
-    help="Auto-Prompt Architect v2.0 — 0-token Antigravity IDE Native Plugin.",
+    name="staffkit",
+    help="StaffKit v3.0 — 0-token Staff-Engineer Plugin for Antigravity IDE.",
     no_args_is_help=True,
 )
 console = Console()
@@ -39,19 +39,19 @@ def serve_mcp(
 def install_plugin(
     target_dir: Path | None = typer.Option(None, "--target", help="Custom plugin install directory"),
 ) -> None:
-    """Install/sync the Auto-Prompt Architect plugin into ~/.gemini/config/plugins/ with machine-local Python path."""
-    src_dir = Path(__file__).resolve().parents[2] / "antigravity-plugin" / "auto-prompt-architect"
+    """Install/sync the StaffKit plugin into ~/.gemini/config/plugins/staffkit with machine-local Python path."""
+    src_dir = Path(__file__).resolve().parents[2] / "antigravity-plugin" / "staffkit"
     if not src_dir.is_dir():
         console.print(f"[red]Plugin source directory not found: {src_dir}[/red]")
         raise typer.Exit(code=1)
 
-    dst_dir = target_dir or (Path.home() / ".gemini" / "config" / "plugins" / "auto-prompt-architect")
+    dst_dir = target_dir or (Path.home() / ".gemini" / "config" / "plugins" / "staffkit")
     shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
 
     py_exe = Path(sys.executable).resolve().as_posix()
     mcp_payload = {
         "mcpServers": {
-            "auto-prompt-architect": {
+            "staffkit": {
                 "command": py_exe,
                 "args": ["-m", "engine.cli", "serve-mcp"],
             }
@@ -61,7 +61,7 @@ def install_plugin(
         json.dumps(mcp_payload, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
-    console.print(f"[green]Installed Auto-Prompt Architect plugin -> {dst_dir.as_posix()}[/green]")
+    console.print(f"[green]Installed StaffKit plugin -> {dst_dir.as_posix()}[/green]")
     console.print(f"[cyan]MCP Python: {py_exe} (-m engine.cli serve-mcp)[/cyan]")
 
 
@@ -71,7 +71,7 @@ def plugin_health(
     commits: int = typer.Option(10, "--commits", help="Number of historical commits to replay (0-token)"),
 ) -> None:
     """0-token Plugin Health Scorecard: manifest check, token overhead, live MCP latency, commit replay recall & telemetry."""
-    plugin_dir = Path.home() / ".gemini" / "config" / "plugins" / "auto-prompt-architect"
+    plugin_dir = Path.home() / ".gemini" / "config" / "plugins" / "staffkit"
     repo_path = repo.expanduser().resolve()
     issues: list[str] = []
 
@@ -88,7 +88,7 @@ def plugin_health(
         mcp_cfg_p = plugin_dir / "mcp_config.json"
         if mcp_cfg_p.is_file():
             mcp_cfg = json.loads(mcp_cfg_p.read_text(encoding="utf-8"))
-            srv = (mcp_cfg.get("mcpServers") or {}).get("auto-prompt-architect") or {}
+            srv = (mcp_cfg.get("mcpServers") or {}).get("staffkit") or {}
             cmd = str(srv.get("command", ""))
             mcp_py_ok = Path(cmd).is_file() if ("/" in cmd or "\\" in cmd) else True
             if not mcp_py_ok:
@@ -154,7 +154,7 @@ def plugin_health(
             except Exception:
                 continue
 
-    table = Table(title=f"Auto-Prompt Architect v{version} — 0-Token Health Scorecard ({repo_path.name})")
+    table = Table(title=f"StaffKit v{version} — 0-Token Health Scorecard ({repo_path.name})")
     table.add_column("Check", style="cyan")
     table.add_column("Result", style="green")
     table.add_row("Plugin Installed & MCP Python", f"{'OK' if (installed and mcp_py_ok) else 'FAIL'} ({tool_cnt} IDE tools)")
@@ -178,7 +178,7 @@ def plugin_health(
 def plugin_eval() -> None:
     """Run the fast 3-scenario 0-token Plugin Micro-Eval harness against the live 6-tool MCP server."""
     report = run_plugin_micro_evals()
-    table = Table(title=f"Auto-Prompt Architect — Plugin Micro-Eval ({report.passed_count}/{report.total_count} PASS)")
+    table = Table(title=f"StaffKit — Plugin Micro-Eval ({report.passed_count}/{report.total_count} PASS)")
     table.add_column("Scenario", style="cyan")
     table.add_column("Status")
     table.add_column("Time", justify="right")
@@ -222,7 +222,7 @@ def plugin_stats(
         console.print("[yellow]Telemetry file is empty.[/yellow]")
         return
 
-    table = Table(title=f"Auto-Prompt Architect — Live Telemetry Stats ({repo_path.name}, {total_calls} calls)")
+    table = Table(title=f"StaffKit — Live Telemetry Stats ({repo_path.name}, {total_calls} calls)")
     table.add_column("MCP Tool", style="cyan", no_wrap=True)
     table.add_column("Calls", justify="right")
     table.add_column("Success", justify="right")

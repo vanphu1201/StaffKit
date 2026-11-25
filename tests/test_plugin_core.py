@@ -22,9 +22,11 @@ def _init_git_repo(repo_dir: Path) -> None:
 
 
 def test_plugin_manifest_and_always_on_overhead_under_1000_tokens() -> None:
-    plugin_root = Path(__file__).resolve().parents[1] / "antigravity-plugin" / "auto-prompt-architect"
+    plugin_root = Path(__file__).resolve().parents[1] / "antigravity-plugin" / "staffkit"
     manifest = json.loads((plugin_root / "plugin.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "3.0.0"
+    assert manifest["name"] == "staffkit"
+    assert manifest["displayName"] == "StaffKit"
+    assert manifest["version"] == "3.0.1"
     assert (plugin_root / manifest["logo"]).is_file()
 
     rules_text = (plugin_root / "rules" / "AGENTS.md").read_text(encoding="utf-8")

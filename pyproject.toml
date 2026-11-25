@@ -3,9 +3,9 @@ requires = ["hatchling>=1.24"]
 build-backend = "hatchling.build"
 
 [project]
-name = "auto-prompt-architect"
-version = "3.0.0"
-description = "Zero-token Antigravity IDE Native Plugin: 6-tool MCP exoskeleton, 1-hop AST/import context locator, behavioral smoke verifier, and Cross-Project Playbook."
+name = "staffkit"
+version = "3.0.1"
+description = "StaffKit — 0-token Staff-Engineer Plugin for Antigravity IDE (6-tool MCP exoskeleton, 1-hop import + Git Co-Change locator, zero-regression verifier, PR blast-radius review & ADR memory)."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -23,6 +23,7 @@ dev = [
 ]
 
 [project.scripts]
+staffkit = "engine.cli:app"
 engine = "engine.cli:app"
 
 [tool.hatch.build.targets.wheel]

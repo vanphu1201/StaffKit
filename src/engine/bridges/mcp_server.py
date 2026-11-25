@@ -1,4 +1,4 @@
-"""Auto-Prompt Architect v2.0.0 — Pure 6-Tool 0-Token FastMCP Server for Antigravity IDE."""
+"""StaffKit v3.0 — Pure 6-Tool 0-Token FastMCP Server for Antigravity IDE."""
 
 from __future__ import annotations
 
@@ -30,12 +30,13 @@ from engine.verifier import Verifier, probe_http_endpoint, run_web_runtime_smoke
 logging.basicConfig(
     level=logging.INFO,
     stream=sys.stderr,
-    format="[auto-prompt-architect] %(levelname)s: %(message)s",
+    format="[staffkit] %(levelname)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-GLOBAL_PLAYBOOK_DIR = Path.home() / ".gemini" / "auto-prompt-playbooks"
+GLOBAL_PLAYBOOK_DIR = Path.home() / ".gemini" / "staffkit-playbooks"
 GLOBAL_LESSONS_PATH = GLOBAL_PLAYBOOK_DIR / "global_lessons.md"
+_LEGACY_GLOBAL_LESSONS_PATH = Path.home() / ".gemini" / "auto-prompt-playbooks" / "global_lessons.md"
 
 
 def _resolve_repo_path(repo_path: str, fallback: Path) -> Path:
@@ -115,7 +116,7 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
         config = EngineConfig(project=ProjectConfig(target_repo=str(Path.cwd())))
 
     playbook_path = global_playbook_path or GLOBAL_LESSONS_PATH
-    mcp = FastMCP("auto-prompt-architect")
+    mcp = FastMCP("staffkit")
 
     @mcp.tool()
     def load_project_memory(repo_path: str = "", include_audit: bool = False) -> str:
@@ -143,7 +144,9 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
         decisions = _read_optional(auto_dir / "decisions.md", 1800)
         lessons = _read_optional(auto_dir / "lessons.md", 2200)
         handoff = _read_optional(auto_dir / "handoff.md", 1800)
-        global_lessons = _read_optional(playbook_path, 1600)
+        global_lessons = _read_optional(playbook_path, 1600) or (
+            _read_optional(_LEGACY_GLOBAL_LESSONS_PATH, 1600) if global_playbook_path is None else ""
+        )
         team_cfg = _load_team_config(repo)
 
         sections = [
@@ -423,7 +426,7 @@ def create_mcp_server(config_path: Path | None = None, *, global_playbook_path: 
             dirty = tracked + untracked
             if dirty:
                 subprocess.run(["git", "add", "--", *dirty], cwd=str(repo), capture_output=True, check=False)
-                msg = message.strip() or "chore: auto-prompt-architect safety snapshot"
+                msg = message.strip() or "chore: staffkit safety snapshot"
                 subprocess.run(["git", "commit", "-m", msg], cwd=str(repo), capture_output=True, check=False)
             sha = guard.create_checkpoint()
             (repo / ".auto-engine").mkdir(parents=True, exist_ok=True)

@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "auto-prompt-architect": {
+    "staffkit": {
       "command": "python",
       "args": [
         "-m",

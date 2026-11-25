@@ -2,9 +2,9 @@
 set -euo pipefail
 
 REPO_URL="https://github.com/vanphu1201/automatic-promt.git"
-INSTALL_DIR="${APA_INSTALL_DIR:-$HOME/.local/share/auto-prompt-architect}"
+INSTALL_DIR="${STAFFKIT_INSTALL_DIR:-$HOME/.local/share/staffkit}"
 
-echo "==> Installing Auto-Prompt Architect v3.0.0 into $INSTALL_DIR"
+echo "==> Installing StaffKit v3.0.1 into $INSTALL_DIR"
 
 if ! command -v git >/dev/null 2>&1; then
   echo "ERROR: git is required." >&2
@@ -33,12 +33,12 @@ fi
 echo "==> Installing package dependencies..."
 "$INSTALL_DIR/.venv/bin/pip" install --quiet -e "$INSTALL_DIR"
 
-echo "==> Registering plugin in ~/.gemini/config/plugins/auto-prompt-architect..."
+echo "==> Registering plugin in ~/.gemini/config/plugins/staffkit..."
 "$INSTALL_DIR/.venv/bin/python" -m engine.cli install-plugin
 
 echo "==> Running 0-token self-verification (plugin-eval)..."
 "$INSTALL_DIR/.venv/bin/python" -m engine.cli plugin-eval
 
 echo ""
-echo "DONE! Reload Antigravity IDE (or toggle Auto-Prompt Architect in Plugins Manager) to start using:"
-echo "  /brainstorm-to-product  |  /deep-fix  |  /audit-and-evolve"
+echo "DONE! Reload Antigravity IDE (or toggle StaffKit in Plugins Manager) to start using:"
+echo "  /brainstorm-to-product  |  /deep-fix  |  /audit-and-evolve  |  /pr-review  |  /refactor-safe"
