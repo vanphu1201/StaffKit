@@ -199,6 +199,7 @@ def plugin_stats(
     repo: Path = typer.Option(Path("."), "--repo", help="Target repo containing .auto-engine/plugin_telemetry.jsonl"),
     is_global: bool = typer.Option(False, "--global", help="Aggregate concrete effectiveness evidence across ALL projects"),
     days: int = typer.Option(0, "--days", min=0, help="Filter telemetry to last N days (0 = all time)"),
+    reset: bool = typer.Option(False, "--reset", help="Clear the selected telemetry log cleanly"),
 ) -> None:
     """Analyze real MCP telemetry & concrete effectiveness evidence (catches, rollbacks, lessons) per repo or --global."""
     from datetime import datetime, timedelta
@@ -212,6 +213,12 @@ def plugin_stats(
         repo_path = repo.expanduser().resolve()
         tel_path = repo_path / ".auto-engine" / "plugin_telemetry.jsonl"
         scope_label = repo_path.name
+
+    if reset:
+        if tel_path.is_file():
+            tel_path.unlink()
+        console.print(f"[green]Cleared telemetry log:[/green] {tel_path.as_posix()}")
+        return
 
     if not tel_path.is_file():
         console.print(f"[yellow]No telemetry recorded yet at {tel_path.as_posix()}. Use StaffKit in Antigravity IDE first.[/yellow]")

@@ -141,7 +141,12 @@ def create_mcp_server(
         config = EngineConfig(project=ProjectConfig(target_repo=str(Path.cwd())))
 
     playbook_path = global_playbook_path or GLOBAL_LESSONS_PATH
-    telemetry_path = global_telemetry_path if global_telemetry_path is not None else GLOBAL_TELEMETRY_PATH
+    if global_telemetry_path is not None:
+        telemetry_path: Path | None = global_telemetry_path
+    elif os.environ.get("PYTEST_CURRENT_TEST"):
+        telemetry_path = None
+    else:
+        telemetry_path = GLOBAL_TELEMETRY_PATH
     mcp = FastMCP("staffkit")
 
     @mcp.tool()
