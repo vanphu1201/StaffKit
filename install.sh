@@ -4,7 +4,7 @@ set -euo pipefail
 REPO_URL="https://github.com/vanphu1201/StaffKit.git"
 INSTALL_DIR="${STAFFKIT_INSTALL_DIR:-$HOME/.local/share/staffkit}"
 
-echo "==> Installing StaffKit v3.0.1 into $INSTALL_DIR"
+echo "==> Installing StaffKit v3.1.0 into $INSTALL_DIR"
 
 if ! command -v git >/dev/null 2>&1; then
   echo "ERROR: git is required." >&2

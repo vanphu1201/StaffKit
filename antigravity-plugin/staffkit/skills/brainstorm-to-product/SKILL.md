@@ -12,12 +12,13 @@ Turn any vague user idea or complex major feature — even when the user doesn't
 1. **Inspect Context First:**
    - If the user attached images/mockups/documents, examine them directly first.
    - If working in an existing repository, call `load_project_memory(repo_path)` and `locate_context(query, repo_path)` (0-token) so you understand the existing architecture and never ask about things already built.
-2. **Gauge Complexity & Ask Targeted Questions (using `ask_question` or structured plain-Vietnamese Q&A):**
-   - **Simple tool (1 screen/script):** 3–4 focused questions.
-   - **Standard app:** 5–7 questions grouped by category (*Luồng chính*, *Dữ liệu & Tích hợp thật*, *Trải nghiệm*).
-   - **Complex / multi-module / open-ended major feature:** 7–11 deep questions grouped cleanly (*Mục tiêu & Luồng người dùng*, *Dữ liệu & Tích hợp thật*, *An toàn / Quyền / Ngoại lệ*, *UX & Bảo mật*).
+2. **Breadth-Then-Depth Drill-Down (NEVER Ask Only Shallow 1-Shot Questions):**
+   - **Round 1 (Breadth — Frame the System):** Ask 3–5 concise questions to map the overall goal, target users, core inputs/outputs, and constraints.
+   - **Round 2+ (Depth — Drill 2–3 Layers Deep into Critical Branches):** Do NOT stop after broad 1-line answers. Pick the **2–3 most critical or ambiguous branches** (e.g., core business logic, real-world output quality bar, edge cases, external integrations) and **drill down 2–3 layers inside each branch** using concrete examples:
+     - *"Với nhánh X bạn vừa chọn, nếu gặp đầu vào thực tế kiểu Y thì kết quả chính xác phải trông như thế nào? Tiêu chuẩn nào để bạn nhìn vào thấy 'đạt' và 'ưng ý'?"*
+   - Keep drilling branch-by-branch until both breadth AND depth are crystal clear.
 3. **Proactive Value-Add Suggestions:**
-   - Always propose **3–5 smart features or safeguards** the user might not have thought of (e.g., auto-save, live health check, emergency stop / confirmation gates for risky actions, retry/recovery, quick-start launcher), clearly explaining the real-world benefit in plain Vietnamese so the user can tick what they want.
+   - Always propose **3–5 smart features, edge-case safeguards, or UX delights** the user might have forgotten (e.g., auto-save, live health check, emergency stop / confirmation gates for risky actions, retry/recovery, output preview), clearly explaining the real-world benefit in plain Vietnamese so the user can tick what they want.
 
 ## Phase 1.5: Solution Architecture Options, Feasibility & Phased Plan (For Standard / Complex Features)
 
@@ -34,10 +35,14 @@ Whenever a feature is large, open-ended, or has multiple valid technical approac
    - Clearly mark **1 Recommended Option** with concrete reasoning, and let the user pick via `ask_question`.
 3. **Phased Milestone Breakdown (For Large Features):**
    - Break large features into **2–3 verifiable milestones** (*Chặng 1: Khung lõi chạy thật & an toàn* → *Chặng 2: Khả năng thông minh / nhiều bước* → *Chặng 3: Bảo vệ, tối ưu tốc độ & đồng bộ đa thiết bị*) so the user sees working software early instead of a risky big-bang rewrite.
-4. **Clarity Gate (User Decides When It's Enough):**
-   - Summarize the locked requirements, chosen approach, and milestone plan; report an estimated **Clarity Score (%)** and any remaining open gaps; and explicitly let the user choose:
-     - **Hỏi sâu / So sánh thêm (Vòng tiếp theo)** — drill ONLY into open gaps without repeating answered questions.
-     - **Chốt phương án & Tiến hành xây dựng (từ Chặng 1)** — proceed to Phase 2 ONLY when the user confirms!
+4. **Echo-Back Confirm Gate (User Verifies AI Truly Understood Before Coding):**
+   - Before writing a single line of code, restate your understanding in **plain, jargon-free Vietnamese**:
+     - **Đầu vào thực tế → Hệ thống làm gì → Kết quả đầu ra cụ thể người dùng sẽ thấy**
+     - **Các giả định (Assumptions) bạn đang tự suy ra** (so the user can immediately catch any misunderstanding!)
+     - **Chosen architecture option, milestone plan & estimated Clarity Score (%)**
+   - Explicitly let the user choose:
+     - **Chỉnh/bổ sung hoặc đào sâu thêm (Vòng tiếp theo)** — fix misunderstandings or drill deeper into open gaps.
+     - **AI đã hiểu đúng ý — Chốt đặc tả & Bắt đầu xây dựng (từ Chặng 1)** — proceed to Phase 2 ONLY when the user confirms!
 
 ## Phase 2: Lock Spec, Constitution & Contract (Zero Drift)
 
@@ -55,8 +60,9 @@ Once the user confirms they are ready:
 
 1. Create a clean safety checkpoint if modifying an existing repo: `snapshot_or_undo(action="snapshot", repo_path=...)`.
 2. Build the product natively using Antigravity IDE's full capabilities (parallel edits, real dependency installation, live testing, Browser UI inspection when applicable).
-3. Run independent 0-token verification:
-   `verify_and_smoke(repo_path=..., generate_delivery_pack=True)` — confirms build, typecheck, tests, live Web/API server boot & HTTP response, AND generates `CHAY_SAN_PHAM.bat` + `HUONG_DAN_SU_DUNG.md` for non-tech users.
-4. **Visual / Browser QA (for Web Apps):** After `verify_and_smoke` passes, if the app has a web UI, open it briefly with Antigravity IDE's `browser` subagent to confirm the UI actually renders cleanly with zero white-screen or console JS errors.
-5. Record any non-trivial runtime/environment discoveries and refresh module signatures via `record_lesson(title, summary, repo_path=..., touched_files=[...])`.
-6. Deliver a clear plain-Vietnamese summary including **exact run instructions** (`CHAY_SAN_PHAM.bat`) and **what was verified live**.
+3. **Self-Run & Real-Output Proof Gate (NEVER Declare Done from Build/Unit Tests Alone):**
+   - Run independent 0-token verification: `verify_and_smoke(repo_path=...)`.
+   - **Act as a real user and actually run the feature with real input** (real CLI invocation, real API payload, real file/media output check, or live click-through in `browser` subagent for Web Apps).
+   - **Inspect the actual produced artifact/output quality** against the user's agreed criteria — if the output is empty, broken, ugly, or misses the user's intent, fix it BEFORE reporting done!
+4. Record any non-trivial runtime/environment discoveries and refresh module signatures via `record_lesson(title, summary, repo_path=..., touched_files=[...])`.
+5. Deliver a clear plain-Vietnamese summary including **concrete proof of real output** (sample output / verified artifact / UI check) and exact run instructions.

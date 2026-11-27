@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $RepoUrl = "https://github.com/vanphu1201/StaffKit.git"
 $InstallDir = if ($env:STAFFKIT_INSTALL_DIR) { $env:STAFFKIT_INSTALL_DIR } else { Join-Path $HOME ".local\share\staffkit" }
 
-Write-Host "==> Installing StaffKit v3.0.1 into $InstallDir" -ForegroundColor Cyan
+Write-Host "==> Installing StaffKit v3.1.0 into $InstallDir" -ForegroundColor Cyan
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Write-Error "git is required."

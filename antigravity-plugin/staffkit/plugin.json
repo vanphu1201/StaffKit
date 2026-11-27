@@ -1,7 +1,7 @@
 {
   "name": "staffkit",
   "displayName": "StaffKit",
-  "version": "3.0.1",
+  "version": "3.1.0",
   "logo": "assets/logo.svg",
   "description": "Bộ đồ nghề 0-token cấp Staff Engineer cho Antigravity IDE: Thiết kế đa phương án (ADR) + Định vị X-Quang + Khóa hồi quy & chống PASS giả + PR Blast-Radius Review + Safe Refactor.",
   "repository": "https://github.com/vanphu1201/StaffKit",

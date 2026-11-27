@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "staffkit"
-version = "3.0.1"
+version = "3.1.0"
 description = "StaffKit — 0-token Staff-Engineer Plugin for Antigravity IDE (6-tool MCP exoskeleton, 1-hop import + Git Co-Change locator, zero-regression verifier, PR blast-radius review & ADR memory)."
 readme = "README.md"
 requires-python = ">=3.11"

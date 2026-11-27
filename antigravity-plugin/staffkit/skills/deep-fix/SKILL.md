@@ -20,7 +20,10 @@ Solve bugs and upgrades cleanly on the first try with zero blind guessing and ze
 
 ## Step 3: Surgical Fix, End-to-End Core-Flow Verify & Rollback on Regression
 1. Apply a clean, minimal root-cause fix while honoring `.auto-engine/constitution.md` and preserving all existing working core flows.
-2. **Prove BOTH the fix AND the core flow work live:** re-run the real end-to-end core user flow (not just `build PASS` or `GET / -> 200` — test the actual download/stream/API payload; for Web UI, verify visually via `browser` subagent).
+2. **Self-Run & Real-Output Proof (Prove BOTH the Fix AND Core Flow Produce Good Real Output):**
+   - NEVER stop at `build PASS`, unit test green, or `GET / -> 200`.
+   - Actually execute the real feature end-to-end with real input and **inspect the actual produced output/artifact/UI** (e.g., verify downloaded video is valid & non-empty, API JSON has exact expected fields, Web UI renders cleanly & button action works in `browser` subagent).
+   - Only declare done when the **real output quality** genuinely satisfies the user's expectation.
 3. Run `verify_and_smoke(repo_path=...)` for independent diff-sanity, build/test, and `core_smoke_commands` verification.
 4. **Auto-Rollback Rule:** If a previously working core flow breaks after your edit and you cannot prove it works live again, immediately run `snapshot_or_undo(action="undo", repo_path=...)` so you NEVER leave the user with a broken core feature.
 
