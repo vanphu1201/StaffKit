@@ -348,5 +348,43 @@ def init_team(
     console.print(f"[green]Created Team Policy -> {team_path.as_posix()}[/green] (stack=`{stack}`)")
 
 
+@app.command(name="ab-compare")
+def ab_compare(
+    branch_a: str = typer.Argument(..., help="Baseline branch/commit (e.g. ab-no-plugin)"),
+    branch_b: str = typer.Argument(..., help="Treatment branch/commit (e.g. ab-staffkit)"),
+    base: str = typer.Option("HEAD", "--base", help="Common ancestor commit/branch"),
+    repo: Path = typer.Option(Path("."), "--repo", help="Target git repository"),
+    cmd: list[str] | None = typer.Option(None, "--cmd", help="Custom verification command(s) to run on both branches"),
+) -> None:
+    """Objectively compare two Git branches (Baseline vs StaffKit) using isolated worktrees (0 LLM tokens)."""
+    from engine.evaluator import compare_ab_branches
+
+    repo_path = repo.expanduser().resolve()
+    rep = compare_ab_branches(repo_path, base, branch_a, branch_b, verify_cmds=cmd)
+    a, b = rep.branch_a, rep.branch_b
+
+    table = Table(title=f"StaffKit — Objective A/B Comparison ({rep.repo_name}, base=`{rep.base_ref}`)")
+    table.add_column("Metric", style="cyan")
+    table.add_column(f"A: {a.label} ({a.ref})")
+    table.add_column(f"B: {b.label} ({b.ref})")
+    table.add_row("Files Changed (+ins / -del)", f"{a.files_changed} (+{a.insertions}/-{a.deletions})", f"{b.files_changed} (+{b.insertions}/-{b.deletions})")
+    table.add_row("Build / Test Gate", f"{'PASS' if a.verify_passed else 'FAIL'} ({a.verify_duration_sec}s)", f"{'PASS' if b.verify_passed else 'FAIL'} ({b.verify_duration_sec}s)")
+    table.add_row(
+        "Diff Sanity (0 mock/@ts-ignore/skip)",
+        "PASS" if a.diff_sanity_ok else f"FAIL ({len(a.diff_sanity_hits)} hits)",
+        "PASS" if b.diff_sanity_ok else f"FAIL ({len(b.diff_sanity_hits)} hits)",
+    )
+    table.add_row("Security X-Ray (0 .env/secrets)", "PASS" if a.security_ok else "FAIL", "PASS" if b.security_ok else "FAIL")
+    if a.core_smoke_passed is not None or b.core_smoke_passed is not None:
+        table.add_row(
+            "Core-Flow Smoke Gate",
+            "PASS" if a.core_smoke_passed else "FAIL",
+            "PASS" if b.core_smoke_passed else "FAIL",
+        )
+    table.add_row("Objective Score (0-100)", f"[bold]{a.objective_score}[/bold]", f"[bold]{b.objective_score}[/bold]")
+    console.print(table)
+    console.print(f"[bold green]Winner: {rep.winner}[/bold green] (Delta B - A: {rep.score_delta_b_minus_a:+d} pts)")
+
+
 if __name__ == "__main__":
     app()

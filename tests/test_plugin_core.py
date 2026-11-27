@@ -472,3 +472,50 @@ def test_session_handoff_and_install_plugin_preserves_venv_symlink(tmp_path: Pat
     assert res.exit_code == 0, res.output
     cfg = json.loads((dst / "mcp_config.json").read_text(encoding="utf-8"))
     assert cfg["mcpServers"]["staffkit"]["command"].endswith("/my_venv/bin/python")
+
+
+def test_ab_compare_scores_clean_branch_over_mock_hack_branch(tmp_path: Path) -> None:
+    import sys
+    from typer.testing import CliRunner
+
+    from engine.cli import app
+
+    _init_git_repo(tmp_path)
+    (tmp_path / "calc.py").write_text("def add(a: int, b: int) -> int:\n    return a - b\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=str(tmp_path), check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "base buggy calc"], cwd=str(tmp_path), check=True, capture_output=True)
+    base_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(tmp_path), check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    # Branch A (Baseline hack): leaves bug + adds TODO: mock placeholder
+    subprocess.run(["git", "checkout", "-b", "ab-baseline"], cwd=str(tmp_path), check=True, capture_output=True)
+    (tmp_path / "calc.py").write_text("# TODO: mock fix\ndef add(a: int, b: int) -> int:\n    return a - b\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=str(tmp_path), check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "hacky attempt"], cwd=str(tmp_path), check=True, capture_output=True)
+
+    # Branch B (StaffKit clean fix): real fix, zero mock/skip
+    subprocess.run(["git", "checkout", "-b", "ab-staffkit", base_sha], cwd=str(tmp_path), check=True, capture_output=True)
+    (tmp_path / "calc.py").write_text("def add(a: int, b: int) -> int:\n    return a + b\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=str(tmp_path), check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "clean fix"], cwd=str(tmp_path), check=True, capture_output=True)
+
+    py_exe = f'"{sys.executable}"' if " " in sys.executable else sys.executable
+    runner = CliRunner()
+    res = runner.invoke(
+        app,
+        [
+            "ab-compare",
+            "ab-baseline",
+            "ab-staffkit",
+            "--base",
+            base_sha,
+            "--repo",
+            str(tmp_path),
+            "--cmd",
+            f'{py_exe} -c "import calc; assert calc.add(2, 3) == 5"',
+        ],
+    )
+    assert res.exit_code == 0, res.output
+    assert "Winner: StaffKit" in res.output
+    assert "+65 pts" in res.output

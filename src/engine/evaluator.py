@@ -477,3 +477,211 @@ def run_plugin_micro_evals() -> PluginMicroEvalReport:
         all_passed=(passed_count == len(scenarios)),
         scenarios=scenarios,
     )
+
+
+class ABBranchMetrics(BaseModel):
+    """Objective automated metrics measured on one Git branch relative to a common base commit."""
+
+    label: str
+    ref: str
+    files_changed: int = 0
+    insertions: int = 0
+    deletions: int = 0
+    diff_sanity_ok: bool = True
+    diff_sanity_hits: list[str] = Field(default_factory=list)
+    security_ok: bool = True
+    security_summary: str = ""
+    verify_passed: bool = True
+    verify_duration_sec: float = 0.0
+    verify_error: str = ""
+    core_smoke_passed: bool | None = None
+    objective_score: int = 0
+
+
+class ABCompareReport(BaseModel):
+    """Side-by-side objective A/B comparison report (e.g., No-Plugin Baseline vs StaffKit)."""
+
+    repo_name: str
+    base_ref: str
+    branch_a: ABBranchMetrics
+    branch_b: ABBranchMetrics
+    winner: str
+    score_delta_b_minus_a: int
+
+
+def _evaluate_branch_in_worktree(
+    repo_path: Path,
+    base_ref: str,
+    branch_ref: str,
+    label: str,
+    verify_cmds: list[str] | None = None,
+) -> ABBranchMetrics:
+    """Checkout `branch_ref` into an isolated temp git worktree and measure objective quality metrics."""
+    import shutil
+
+    import yaml
+
+    from engine.ast_scanner import scan_repo_tech_debt
+    from engine.bootstrapper import detect_existing_stack
+    from engine.git_guard import GitGuard
+    from engine.verifier import Verifier
+
+    resolved = repo_path.resolve()
+    # 1. Diff stats & diff sanity between base_ref and branch_ref
+    stat_proc = subprocess.run(
+        ["git", "diff", "--numstat", f"{base_ref}..{branch_ref}"],
+        cwd=str(resolved),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    files_changed = 0
+    insertions = 0
+    deletions = 0
+    for ln in stat_proc.stdout.splitlines():
+        parts = ln.split("\t")
+        if len(parts) >= 3:
+            files_changed += 1
+            if parts[0].isdigit():
+                insertions += int(parts[0])
+            if parts[1].isdigit():
+                deletions += int(parts[1])
+
+    diff_proc = subprocess.run(
+        ["git", "diff", f"{base_ref}..{branch_ref}"],
+        cwd=str(resolved),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    cfg = EngineConfig()
+    forbid_pats = [*cfg.guards.forbid_diff_patterns, *cfg.guards.forbid_demo_patterns]
+    team_path = resolved / ".auto-engine" / "team.yaml"
+    team_cfg: dict = {}
+    if team_path.is_file():
+        try:
+            raw_t = yaml.safe_load(team_path.read_text(encoding="utf-8", errors="replace"))
+            if isinstance(raw_t, dict):
+                team_cfg = raw_t
+        except Exception:
+            pass
+    forbid_pats.extend(str(p) for p in (team_cfg.get("forbid_patterns") or []) if str(p).strip())
+
+    sanity_hits: list[str] = []
+    for ln in diff_proc.stdout.splitlines():
+        if not ln.startswith("+") or ln.startswith("+++"):
+            continue
+        added = ln[1:]
+        for pat in forbid_pats:
+            if re.search(pat, added):
+                sanity_hits.append(f"Matched `{pat}`: {added.strip()[:90]}")
+                break
+
+    # 2. Isolated worktree for live verify + security scan
+    wt_dir = Path(tempfile.mkdtemp(prefix="staffkit_ab_wt_"))
+    try:
+        add_proc = subprocess.run(
+            ["git", "worktree", "add", "--detach", str(wt_dir), branch_ref],
+            cwd=str(resolved),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if add_proc.returncode != 0:
+            raise RuntimeError(f"git worktree add failed for `{branch_ref}`: {add_proc.stderr.strip()}")
+
+        xray = scan_repo_tech_debt(wt_dir)
+        sec_line = next((ln for ln in xray.splitlines() if "Security Alert" in ln), "")
+        sec_ok = "None detected" in sec_line or not sec_line
+
+        det_stack, det_vc, det_fc, _ = detect_existing_stack(wt_dir)
+        team_cmds = [str(c).strip() for c in (team_cfg.get("verify_commands") or []) if str(c).strip()]
+        cmds = [c.strip() for c in (verify_cmds or []) if c.strip()] or team_cmds or det_vc or det_fc
+
+        local_cfg = EngineConfig()
+        local_cfg.project.target_repo = wt_dir.as_posix()
+        guard = GitGuard(wt_dir, ignore_artifacts=local_cfg.guards.ignore_artifacts)
+        verifier = Verifier(local_cfg, guard)
+
+        t0 = time.monotonic()
+        if cmds:
+            vres = verifier.run_commands(cmds)
+            verify_ok = vres.passed
+            verify_err = vres.trimmed_error_log
+        else:
+            verify_ok = True
+            verify_err = ""
+        verify_dur = round(time.monotonic() - t0, 2)
+
+        core_cmds = [str(c).strip() for c in (team_cfg.get("core_smoke_commands") or []) if str(c).strip()]
+        core_ok: bool | None = None
+        if core_cmds:
+            cres = verifier.run_commands(core_cmds)
+            core_ok = cres.passed
+
+        score = (
+            (45 if verify_ok else 0)
+            + (20 if (core_ok is None or core_ok) else 0)
+            + (20 if not sanity_hits else 0)
+            + (15 if sec_ok else 0)
+        )
+        return ABBranchMetrics(
+            label=label,
+            ref=branch_ref,
+            files_changed=files_changed,
+            insertions=insertions,
+            deletions=deletions,
+            diff_sanity_ok=(len(sanity_hits) == 0),
+            diff_sanity_hits=sanity_hits[:8],
+            security_ok=sec_ok,
+            security_summary=sec_line,
+            verify_passed=verify_ok,
+            verify_duration_sec=verify_dur,
+            verify_error=verify_err[:400],
+            core_smoke_passed=core_ok,
+            objective_score=score,
+        )
+    finally:
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(wt_dir)],
+            cwd=str(resolved),
+            capture_output=True,
+            check=False,
+        )
+        shutil.rmtree(wt_dir, ignore_errors=True)
+
+
+def compare_ab_branches(
+    repo_path: Path,
+    base_ref: str,
+    branch_a: str,
+    branch_b: str,
+    *,
+    label_a: str = "Baseline (No-Plugin)",
+    label_b: str = "StaffKit",
+    verify_cmds: list[str] | None = None,
+) -> ABCompareReport:
+    """Objectively compare two Git branches (A vs B) from a shared `base_ref` using isolated worktrees (0 LLM tokens)."""
+    m_a = _evaluate_branch_in_worktree(repo_path, base_ref, branch_a, label_a, verify_cmds=verify_cmds)
+    m_b = _evaluate_branch_in_worktree(repo_path, base_ref, branch_b, label_b, verify_cmds=verify_cmds)
+    delta = m_b.objective_score - m_a.objective_score
+    if delta > 0:
+        winner = label_b
+    elif delta < 0:
+        winner = label_a
+    else:
+        winner = "TIE"
+    return ABCompareReport(
+        repo_name=repo_path.resolve().name,
+        base_ref=base_ref,
+        branch_a=m_a,
+        branch_b=m_b,
+        winner=winner,
+        score_delta_b_minus_a=delta,
+    )
