@@ -12,11 +12,12 @@ Turn any vague user idea or complex major feature — even when the user doesn't
 1. **Inspect Context First:**
    - If the user attached images/mockups/documents, examine them directly first.
    - If working in an existing repository, call `load_project_memory(repo_path)` and `locate_context(query, repo_path)` (0-token) so you understand the existing architecture and never ask about things already built.
-2. **Breadth-Then-Depth Drill-Down (NEVER Ask Only Shallow 1-Shot Questions):**
-   - **Round 1 (Breadth — Frame the System):** Ask 3–5 concise questions to map the overall goal, target users, core inputs/outputs, and constraints.
-   - **Round 2+ (Depth — Drill 2–3 Layers Deep into Critical Branches):** Do NOT stop after broad 1-line answers. Pick the **2–3 most critical or ambiguous branches** (e.g., core business logic, real-world output quality bar, edge cases, external integrations) and **drill down 2–3 layers inside each branch** using concrete examples:
-     - *"Với nhánh X bạn vừa chọn, nếu gặp đầu vào thực tế kiểu Y thì kết quả chính xác phải trông như thế nào? Tiêu chuẩn nào để bạn nhìn vào thấy 'đạt' và 'ưng ý'?"*
-   - Keep drilling branch-by-branch until both breadth AND depth are crystal clear.
+2. **Dynamic Answer-Driven Interview (NEVER Dump a Static Pre-Baked Question List):**
+   - **No rigid checklist:** Do NOT throw 8–10 generic pre-baked questions at the user at once.
+   - **Generate each round dynamically (2–4 sharp questions per round)** from **the user's previous answers + your repo & domain expertise**:
+     - **Follow & Deepen Their Direction:** Use what the user just answered to generate targeted follow-up questions that drill 2–3 layers deeper into *their* exact path (concrete real inputs, edge cases, what a "great" real output looks like).
+     - **Broaden Their Horizon Simultaneously:** Alongside deep follow-ups, proactively weave in **1–2 widening questions or angles** they haven't thought of yet (e.g., error recovery, scale, permissions, UX ergonomics, integration impact) so the user sees the bigger picture while staying aligned with their direction.
+   - Continue adaptive rounds until both **depth on the chosen direction** and **breadth across adjacent risks** are solid.
 3. **Proactive Value-Add Suggestions:**
    - Always propose **3–5 smart features, edge-case safeguards, or UX delights** the user might have forgotten (e.g., auto-save, live health check, emergency stop / confirmation gates for risky actions, retry/recovery, output preview), clearly explaining the real-world benefit in plain Vietnamese so the user can tick what they want.
 
@@ -56,8 +57,12 @@ Once the user confirms they are ready:
 2. Persist all of them with one MCP call:
    `save_project_spec(repo_path=..., constitution_md=..., contracts_md=..., decisions_md=..., prd_md=..., acceptance_criteria=[...])`.
 
-## Phase 3: Native Antigravity IDE Execution & Behavioral Reality Verification
+## Phase 3: Auto-Decompose Gate & Native Antigravity IDE Execution
 
+0. **Automatic Complexity & Risk Check (Auto-Trigger `decompose` When Needed):**
+   - Before coding, assess whether implementing the locked spec in a single chat risks subtle bugs, dropped requirements, or cross-layer regressions (e.g., large multi-part feature, FE+BE+DB/API/OS changes, or > 4–5 interacting files).
+   - **If Large / High-Risk:** **AUTOMATICALLY switch into the `decompose` workflow** (follow `decompose/SKILL.md`: build lossless Requirement Inventory `R1..Rn`, split into independent Milestones `M1..Mk` with Real-Output Proof per milestone, execute one milestone at a time, and save `.auto-engine/session_handoff.md` after each milestone so the user can continue in a fresh chat with zero context loss).
+   - **If Small / Focused:** Proceed directly with Steps 1–5 below.
 1. Create a clean safety checkpoint if modifying an existing repo: `snapshot_or_undo(action="snapshot", repo_path=...)`.
 2. Build the product natively using Antigravity IDE's full capabilities (parallel edits, real dependency installation, live testing, Browser UI inspection when applicable).
 3. **Self-Run & Real-Output Proof Gate (NEVER Declare Done from Build/Unit Tests Alone):**

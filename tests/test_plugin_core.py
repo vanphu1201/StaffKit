@@ -136,7 +136,7 @@ def test_plugin_micro_evals_all_pass() -> None:
 
 def test_audit_historical_commits_runs_cleanly_on_self() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    report = audit_historical_commits(repo_root, limit=5)
+    report = audit_historical_commits(repo_root, limit=10)
     assert report.commits_evaluated >= 1
     assert report.avg_recall >= 0.5
 
