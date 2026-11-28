@@ -12,12 +12,14 @@ Turn any vague user idea or complex major feature — even when the user doesn't
 1. **Inspect Context First:**
    - If the user attached images/mockups/documents, examine them directly first.
    - If working in an existing repository, call `load_project_memory(repo_path)` and `locate_context(query, repo_path)` (0-token) so you understand the existing architecture and never ask about things already built.
-2. **Dynamic Answer-Driven Interview (NEVER Dump a Static Pre-Baked Question List):**
+2. **Dynamic Answer-Driven Interview + 10-Dimension Coverage Radar (NEVER Dump a Static Question List):**
    - **No rigid checklist:** Do NOT throw 8–10 generic pre-baked questions at the user at once.
-   - **Generate each round dynamically (2–4 sharp questions per round)** from **the user's previous answers + your repo & domain expertise**:
-     - **Follow & Deepen Their Direction:** Use what the user just answered to generate targeted follow-up questions that drill 2–3 layers deeper into *their* exact path (concrete real inputs, edge cases, what a "great" real output looks like).
-     - **Broaden Their Horizon Simultaneously:** Alongside deep follow-ups, proactively weave in **1–2 widening questions or angles** they haven't thought of yet (e.g., error recovery, scale, permissions, UX ergonomics, integration impact) so the user sees the bigger picture while staying aligned with their direction.
-   - Continue adaptive rounds until both **depth on the chosen direction** and **breadth across adjacent risks** are solid.
+   - **Internal 10-Dimension Radar:** Quietly track coverage (`Clear / Partial / Missing`) across: *Scope & Out-of-Scope, Data Model/State, UX & Error/Empty States, Perf/Security/Privacy, External Integrations, Edge Cases & Concurrency, Constraints/Trade-offs, Terminology, Testable Completion Signals, and Vague Adjectives* (flag unmeasured words like "nhanh / đẹp / mạnh / ổn định" and turn them into concrete criteria).
+   - **Generate each round dynamically (2–4 sharp questions per round, prioritized by `Impact × Uncertainty`)** from **the user's previous answers + your repo & domain expertise**:
+     - **Follow & Deepen Their Direction:** Drill 2–3 layers deeper into *their* exact path (concrete real inputs, edge cases, what a "great" real output looks like).
+     - **Broaden Their Horizon Simultaneously:** Weave in **1–2 widening questions** from unresolved Radar dimensions so nothing critical is missed.
+     - **Question Quality Rule:** Each question must be a real, plain-Vietnamese question (never a cryptic label), paired with **1 concise "Tại sao quan trọng" (*Why it matters*) line + 1 Recommended Option** when offering choices.
+   - Continue adaptive rounds until both **depth on the chosen direction** and **breadth across high-impact Radar dimensions** are solid.
 3. **Proactive Value-Add Suggestions:**
    - Always propose **3–5 smart features, edge-case safeguards, or UX delights** the user might have forgotten (e.g., auto-save, live health check, emergency stop / confirmation gates for risky actions, retry/recovery, output preview), clearly explaining the real-world benefit in plain Vietnamese so the user can tick what they want.
 
@@ -65,7 +67,8 @@ Once the user confirms they are ready:
    - **If Small / Focused:** Proceed directly with Steps 1–5 below.
 1. Create a clean safety checkpoint if modifying an existing repo: `snapshot_or_undo(action="snapshot", repo_path=...)`.
 2. Build the product natively using Antigravity IDE's full capabilities (parallel edits, real dependency installation, live testing, Browser UI inspection when applicable).
-3. **Self-Run & Real-Output Proof Gate (NEVER Declare Done from Build/Unit Tests Alone):**
+3. **Convergence Audit + Self-Run Real-Output Proof Gate (NEVER Declare Done from Checkboxes or Unit Tests Alone):**
+   - **Spec ↔ Code Convergence Check:** Re-read `constitution.md`, `contracts.md`, and every `AC-1..AC-N` against the actual code on disk — **completion claims/checkboxes are NOT evidence**. Classify any gap as `missing`, `partial`, or `contradicts`, fix all gaps, and repeat until **`Converged`**.
    - Run independent 0-token verification: `verify_and_smoke(repo_path=...)`.
    - **Act as a real user and actually run the feature with real input** (real CLI invocation, real API payload, real file/media output check, or live click-through in `browser` subagent for Web Apps).
    - **Inspect the actual produced artifact/output quality** against the user's agreed criteria — if the output is empty, broken, ugly, or misses the user's intent, fix it BEFORE reporting done!

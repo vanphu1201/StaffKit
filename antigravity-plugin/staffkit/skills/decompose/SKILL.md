@@ -10,11 +10,11 @@ When a user gives a very long, dense, or multi-part prompt, **NEVER try to code 
 ## Phase 1: Lossless Requirement Inventory & Echo-Back Confirm
 
 1. Call `load_project_memory(repo_path)` and `locate_context(query, repo_path)` (0-token).
-2. **Extract Every Single Requirement (Zero Dropped Details):**
+2. **Extract Every Single Requirement & Cross-Check Consistency (Zero Dropped Details):**
    - Break the user's long prompt into a numbered **Requirement Inventory (`R1, R2, ... Rn`)** in plain Vietnamese so the user can verify **not a single detail was missed or misunderstood**.
-   - Explicitly list any **Assumptions / Ambiguities** that need a quick answer.
+   - **Cross-Check Before Coding:** Flag any duplicate requirements, vague adjectives lacking measurable criteria (e.g., "fast", "clean", "robust"), or conflicts with `constitution.md` / `contracts.md`, and list any **Assumptions / Ambiguities** needing a quick answer.
 3. **Group into 2–5 Independent, Verifiable Milestones (`M1..Mk`):**
-   - Order milestones by dependency (Core/Data first → Business Logic → UI/Integration → Polish).
+   - Order milestones by dependency (Core/Data first → Business Logic → UI/Integration → Polish) and verify **100% of `R1..Rn` are mapped** (zero orphan requirements).
    - For EACH milestone, define:
      - *Yêu cầu bao phủ:* (`R1, R2...`)
      - *Kết quả chạy thật chứng minh hoàn thành (Real-Output Proof):* Concrete live check, not just `build PASS`.
@@ -25,7 +25,8 @@ When a user gives a very long, dense, or multi-part prompt, **NEVER try to code 
 For the current milestone (`Mi`):
 1. Call `snapshot_or_undo(action="snapshot", message="before milestone Mi", repo_path=...)`.
 2. Implement ONLY `Mi`'s scope cleanly without touching unrelated future milestones.
-3. **Self-Run Real-Output Proof for `Mi`:**
+3. **Convergence Check + Self-Run Real-Output Proof for `Mi`:**
+   - **Verify every mapped `R#` directly against the code on disk** (never trust checkboxes alone): classify any unmet requirement as `missing`, `partial`, or `contradicts` and close all gaps until `Mi` is **`Converged`**.
    - Run `verify_and_smoke(repo_path=...)` AND actually execute `Mi` with real input to verify its real output quality + zero regression on `M1..M(i-1)`.
 4. **Checkpoint Progress to Disk:**
    - Call `save_project_spec(repo_path=..., session_handoff_md=...)` recording: completed milestones (`M1..Mi`), verified evidence, key files, and exact next milestone (`M(i+1)`).
